@@ -1,0 +1,35 @@
+# Build output (CMake presets build into skeleton/build)
+build/
+out/
+cmake-build-*/
+
+# CMake artifacts
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+cmake_install.cmake
+CTestTestfile.cmake
+compile_commands.json
+CPackConfig.cmake
+CPackSourceConfig.cmake
+_deps/
+
+# Compiled shaders (regenerated from source/shaders/*.vert|.frag|.comp by CMake)
+*.spv
+
+# Compiled objects / binaries
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.exe
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+
+# OS cruft
+.DS_Store
+Thumbs.db
