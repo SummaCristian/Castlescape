@@ -67,6 +67,9 @@ class Skeleton26ReplaceName : public BaseProject {
 	// Pitch: up-down, defined in degrees.
 	// -90: looking down, +90: looking up
 	float camPitch = -10.0f;
+	// Vertical speed from gravity, in world units/second. Negative = falling.
+	// Reset to 0 whenever the ground collision clamp catches us (i.e. we've landed).
+	float camVerticalVelocity = 0.0f;
 
 	// Here you set the main application parameters
 	void setWindowParameters() {
@@ -348,6 +351,13 @@ class Skeleton26ReplaceName : public BaseProject {
 		// Update position from WASD/R/F: m.x = strafe, m.z = -forward, m.y = world up/down
 		camPos += (right * m.x - front * m.z + worldUp * m.y) * MOVE_SPEED * deltaT;
 
+		// Gravity: constant downward acceleration, integrated into a vertical
+		// velocity each frame. Resolved against the ground below (collision
+		// block right after this), which zeroes the velocity out on landing.
+		const float GRAVITY = -9.81f; // world units / second^2
+		camVerticalVelocity += GRAVITY * deltaT;
+		camPos.y += camVerticalVelocity * deltaT;
+
 		// (Floor) Collision detection.
 		// Wired-in using Scene.hpp and Colliders.hpp.
 		// Look for every solid collider whose horizontal position is under the current position,
@@ -371,6 +381,10 @@ class Skeleton26ReplaceName : public BaseProject {
 		// Clamp height if clipping through the highest surface found
 		if(feetY < groundY) {
 			feetY = groundY;
+			// Landed: stop falling instead of accumulating velocity forever
+			if(camVerticalVelocity < 0.0f) {
+				camVerticalVelocity = 0.0f;
+			}
 		}
 		// Set camera position to the new one + player height
 		camPos.y = feetY + EYE_HEIGHT;
