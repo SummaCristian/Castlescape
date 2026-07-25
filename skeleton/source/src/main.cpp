@@ -76,6 +76,7 @@ class Skeleton26ReplaceName : public BaseProject {
 	bool gravityEnabled = true;
 	bool collisionEnabled = true;
 	bool jumpEnabled = true;
+	bool sprintEnabled = true;
 
 
 	// Edge-detection for the jump key, so holding it down doesn't re-trigger
@@ -84,6 +85,12 @@ class Skeleton26ReplaceName : public BaseProject {
 	// Whether the feet are resting on a collider, refreshed every frame by the
 	// floor collision check. Starts true so a jump is available immediately.
 	bool grounded = true;
+	// Whether we're currently sprinting.
+	// Instead of simply reading the Ctrl Key state, we store the state in this flag
+	// so that we can apply some logic to it: in particular, we only allow
+	// to start a sprint if the player is grounded, but allow to stop sprinting
+	// while in the air during a jump.
+	bool sprinting = false;
 
 	// Here you set the main application parameters
 	void setWindowParameters() {
@@ -326,6 +333,8 @@ class Skeleton26ReplaceName : public BaseProject {
 		// Camera movement controls
 		// World units traveled per second
 		const float MOVE_SPEED = 3.0f;
+		// Multiplier applied to MOVE_SPEED while sprinting
+		const float SPRINT_MULTIPLIER = 2.0f;
 		// FOV degrees rotated per second
 		const float ROT_SPEED = 90.0f;
 
@@ -362,8 +371,24 @@ class Skeleton26ReplaceName : public BaseProject {
 		glm::vec3 right = glm::normalize(glm::cross(front, worldUp));
 		glm::vec3 up = glm::normalize(glm::cross(right, front));
 
+		// Sprint: Ctrl multiplies movement speed, gated behind sprintEnabled like
+		// the other cheats/debug toggles. Polled directly (not through getSixAxis/
+		// "fire") since Starter.hpp doesn't wire Ctrl to anything.
+		// Can only be started while grounded (no starting a sprint mid-jump), but
+		// releasing Ctrl always stops it right away, air or not.
+		bool ctrlHeld = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) || glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL);
+		if(!sprintEnabled || !ctrlHeld) {
+			sprinting = false;
+		} else if(grounded) {
+			sprinting = true;
+		}
+		float moveSpeed = MOVE_SPEED;
+		if(sprinting) {
+			moveSpeed *= SPRINT_MULTIPLIER;
+		}
+
 		// Update position from WASD/R/F: m.x = strafe, m.z = -forward, m.y = world up/down
-		camPos += (right * m.x - front * m.z + worldUp * m.y) * MOVE_SPEED * deltaT;
+		camPos += (right * m.x - front * m.z + worldUp * m.y) * moveSpeed * deltaT;
 
 		// Jump: spacebar (wired to "fire" in Starter.hpp) gives the camera an upward
 		// velocity impulse. Edge-triggered (only on the frame the key goes down) and
