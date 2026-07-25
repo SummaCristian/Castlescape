@@ -30,6 +30,9 @@ _deps/
 .idea/
 *.swp
 
+# clangd index cache
+.cache/
+
 # OS cruft
 .DS_Store
 Thumbs.db
