@@ -75,6 +75,15 @@ class Skeleton26ReplaceName : public BaseProject {
 	// TODO: Add debug/cheats
 	bool gravityEnabled = true;
 	bool collisionEnabled = true;
+	bool jumpEnabled = true;
+
+
+	// Edge-detection for the jump key, so holding it down doesn't re-trigger
+	// the jump every frame while airborne/grounded.
+	bool jumpKeyWasPressed = false;
+	// Whether the feet are resting on a collider, refreshed every frame by the
+	// floor collision check. Starts true so a jump is available immediately.
+	bool grounded = true;
 
 	// Here you set the main application parameters
 	void setWindowParameters() {
@@ -356,6 +365,21 @@ class Skeleton26ReplaceName : public BaseProject {
 		// Update position from WASD/R/F: m.x = strafe, m.z = -forward, m.y = world up/down
 		camPos += (right * m.x - front * m.z + worldUp * m.y) * MOVE_SPEED * deltaT;
 
+		// Jump: spacebar (wired to "fire" in Starter.hpp) gives the camera an upward
+		// velocity impulse. Edge-triggered (only on the frame the key goes down) and
+		// only while grounded (refreshed each frame by the floor collision check
+		// below). Gated behind jumpEnabled like the other cheats/debug toggles.
+		// If gravity is off, the impulse gets reset straight back to 0 below, so
+		// jumping naturally has no effect without gravity to bring us back down.
+		if(jumpEnabled) {
+			// initial upward velocity, world units/second
+			const float JUMP_SPEED = 5.0f;
+			if(fire && !jumpKeyWasPressed && grounded) {
+				camVerticalVelocity = JUMP_SPEED;
+			}
+		}
+		jumpKeyWasPressed = fire;
+
 		// Gravity: constant downward acceleration, integrated into a vertical
 		// velocity each frame. Resolved against the ground below (collision
 		// block right after this), which zeroes the velocity out on landing.
@@ -398,6 +422,12 @@ class Skeleton26ReplaceName : public BaseProject {
 					camVerticalVelocity = 0.0f;
 				}
 			}
+			// Ground-contact test for jumping.
+			// Allows to jump only when within a certain distance threshold from the ground.
+			// Some tolerance allows to jump even when irregular floor slightly lifts the
+			// player's model from the ground
+			const float GROUND_EPSILON = 0.05f;
+			grounded = feetY <= groundY + GROUND_EPSILON;
 			// Set camera position to the new one + player height
 			camPos.y = feetY + EYE_HEIGHT;
 		}
