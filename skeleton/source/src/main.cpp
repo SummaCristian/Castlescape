@@ -56,7 +56,17 @@ class Skeleton26ReplaceName : public BaseProject {
 
 	glm::mat4 ViewPrj;
 	glm::mat4 View;
-	
+
+	// Free-look camera state (position + orientation), persisted across frames
+	glm::vec3 camPos = glm::vec3(0.0f, 1.0f, 5.0f);
+	// Yaw: rotation around world up axis, in degrees.
+	// yaw=0 faces +X; increasing yaw turns right, decreasing turns left.
+	// Starts at -90 (faces -Z) to match the scene's original forward direction.
+	float camYaw = -90.0f;
+	// Pitch: up-down, defined in degrees.
+	// -90: looking down, +90: looking up
+	float camPitch = -10.0f;
+
 	// Here you set the main application parameters
 	void setWindowParameters() {
 		// window size, titile and initial background
@@ -295,6 +305,12 @@ class Skeleton26ReplaceName : public BaseProject {
 		const float nearPlane = 0.1f;
 		const float farPlane = 100.f;
 
+		// Camera movement controls
+		// World units traveled per second
+		const float MOVE_SPEED = 3.0f;
+		// FOV degrees rotated per second
+		const float ROT_SPEED = 90.0f;
+
 		// Integration with the timers and the controllers
 		float deltaT;
 		glm::vec3 m = glm::vec3(0.0f), r = glm::vec3(0.0f);
@@ -305,10 +321,34 @@ class Skeleton26ReplaceName : public BaseProject {
 		glm::mat4 Prj = glm::perspective(FOVy, Ar, nearPlane, farPlane);
 		Prj[1][1] *= -1;
 
+		// Control Camera rotation
+		// Yaw: left-right
+		camYaw += r.y * ROT_SPEED * deltaT;
+		// Pitch: up-down
+		camPitch += -r.x * ROT_SPEED * deltaT;
+		// Cap pitch to avoid full rotations, limits are full-down and full-up
+		camPitch = glm::clamp(camPitch, -89.0f, 89.0f);
+
+		// Convert Yaw and Pitch into Cartesian coordinates
+		// Define global UP vector
+		const glm::vec3 worldUp = glm::vec3(0.0f, 1.0f, 0.0f);
+		// Define current FRONT vector
+		glm::vec3 front;
+		// Update FRONT based on new YAW and PITCH
+		front.x = cos(glm::radians(camYaw)) * cos(glm::radians(camPitch));
+		front.y = sin(glm::radians(camPitch));
+		front.z = sin(glm::radians(camYaw)) * cos(glm::radians(camPitch));
+		// Normalize values
+		front = glm::normalize(front);
+		// Compute RIGHT and UP vectors
+		glm::vec3 right = glm::normalize(glm::cross(front, worldUp));
+		glm::vec3 up = glm::normalize(glm::cross(right, front));
+
+		// Update position from WASD/R/F: m.x = strafe, m.z = -forward, m.y = world up/down
+		camPos += (right * m.x - front * m.z + worldUp * m.y) * MOVE_SPEED * deltaT;
+
 		// View
-		View = glm::lookAt(glm::vec3(0.0f, 1.0f, 5.0f), // Pos
-						   glm::vec3(0.0f),				// Target
-						   glm::vec3(0.0f, 1.0f, 0.0f));
+		View = glm::lookAt(camPos, camPos + front, up);
 
 		// View-Projection
 		ViewPrj = Prj * View;
