@@ -71,6 +71,11 @@ class Skeleton26ReplaceName : public BaseProject {
 	// Reset to 0 whenever the ground collision clamp catches us (i.e. we've landed).
 	float camVerticalVelocity = 0.0f;
 
+	// Debug/cheat toggles.
+	// TODO: Add debug/cheats
+	bool gravityEnabled = true;
+	bool collisionEnabled = true;
+
 	// Here you set the main application parameters
 	void setWindowParameters() {
 		// window size, titile and initial background
@@ -354,9 +359,15 @@ class Skeleton26ReplaceName : public BaseProject {
 		// Gravity: constant downward acceleration, integrated into a vertical
 		// velocity each frame. Resolved against the ground below (collision
 		// block right after this), which zeroes the velocity out on landing.
-		const float GRAVITY = -9.81f; // world units / second^2
-		camVerticalVelocity += GRAVITY * deltaT;
-		camPos.y += camVerticalVelocity * deltaT;
+		if(gravityEnabled) {
+			const float GRAVITY = -9.81f; // world units / second^2
+			camVerticalVelocity += GRAVITY * deltaT;
+			camPos.y += camVerticalVelocity * deltaT;
+		} else {
+			// Don't let velocity build up while gravity's off, so re-enabling
+			// it later doesn't suddenly slam the camera down/up
+			camVerticalVelocity = 0.0f;
+		}
 
 		// (Floor) Collision detection.
 		// Wired-in using Scene.hpp and Colliders.hpp.
@@ -364,30 +375,32 @@ class Skeleton26ReplaceName : public BaseProject {
 		// then update the camera's vertical position so that the player's feet don't clip into it.
 		// In case of non-flat meshes, take the tallest surface as the standing height.
 		// Same thing in case of multiple colliders, always take the tallest surface.
-		const float EYE_HEIGHT = 1.0f;
-		// Compute feet height from the (camera) eye height
-		float feetY = camPos.y - EYE_HEIGHT;
-		float groundY = -std::numeric_limits<float>::infinity();
-		for(Collider *C : SC.GlobalColliders) {
-			// for every collider, check collision
-			AABBextents E = C->getExtents();
-			bool insideXZ = camPos.x >= E.xMin && camPos.x <= E.xMax &&
-							camPos.z >= E.zMin && camPos.z <= E.zMax;
-			// Update with the highest (max) surface found so far
-			if(insideXZ && E.yMax > groundY) {
-				groundY = E.yMax;
+		if(collisionEnabled) {
+			const float EYE_HEIGHT = 1.0f;
+			// Compute feet height from the (camera) eye height
+			float feetY = camPos.y - EYE_HEIGHT;
+			float groundY = -std::numeric_limits<float>::infinity();
+			for(Collider *C : SC.GlobalColliders) {
+				// for every collider, check collision
+				AABBextents E = C->getExtents();
+				bool insideXZ = camPos.x >= E.xMin && camPos.x <= E.xMax &&
+								camPos.z >= E.zMin && camPos.z <= E.zMax;
+				// Update with the highest (max) surface found so far
+				if(insideXZ && E.yMax > groundY) {
+					groundY = E.yMax;
+				}
 			}
-		}
-		// Clamp height if clipping through the highest surface found
-		if(feetY < groundY) {
-			feetY = groundY;
-			// Landed: stop falling instead of accumulating velocity forever
-			if(camVerticalVelocity < 0.0f) {
-				camVerticalVelocity = 0.0f;
+			// Clamp height if clipping through the highest surface found
+			if(feetY < groundY) {
+				feetY = groundY;
+				// Landed: stop falling instead of accumulating velocity forever
+				if(camVerticalVelocity < 0.0f) {
+					camVerticalVelocity = 0.0f;
+				}
 			}
+			// Set camera position to the new one + player height
+			camPos.y = feetY + EYE_HEIGHT;
 		}
-		// Set camera position to the new one + player height
-		camPos.y = feetY + EYE_HEIGHT;
 
 		// View
 		View = glm::lookAt(camPos, camPos + front, up);
