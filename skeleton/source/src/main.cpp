@@ -2,6 +2,7 @@
 
 // This has been adapted from the Vulkan tutorial
 #include <sstream>
+#include <limits>
 
 #include <json.hpp>
 
@@ -346,6 +347,33 @@ class Skeleton26ReplaceName : public BaseProject {
 
 		// Update position from WASD/R/F: m.x = strafe, m.z = -forward, m.y = world up/down
 		camPos += (right * m.x - front * m.z + worldUp * m.y) * MOVE_SPEED * deltaT;
+
+		// (Floor) Collision detection.
+		// Wired-in using Scene.hpp and Colliders.hpp.
+		// Look for every solid collider whose horizontal position is under the current position,
+		// then update the camera's vertical position so that the player's feet don't clip into it.
+		// In case of non-flat meshes, take the tallest surface as the standing height.
+		// Same thing in case of multiple colliders, always take the tallest surface.
+		const float EYE_HEIGHT = 1.0f;
+		// Compute feet height from the (camera) eye height
+		float feetY = camPos.y - EYE_HEIGHT;
+		float groundY = -std::numeric_limits<float>::infinity();
+		for(Collider *C : SC.GlobalColliders) {
+			// for every collider, check collision
+			AABBextents E = C->getExtents();
+			bool insideXZ = camPos.x >= E.xMin && camPos.x <= E.xMax &&
+							camPos.z >= E.zMin && camPos.z <= E.zMax;
+			// Update with the highest (max) surface found so far
+			if(insideXZ && E.yMax > groundY) {
+				groundY = E.yMax;
+			}
+		}
+		// Clamp height if clipping through the highest surface found
+		if(feetY < groundY) {
+			feetY = groundY;
+		}
+		// Set camera position to the new one + player height
+		camPos.y = feetY + EYE_HEIGHT;
 
 		// View
 		View = glm::lookAt(camPos, camPos + front, up);
