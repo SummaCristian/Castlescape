@@ -14,3 +14,10 @@ This will help us remember them for the final oral presentation.
 - Floor collider has `AABB`-based ground detection, provided by `Colliders.hpp` and `Scene.hpp` files. Simply saying 
 `"collider": "AABB"` in the `scene.json` file will apply ground detection to whatever model is used as floor. 
 - Collision detection is optional, controlled by a flag. Allows to have a `no-clip` cheat/debug option
+
+## Cheats / debug toggles
+- All debug/cheat flags (`gravityEnabled`, `collisionEnabled`, `jumpEnabled`, `sprintEnabled`) are grouped into one `CheatFlags` struct, held as a single `cheats` member on the app class, instead of being loose booleans scattered among the camera/physics state.
+- No persistence on purpose: it's a plain struct with default member initializers, so it just resets to the "legit" defaults (everything `true`, i.e. cheats off) every time the app starts. No config file, no serialization needed.
+- Grouping them like this makes them easy to find as a block, easy to reset all at once, and gives a natural place to hang a future debug UI or keybind toggles off of (e.g. iterate/reflect over the struct's fields) without polluting the rest of the class's member list.
+- Call sites read through the struct, e.g. `if(cheats.gravityEnabled)`, `if(cheats.collisionEnabled)`, `if(cheats.jumpEnabled)`, `if(!cheats.sprintEnabled || !ctrlHeld)`.
+- The numeric tuning behind those cheats (`moveSpeed`, `sprintMultiplier`, `jumpSpeed`, `gravity`) lives in a separate `MovementParams` struct (`movement` member), not in `CheatFlags`. Reasoning: those bools answer "is this cheat on/off", these floats answer "how strong is it", different concern, so a different struct, even though both sit next to each other on the class and follow the same no-persistence pattern.

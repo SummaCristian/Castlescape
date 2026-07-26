@@ -71,12 +71,32 @@ class Skeleton26ReplaceName : public BaseProject {
 	// Reset to 0 whenever the ground collision clamp catches us (i.e. we've landed).
 	float camVerticalVelocity = 0.0f;
 
-	// Debug/cheat toggles.
-	// TODO: Add debug/cheats
-	bool gravityEnabled = true;
-	bool collisionEnabled = true;
-	bool jumpEnabled = true;
-	bool sprintEnabled = true;
+	// Debug/cheat toggles, isolated in a utility struct.
+	// Not persisted across runs, reset to default values on launch.
+	struct CheatFlags {
+		// Global gravity
+		bool gravityEnabled = true;
+		// True: collisions (ground included), False: no-clip cheat
+		bool collisionEnabled = true;
+		// Jump flag
+		bool jumpEnabled = true;
+		// Sprint flag
+		bool sprintEnabled = true;
+	} cheats;
+
+	// Numeric tuning for the movement cheats above, isolated the same way but
+	// kept as a separate struct since these aren't on/off switches: they're
+	// "how strong", not "enabled or not". Also not persisted across runs.
+	struct MovementParams {
+		// World units traveled per second
+		float moveSpeed = 3.0f;
+		// Multiplier applied to moveSpeed while sprinting
+		float sprintMultiplier = 2.0f;
+		// Initial upward velocity on jump, world units/second
+		float jumpSpeed = 5.0f;
+		// Downward acceleration, world units/second^2 (negative = down)
+		float gravity = -9.81f;
+	} movement;
 
 
 	// Edge-detection for the jump key, so holding it down doesn't re-trigger
@@ -331,10 +351,6 @@ class Skeleton26ReplaceName : public BaseProject {
 		const float farPlane = 100.f;
 
 		// Camera movement controls
-		// World units traveled per second
-		const float MOVE_SPEED = 3.0f;
-		// Multiplier applied to MOVE_SPEED while sprinting
-		const float SPRINT_MULTIPLIER = 2.0f;
 		// FOV degrees rotated per second
 		const float ROT_SPEED = 90.0f;
 
@@ -377,14 +393,14 @@ class Skeleton26ReplaceName : public BaseProject {
 		// Can only be started while grounded (no starting a sprint mid-jump), but
 		// releasing Ctrl always stops it right away, air or not.
 		bool ctrlHeld = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) || glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL);
-		if(!sprintEnabled || !ctrlHeld) {
+		if(!cheats.sprintEnabled || !ctrlHeld) {
 			sprinting = false;
 		} else if(grounded) {
 			sprinting = true;
 		}
-		float moveSpeed = MOVE_SPEED;
+		float moveSpeed = movement.moveSpeed;
 		if(sprinting) {
-			moveSpeed *= SPRINT_MULTIPLIER;
+			moveSpeed *= movement.sprintMultiplier;
 		}
 
 		// Update position from WASD/R/F: m.x = strafe, m.z = -forward, m.y = world up/down
@@ -396,11 +412,9 @@ class Skeleton26ReplaceName : public BaseProject {
 		// below). Gated behind jumpEnabled like the other cheats/debug toggles.
 		// If gravity is off, the impulse gets reset straight back to 0 below, so
 		// jumping naturally has no effect without gravity to bring us back down.
-		if(jumpEnabled) {
-			// initial upward velocity, world units/second
-			const float JUMP_SPEED = 5.0f;
+		if(cheats.jumpEnabled) {
 			if(fire && !jumpKeyWasPressed && grounded) {
-				camVerticalVelocity = JUMP_SPEED;
+				camVerticalVelocity = movement.jumpSpeed;
 			}
 		}
 		jumpKeyWasPressed = fire;
@@ -408,9 +422,8 @@ class Skeleton26ReplaceName : public BaseProject {
 		// Gravity: constant downward acceleration, integrated into a vertical
 		// velocity each frame. Resolved against the ground below (collision
 		// block right after this), which zeroes the velocity out on landing.
-		if(gravityEnabled) {
-			const float GRAVITY = -9.81f; // world units / second^2
-			camVerticalVelocity += GRAVITY * deltaT;
+		if(cheats.gravityEnabled) {
+			camVerticalVelocity += movement.gravity * deltaT;
 			camPos.y += camVerticalVelocity * deltaT;
 		} else {
 			// Don't let velocity build up while gravity's off, so re-enabling
@@ -424,7 +437,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		// then update the camera's vertical position so that the player's feet don't clip into it.
 		// In case of non-flat meshes, take the tallest surface as the standing height.
 		// Same thing in case of multiple colliders, always take the tallest surface.
-		if(collisionEnabled) {
+		if(cheats.collisionEnabled) {
 			const float EYE_HEIGHT = 1.0f;
 			// Compute feet height from the (camera) eye height
 			float feetY = camPos.y - EYE_HEIGHT;
