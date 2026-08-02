@@ -7,11 +7,11 @@
         "id": "shadow_mapping_pipeline_e02",
         "label": "E02 Shadow Mapping Pipeline (depth pass + shadowed lighting)",
         "nodes": [
-          "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_shadowmap_vert",
-          "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_shadowmap_frag",
-          "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_posnormuvtanweightsshadow_vert",
-          "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_cooktorranceforcharacter_frag",
-          "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_pbr_frag",
+          "e02___setup_the_environment_shaders_shadowmap_vert",
+          "e02___setup_the_environment_shaders_shadowmap_frag",
+          "e02___setup_the_environment_shaders_posnormuvtanweightsshadow_vert",
+          "e02___setup_the_environment_shaders_cooktorranceforcharacter_frag",
+          "e02___setup_the_environment_shaders_pbr_frag",
           "concept_shadow_mapping"
         ],
         "relation": "participate_in",
@@ -23,8 +23,8 @@
         "id": "pbr_lighting_pipeline_e02",
         "label": "E02 PBR Lighting Pipeline (geometry vertex + PBR fragment)",
         "nodes": [
-          "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_simpleposnormuvtan_vert",
-          "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_pbr_frag",
+          "e02___setup_the_environment_shaders_simpleposnormuvtan_vert",
+          "e02___setup_the_environment_shaders_pbr_frag",
           "concept_pbr",
           "concept_tangent_space_normal_mapping",
           "concept_cook_torrance_brdf"
@@ -38,8 +38,8 @@
         "id": "skinned_character_pipeline_e02",
         "label": "E02 Skinned Character Pipeline (skinning vertex + Cook-Torrance fragment)",
         "nodes": [
-          "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_posnormuvtanweights_vert",
-          "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_cooktorranceforcharacter_frag",
+          "e02___setup_the_environment_shaders_posnormuvtanweights_vert",
+          "e02___setup_the_environment_shaders_cooktorranceforcharacter_frag",
           "concept_gpu_skinning",
           "concept_cook_torrance_brdf"
         ],
@@ -52,10 +52,10 @@
         "id": "e07_shadow_mapping_pipeline",
         "label": "E07 two-pass shadow mapping pipeline (depth pass -> main pass PCF sampling -> debug view)",
         "nodes": [
-          "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_shadowmap_vert_shader",
-          "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_shadowmap_frag_shader",
-          "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_cooktorranceforcharacter_frag_shader",
-          "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_showshadowmap_frag_shader",
+          "e07_shadow_map_e07_shadow_map_shaders_shadowmap_vert_shader",
+          "e07_shadow_map_e07_shadow_map_shaders_shadowmap_frag_shader",
+          "e07_shadow_map_e07_shadow_map_shaders_cooktorranceforcharacter_frag_shader",
+          "e07_shadow_map_e07_shadow_map_shaders_showshadowmap_frag_shader",
           "concept_shadow_mapping"
         ],
         "relation": "participate_in",
@@ -67,9 +67,9 @@
         "id": "cook_torrance_character_lineage",
         "label": "CookTorranceForCharacter Cook-Torrance BRDF shared across E05/E06/E07",
         "nodes": [
-          "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_cooktorranceforcharacter_frag_shader",
-          "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_cooktorranceforcharacter_frag_shader",
-          "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_cooktorranceforcharacter_frag_shader",
+          "e05_build_the_models_e05_build_the_models_shaders_cooktorranceforcharacter_frag_shader",
+          "e06_motion_systems_e06_motion_systems_shaders_cooktorranceforcharacter_frag_shader",
+          "e07_shadow_map_e07_shadow_map_shaders_cooktorranceforcharacter_frag_shader",
           "concept_cook_torrance_brdf"
         ],
         "relation": "implement",
@@ -81,9 +81,9 @@
         "id": "skeletal_skinning_lineage",
         "label": "PosNormUvTanWeights skeletal skinning vertex shaders across E05/E06/E07",
         "nodes": [
-          "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_posnormuvtanweights_vert_shader",
-          "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_posnormuvtanweights_vert_shader",
-          "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_posnormuvtanweights_vert_shader",
+          "e05_build_the_models_e05_build_the_models_shaders_posnormuvtanweights_vert_shader",
+          "e06_motion_systems_e06_motion_systems_shaders_posnormuvtanweights_vert_shader",
+          "e07_shadow_map_e07_shadow_map_shaders_posnormuvtanweights_vert_shader",
           "concept_motion_skeletal_animation"
         ],
         "relation": "implement",
@@ -136,8 +136,8 @@
         "id": "shared_meshtbn_tangent_pipeline",
         "label": "Shared MeshTBN tangent-space vertex pipeline across E14 and E15",
         "nodes": [
-          "c__users_simo_cg_graphify_corpus_e14___advanced_texturing_e14___advanced_texturing_shaders_meshtbn_vert_shader",
-          "c__users_simo_cg_graphify_corpus_e15___image_based_lighting_e15___image_based_lighting_shaders_meshtbn_vert_shader",
+          "e14___advanced_texturing_e14___advanced_texturing_shaders_meshtbn_vert_shader",
+          "e15___image_based_lighting_e15___image_based_lighting_shaders_meshtbn_vert_shader",
           "concept_image_based_lighting"
         ],
         "relation": "participate_in",
@@ -149,12 +149,12 @@
         "id": "mandatory_project_spec",
         "label": "Mandatory project specification",
         "nodes": [
-          "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_cpp_vulkan_starter",
-          "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_shaders_written_by_yourself",
-          "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_rendering_pipeline_requirements",
-          "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_navigation_controls",
-          "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_shader_brdf_models",
-          "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_team_size_two_or_three"
+          "_docs_2___projects_rules_cpp_vulkan_starter",
+          "_docs_2___projects_rules_shaders_written_by_yourself",
+          "_docs_2___projects_rules_rendering_pipeline_requirements",
+          "_docs_2___projects_rules_navigation_controls",
+          "_docs_2___projects_rules_shader_brdf_models",
+          "_docs_2___projects_rules_team_size_two_or_three"
         ],
         "relation": "form",
         "confidence": "INFERRED",
@@ -165,10 +165,10 @@
         "id": "exam_evaluation_scheme",
         "label": "Exam evaluation scheme",
         "nodes": [
-          "c__users_simo_cg_graphify_corpus__docs_1___computer_graphics_exam_rules_project_max_25_points",
-          "c__users_simo_cg_graphify_corpus__docs_1___computer_graphics_exam_rules_individual_questions_8_points",
-          "c__users_simo_cg_graphify_corpus__docs_1___computer_graphics_exam_rules_final_mark_sum_laude",
-          "c__users_simo_cg_graphify_corpus__docs_1___computer_graphics_exam_rules_must_know_code_detail"
+          "_docs_1___computer_graphics_exam_rules_project_max_25_points",
+          "_docs_1___computer_graphics_exam_rules_individual_questions_8_points",
+          "_docs_1___computer_graphics_exam_rules_final_mark_sum_laude",
+          "_docs_1___computer_graphics_exam_rules_must_know_code_detail"
         ],
         "relation": "form",
         "confidence": "EXTRACTED",
@@ -179,11 +179,11 @@
         "id": "cheat_flags_group",
         "label": "Grouped cheat/debug toggles",
         "nodes": [
-          "c__users_simo_cg_graphify_corpus__final_project_notes_cheatflags_struct",
-          "c__users_simo_cg_graphify_corpus__final_project_notes_camera_gravity",
-          "c__users_simo_cg_graphify_corpus__final_project_notes_collision_optional_noclip",
-          "c__users_simo_cg_graphify_corpus__final_project_notes_jump",
-          "c__users_simo_cg_graphify_corpus__final_project_notes_sprint"
+          "_final_project_notes_cheatflags_struct",
+          "_final_project_notes_camera_gravity",
+          "_final_project_notes_collision_optional_noclip",
+          "_final_project_notes_jump",
+          "_final_project_notes_sprint"
         ],
         "relation": "participate_in",
         "confidence": "EXTRACTED",
@@ -22952,7 +22952,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_collidershow_frag",
+      "id": "e02___setup_the_environment_shaders_collidershow_frag",
       "community": 104,
       "norm_label": "e02 collidershow.frag"
     },
@@ -22965,7 +22965,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_collidershow_vert",
+      "id": "e02___setup_the_environment_shaders_collidershow_vert",
       "community": 104,
       "norm_label": "e02 collidershow.vert"
     },
@@ -22978,7 +22978,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_cooktorranceforcharacter_frag",
+      "id": "e02___setup_the_environment_shaders_cooktorranceforcharacter_frag",
       "community": 8,
       "norm_label": "e02 cooktorranceforcharacter.frag"
     },
@@ -22991,7 +22991,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_pbr_frag",
+      "id": "e02___setup_the_environment_shaders_pbr_frag",
       "community": 8,
       "norm_label": "e02 pbr.frag"
     },
@@ -23004,7 +23004,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_posnormuvtanweights_vert",
+      "id": "e02___setup_the_environment_shaders_posnormuvtanweights_vert",
       "community": 8,
       "norm_label": "e02 posnormuvtanweights.vert"
     },
@@ -23017,7 +23017,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_posnormuvtanweightsshadow_vert",
+      "id": "e02___setup_the_environment_shaders_posnormuvtanweightsshadow_vert",
       "community": 8,
       "norm_label": "e02 posnormuvtanweightsshadow.vert"
     },
@@ -23030,7 +23030,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_shadowmap_frag",
+      "id": "e02___setup_the_environment_shaders_shadowmap_frag",
       "community": 8,
       "norm_label": "e02 shadowmap.frag"
     },
@@ -23043,7 +23043,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_shadowmap_vert",
+      "id": "e02___setup_the_environment_shaders_shadowmap_vert",
       "community": 8,
       "norm_label": "e02 shadowmap.vert"
     },
@@ -23056,7 +23056,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_simpleposnormuvtan_vert",
+      "id": "e02___setup_the_environment_shaders_simpleposnormuvtan_vert",
       "community": 8,
       "norm_label": "e02 simpleposnormuvtan.vert"
     },
@@ -23069,7 +23069,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_skyboxshader_frag",
+      "id": "e02___setup_the_environment_shaders_skyboxshader_frag",
       "community": 105,
       "norm_label": "e02 skyboxshader.frag"
     },
@@ -23082,7 +23082,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_skyboxshader_vert",
+      "id": "e02___setup_the_environment_shaders_skyboxshader_vert",
       "community": 105,
       "norm_label": "e02 skyboxshader.vert"
     },
@@ -23095,7 +23095,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_text_frag",
+      "id": "e02___setup_the_environment_shaders_text_frag",
       "community": 106,
       "norm_label": "e02 text.frag"
     },
@@ -23108,7 +23108,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_text_vert",
+      "id": "e02___setup_the_environment_shaders_text_vert",
       "community": 106,
       "norm_label": "e02 text.vert"
     },
@@ -23121,7 +23121,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e03_shaders_collidershow_frag",
+      "id": "e03_shaders_collidershow_frag",
       "community": 104,
       "norm_label": "e03 collidershow.frag"
     },
@@ -23134,7 +23134,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e03_shaders_collidershow_vert",
+      "id": "e03_shaders_collidershow_vert",
       "community": 104,
       "norm_label": "e03 collidershow.vert"
     },
@@ -23147,7 +23147,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e03_shaders_cooktorranceforcharacter_frag",
+      "id": "e03_shaders_cooktorranceforcharacter_frag",
       "community": 8,
       "norm_label": "e03 cooktorranceforcharacter.frag"
     },
@@ -23160,7 +23160,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e03_shaders_pbr_frag",
+      "id": "e03_shaders_pbr_frag",
       "community": 8,
       "norm_label": "e03 pbr.frag"
     },
@@ -23173,7 +23173,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e03_shaders_posnormuvtanweights_vert",
+      "id": "e03_shaders_posnormuvtanweights_vert",
       "community": 8,
       "norm_label": "e03 posnormuvtanweights.vert"
     },
@@ -23186,7 +23186,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e03_shaders_posnormuvtanweightsshadow_vert",
+      "id": "e03_shaders_posnormuvtanweightsshadow_vert",
       "community": 8,
       "norm_label": "e03 posnormuvtanweightsshadow.vert"
     },
@@ -23199,7 +23199,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e03_shaders_shadowmap_frag",
+      "id": "e03_shaders_shadowmap_frag",
       "community": 8,
       "norm_label": "e03 shadowmap.frag"
     },
@@ -23212,7 +23212,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e03_shaders_shadowmap_vert",
+      "id": "e03_shaders_shadowmap_vert",
       "community": 8,
       "norm_label": "e03 shadowmap.vert"
     },
@@ -23225,7 +23225,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e03_shaders_simpleposnormuvtan_vert",
+      "id": "e03_shaders_simpleposnormuvtan_vert",
       "community": 8,
       "norm_label": "e03 simpleposnormuvtan.vert"
     },
@@ -23238,7 +23238,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e03_shaders_skyboxshader_frag",
+      "id": "e03_shaders_skyboxshader_frag",
       "community": 105,
       "norm_label": "e03 skyboxshader.frag"
     },
@@ -23251,7 +23251,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e03_shaders_skyboxshader_vert",
+      "id": "e03_shaders_skyboxshader_vert",
       "community": 105,
       "norm_label": "e03 skyboxshader.vert"
     },
@@ -23264,7 +23264,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e03_shaders_text_frag",
+      "id": "e03_shaders_text_frag",
       "community": 106,
       "norm_label": "e03 text.frag"
     },
@@ -23277,7 +23277,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e03_shaders_text_vert",
+      "id": "e03_shaders_text_vert",
       "community": 106,
       "norm_label": "e03 text.vert"
     },
@@ -23458,7 +23458,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_collidershow_frag_shader",
+      "id": "e05_build_the_models_e05_build_the_models_shaders_collidershow_frag_shader",
       "community": 104,
       "norm_label": "e05 collidershow.frag"
     },
@@ -23471,7 +23471,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_collidershow_vert_shader",
+      "id": "e05_build_the_models_e05_build_the_models_shaders_collidershow_vert_shader",
       "community": 104,
       "norm_label": "e05 collidershow.vert"
     },
@@ -23484,7 +23484,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_cooktorranceforcharacter_frag_shader",
+      "id": "e05_build_the_models_e05_build_the_models_shaders_cooktorranceforcharacter_frag_shader",
       "community": 8,
       "norm_label": "e05 cooktorranceforcharacter.frag"
     },
@@ -23497,7 +23497,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_pbrfrompos_frag_shader",
+      "id": "e05_build_the_models_e05_build_the_models_shaders_pbrfrompos_frag_shader",
       "community": 8,
       "norm_label": "e05 pbrfrompos.frag"
     },
@@ -23510,7 +23510,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_posnormuvtanweights_vert_shader",
+      "id": "e05_build_the_models_e05_build_the_models_shaders_posnormuvtanweights_vert_shader",
       "community": 8,
       "norm_label": "e05 posnormuvtanweights.vert"
     },
@@ -23523,7 +23523,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_posnormuvtanweightsshadow_vert_shader",
+      "id": "e05_build_the_models_e05_build_the_models_shaders_posnormuvtanweightsshadow_vert_shader",
       "community": 8,
       "norm_label": "e05 posnormuvtanweightsshadow.vert"
     },
@@ -23536,7 +23536,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_shadowmap_frag_shader",
+      "id": "e05_build_the_models_e05_build_the_models_shaders_shadowmap_frag_shader",
       "community": 8,
       "norm_label": "e05 shadowmap.frag"
     },
@@ -23549,7 +23549,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_shadowmap_vert_shader",
+      "id": "e05_build_the_models_e05_build_the_models_shaders_shadowmap_vert_shader",
       "community": 8,
       "norm_label": "e05 shadowmap.vert"
     },
@@ -23562,7 +23562,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_simplepos_vert_shader",
+      "id": "e05_build_the_models_e05_build_the_models_shaders_simplepos_vert_shader",
       "community": 8,
       "norm_label": "e05 simplepos.vert"
     },
@@ -23575,7 +23575,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_skyboxshader_frag_shader",
+      "id": "e05_build_the_models_e05_build_the_models_shaders_skyboxshader_frag_shader",
       "community": 105,
       "norm_label": "e05 skyboxshader.frag"
     },
@@ -23588,7 +23588,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_skyboxshader_vert_shader",
+      "id": "e05_build_the_models_e05_build_the_models_shaders_skyboxshader_vert_shader",
       "community": 105,
       "norm_label": "e05 skyboxshader.vert"
     },
@@ -23601,7 +23601,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_text_frag_shader",
+      "id": "e05_build_the_models_e05_build_the_models_shaders_text_frag_shader",
       "community": 106,
       "norm_label": "e05 text.frag"
     },
@@ -23614,7 +23614,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_text_vert_shader",
+      "id": "e05_build_the_models_e05_build_the_models_shaders_text_vert_shader",
       "community": 106,
       "norm_label": "e05 text.vert"
     },
@@ -23627,7 +23627,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_cooktorranceforcharacter_frag_shader",
+      "id": "e06_motion_systems_e06_motion_systems_shaders_cooktorranceforcharacter_frag_shader",
       "community": 8,
       "norm_label": "e06 cooktorranceforcharacter.frag"
     },
@@ -23640,7 +23640,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_cooktorrancefrompos_frag_shader",
+      "id": "e06_motion_systems_e06_motion_systems_shaders_cooktorrancefrompos_frag_shader",
       "community": 8,
       "norm_label": "e06 cooktorrancefrompos.frag"
     },
@@ -23653,7 +23653,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_posnormuvtanweights_vert_shader",
+      "id": "e06_motion_systems_e06_motion_systems_shaders_posnormuvtanweights_vert_shader",
       "community": 8,
       "norm_label": "e06 posnormuvtanweights.vert"
     },
@@ -23666,7 +23666,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_posnormuvtanweightsshadow_vert_shader",
+      "id": "e06_motion_systems_e06_motion_systems_shaders_posnormuvtanweightsshadow_vert_shader",
       "community": 8,
       "norm_label": "e06 posnormuvtanweightsshadow.vert"
     },
@@ -23679,7 +23679,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_shadowmap_frag_shader",
+      "id": "e06_motion_systems_e06_motion_systems_shaders_shadowmap_frag_shader",
       "community": 8,
       "norm_label": "e06 shadowmap.frag"
     },
@@ -23692,7 +23692,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_shadowmap_vert_shader",
+      "id": "e06_motion_systems_e06_motion_systems_shaders_shadowmap_vert_shader",
       "community": 8,
       "norm_label": "e06 shadowmap.vert"
     },
@@ -23705,7 +23705,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_simplepos_vert_shader",
+      "id": "e06_motion_systems_e06_motion_systems_shaders_simplepos_vert_shader",
       "community": 8,
       "norm_label": "e06 simplepos.vert"
     },
@@ -23718,7 +23718,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_cooktorranceforcharacter_frag_shader",
+      "id": "e07_shadow_map_e07_shadow_map_shaders_cooktorranceforcharacter_frag_shader",
       "community": 8,
       "norm_label": "e07 cooktorranceforcharacter.frag"
     },
@@ -23731,7 +23731,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_cooktorrancefrompos_frag_shader",
+      "id": "e07_shadow_map_e07_shadow_map_shaders_cooktorrancefrompos_frag_shader",
       "community": 8,
       "norm_label": "e07 cooktorrancefrompos.frag"
     },
@@ -23744,7 +23744,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_posnormuvtanweights_vert_shader",
+      "id": "e07_shadow_map_e07_shadow_map_shaders_posnormuvtanweights_vert_shader",
       "community": 8,
       "norm_label": "e07 posnormuvtanweights.vert"
     },
@@ -23757,7 +23757,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_posnormuvtanweightsshadow_vert_shader",
+      "id": "e07_shadow_map_e07_shadow_map_shaders_posnormuvtanweightsshadow_vert_shader",
       "community": 8,
       "norm_label": "e07 posnormuvtanweightsshadow.vert"
     },
@@ -23770,7 +23770,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_shadowmap_frag_shader",
+      "id": "e07_shadow_map_e07_shadow_map_shaders_shadowmap_frag_shader",
       "community": 8,
       "norm_label": "e07 shadowmap.frag"
     },
@@ -23783,7 +23783,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_shadowmap_vert_shader",
+      "id": "e07_shadow_map_e07_shadow_map_shaders_shadowmap_vert_shader",
       "community": 8,
       "norm_label": "e07 shadowmap.vert"
     },
@@ -23796,7 +23796,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_showshadowmap_frag_shader",
+      "id": "e07_shadow_map_e07_shadow_map_shaders_showshadowmap_frag_shader",
       "community": 8,
       "norm_label": "e07 showshadowmap.frag"
     },
@@ -23809,7 +23809,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_showshadowmap_vert_shader",
+      "id": "e07_shadow_map_e07_shadow_map_shaders_showshadowmap_vert_shader",
       "community": 8,
       "norm_label": "e07 showshadowmap.vert"
     },
@@ -23822,7 +23822,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_simplepos_vert_shader",
+      "id": "e07_shadow_map_e07_shadow_map_shaders_simplepos_vert_shader",
       "community": 8,
       "norm_label": "e07 simplepos.vert"
     },
@@ -24326,7 +24326,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c__users_simo_cg_graphify_corpus_e13___setting_up_rendering_part_2_e13___setting_up_rendering_part_2_a_shaders_lambertblinn_frag_shader",
+      "id": "e13___setting_up_rendering_part_2_e13___setting_up_rendering_part_2_a_shaders_lambertblinn_frag_shader",
       "community": 36,
       "norm_label": "e13-a lambertblinn.frag"
     },
@@ -24339,7 +24339,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c__users_simo_cg_graphify_corpus_e13___setting_up_rendering_part_2_e13___setting_up_rendering_part_2_a_shaders_posnorm_vert_shader",
+      "id": "e13___setting_up_rendering_part_2_e13___setting_up_rendering_part_2_a_shaders_posnorm_vert_shader",
       "community": 36,
       "norm_label": "e13-a posnorm.vert"
     },
@@ -24352,7 +24352,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c__users_simo_cg_graphify_corpus_e13___setting_up_rendering_part_2_e13___setting_up_rendering_part_2_b_shaders_lambertblinn_frag_shader",
+      "id": "e13___setting_up_rendering_part_2_e13___setting_up_rendering_part_2_b_shaders_lambertblinn_frag_shader",
       "community": 36,
       "norm_label": "e13-b lambertblinn.frag"
     },
@@ -24365,7 +24365,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c__users_simo_cg_graphify_corpus_e13___setting_up_rendering_part_2_e13___setting_up_rendering_part_2_b_shaders_posnorm_vert_shader",
+      "id": "e13___setting_up_rendering_part_2_e13___setting_up_rendering_part_2_b_shaders_posnorm_vert_shader",
       "community": 36,
       "norm_label": "e13-b posnorm.vert"
     },
@@ -24378,7 +24378,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c__users_simo_cg_graphify_corpus_e14___advanced_texturing_e14___advanced_texturing_shaders_advancedtexturingexercise_frag_shader",
+      "id": "e14___advanced_texturing_e14___advanced_texturing_shaders_advancedtexturingexercise_frag_shader",
       "community": 103,
       "norm_label": "e14 advancedtexturingexercise.frag"
     },
@@ -24391,7 +24391,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c__users_simo_cg_graphify_corpus_e14___advanced_texturing_e14___advanced_texturing_shaders_meshtbn_vert_shader",
+      "id": "e14___advanced_texturing_e14___advanced_texturing_shaders_meshtbn_vert_shader",
       "community": 103,
       "norm_label": "e14 meshtbn.vert"
     },
@@ -24404,7 +24404,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c__users_simo_cg_graphify_corpus_e15___image_based_lighting_e15___image_based_lighting_shaders_meshtbn_vert_shader",
+      "id": "e15___image_based_lighting_e15___image_based_lighting_shaders_meshtbn_vert_shader",
       "community": 103,
       "norm_label": "e15 meshtbn.vert"
     },
@@ -24417,7 +24417,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c__users_simo_cg_graphify_corpus_e16___setting_up_rendering_part_3_e16___setting_up_rendering_part_3_shaders_lambertblinntexture_frag_shader",
+      "id": "e16___setting_up_rendering_part_3_e16___setting_up_rendering_part_3_shaders_lambertblinntexture_frag_shader",
       "community": 36,
       "norm_label": "e16 lambertblinntexture.frag"
     },
@@ -24430,7 +24430,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c__users_simo_cg_graphify_corpus_e16___setting_up_rendering_part_3_e16___setting_up_rendering_part_3_shaders_posnormuv_vert_shader",
+      "id": "e16___setting_up_rendering_part_3_e16___setting_up_rendering_part_3_shaders_posnormuv_vert_shader",
       "community": 36,
       "norm_label": "e16 posnormuv.vert"
     },
@@ -24443,7 +24443,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c__users_simo_cg_graphify_corpus_e17___maze_e17___maze_shaders_lambertblinntexture_frag_shader",
+      "id": "e17___maze_e17___maze_shaders_lambertblinntexture_frag_shader",
       "community": 36,
       "norm_label": "e17 lambertblinntexture.frag"
     },
@@ -24456,7 +24456,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c__users_simo_cg_graphify_corpus_e17___maze_e17___maze_shaders_map_frag_shader",
+      "id": "e17___maze_e17___maze_shaders_map_frag_shader",
       "community": 36,
       "norm_label": "e17 map.frag"
     },
@@ -24469,7 +24469,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c__users_simo_cg_graphify_corpus_e17___maze_e17___maze_shaders_map_vert_shader",
+      "id": "e17___maze_e17___maze_shaders_map_vert_shader",
       "community": 36,
       "norm_label": "e17 map.vert"
     },
@@ -24482,7 +24482,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c__users_simo_cg_graphify_corpus_e17___maze_e17___maze_shaders_posnormuvinstance_vert_shader",
+      "id": "e17___maze_e17___maze_shaders_posnormuvinstance_vert_shader",
       "community": 36,
       "norm_label": "e17 posnormuvinstance.vert"
     },
@@ -24495,7 +24495,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c__users_simo_cg_graphify_corpus_e17___maze_e17___maze_shaders_posnormuvpc_vert_shader",
+      "id": "e17___maze_e17___maze_shaders_posnormuvpc_vert_shader",
       "community": 36,
       "norm_label": "e17 posnormuvpc.vert"
     },
@@ -24508,7 +24508,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c__users_simo_cg_graphify_corpus_e17___maze_e17___maze_shaders_showmap_frag_shader",
+      "id": "e17___maze_e17___maze_shaders_showmap_frag_shader",
       "community": 36,
       "norm_label": "e17 showmap.frag"
     },
@@ -24521,7 +24521,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c__users_simo_cg_graphify_corpus_e17___maze_e17___maze_shaders_showmap_vert_shader",
+      "id": "e17___maze_e17___maze_shaders_showmap_vert_shader",
       "community": 36,
       "norm_label": "e17 showmap.vert"
     },
@@ -24703,7 +24703,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c__users_simo_cg_graphify_corpus__final_project_notes_document",
+      "id": "_final_project_notes_document",
       "community": 33,
       "norm_label": "final project development notes"
     },
@@ -24716,7 +24716,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c__users_simo_cg_graphify_corpus__final_project_shaders_tochangeblinnfrompos_frag_shader",
+      "id": "_final_project_shaders_tochangeblinnfrompos_frag_shader",
       "community": 114,
       "norm_label": "tochangeblinnfrompos.frag (starter blinn fragment shader)"
     },
@@ -24729,7 +24729,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c__users_simo_cg_graphify_corpus__final_project_shaders_tochangesimplepos_vert_shader",
+      "id": "_final_project_shaders_tochangesimplepos_vert_shader",
       "community": 114,
       "norm_label": "tochangesimplepos.vert (starter position vertex shader)"
     },
@@ -24743,7 +24743,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Input is hardcoded in Starter.hpp: WASD movement, arrow keys for yaw/pitch, mouse only with left button held; cannot be changed without editing Starter (forbidden) or reimplementing (risky vs prof version).",
-      "id": "c__users_simo_cg_graphify_corpus__final_project_notes_camera_input_handling",
+      "id": "_final_project_notes_camera_input_handling",
       "community": 33,
       "norm_label": "camera input handling (starter.hpp)"
     },
@@ -24757,7 +24757,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Gravity handled in the camera and made optional so disabling it enables a fly cheat/debug option.",
-      "id": "c__users_simo_cg_graphify_corpus__final_project_notes_camera_gravity",
+      "id": "_final_project_notes_camera_gravity",
       "community": 33,
       "norm_label": "optional camera gravity"
     },
@@ -24771,7 +24771,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Bound to spacebar which Starter.hpp already wires to getSixAxis 'fire'; a simple upward velocity impulse gated behind its own optional flag, triggering only on fresh key press while grounded.",
-      "id": "c__users_simo_cg_graphify_corpus__final_project_notes_jump",
+      "id": "_final_project_notes_jump",
       "community": 33,
       "norm_label": "jump (spacebar impulse)"
     },
@@ -24785,7 +24785,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Cannot infer grounded from vertical velocity==0 because looking up/down while walking bleeds the front vector into vertical movement; ground contact is computed directly against colliders every frame.",
-      "id": "c__users_simo_cg_graphify_corpus__final_project_notes_grounded_detection",
+      "id": "_final_project_notes_grounded_detection",
       "community": 33,
       "norm_label": "grounded detection vs colliders"
     },
@@ -24799,7 +24799,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Bound to Ctrl, not wired by Starter.hpp so polled directly via glfwGetKey, gated behind its own flag; can only start while grounded but releasing Ctrl stops it instantly even mid-air since movement is not persisted velocity (no momentum).",
-      "id": "c__users_simo_cg_graphify_corpus__final_project_notes_sprint",
+      "id": "_final_project_notes_sprint",
       "community": 33,
       "norm_label": "sprint (ctrl)"
     },
@@ -24813,7 +24813,7 @@
       "author": null,
       "contributor": null,
       "rationale": "AABB-based ground detection provided by Colliders.hpp and Scene.hpp; declaring \"collider\":\"AABB\" in scene.json applies ground detection to whatever model is the floor.",
-      "id": "c__users_simo_cg_graphify_corpus__final_project_notes_floor_collider_aabb",
+      "id": "_final_project_notes_floor_collider_aabb",
       "community": 33,
       "norm_label": "aabb floor collider"
     },
@@ -24827,7 +24827,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Collision detection is optional, controlled by a flag, enabling a no-clip cheat/debug option.",
-      "id": "c__users_simo_cg_graphify_corpus__final_project_notes_collision_optional_noclip",
+      "id": "_final_project_notes_collision_optional_noclip",
       "community": 33,
       "norm_label": "optional collision (no-clip cheat)"
     },
@@ -24841,7 +24841,7 @@
       "author": null,
       "contributor": null,
       "rationale": "gravityEnabled, collisionEnabled, jumpEnabled, sprintEnabled grouped into one CheatFlags struct (single 'cheats' member) instead of loose booleans; easy to find/reset as a block and a natural hook for a future debug UI. Call sites read through the struct e.g. if(cheats.gravityEnabled).",
-      "id": "c__users_simo_cg_graphify_corpus__final_project_notes_cheatflags_struct",
+      "id": "_final_project_notes_cheatflags_struct",
       "community": 33,
       "norm_label": "cheatflags struct"
     },
@@ -24855,7 +24855,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Numeric tuning (moveSpeed, sprintMultiplier, jumpSpeed, gravity) lives in a separate MovementParams struct because 'how strong' is a different concern than the CheatFlags 'on/off' bools, though both sit next to each other and share the no-persistence pattern.",
-      "id": "c__users_simo_cg_graphify_corpus__final_project_notes_movementparams_struct",
+      "id": "_final_project_notes_movementparams_struct",
       "community": 33,
       "norm_label": "movementparams struct"
     },
@@ -24869,7 +24869,7 @@
       "author": null,
       "contributor": null,
       "rationale": "CheatFlags is a plain struct with default member initializers, so it resets to legit defaults (all true = cheats off) every launch; no config file or serialization by design.",
-      "id": "c__users_simo_cg_graphify_corpus__final_project_notes_no_persistence",
+      "id": "_final_project_notes_no_persistence",
       "community": 33,
       "norm_label": "no-persistence cheat defaults"
     },
@@ -24882,7 +24882,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c__users_simo_cg_graphify_corpus__docs_1___computer_graphics_exam_rules_document",
+      "id": "_docs_1___computer_graphics_exam_rules_document",
       "community": 170,
       "norm_label": "computer graphics exam rules (v1.0)"
     },
@@ -24896,7 +24896,7 @@
       "author": null,
       "contributor": null,
       "rationale": "No fixed deadline, but the whole process must be completed before the last call in February 2027; presentations are scheduled near officially proposed exam dates.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_1___computer_graphics_exam_rules_deadline_feb_2027",
+      "id": "_docs_1___computer_graphics_exam_rules_deadline_feb_2027",
       "community": 169,
       "norm_label": "deadline: last call february 2027"
     },
@@ -24910,7 +24910,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Presentation = a 10-minute (hard cap) live demo of the application describing its challenges and extents, followed by individual questions where each member describes a specific part of the project.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_1___computer_graphics_exam_rules_presentation_two_parts",
+      "id": "_docs_1___computer_graphics_exam_rules_presentation_two_parts",
       "community": 173,
       "norm_label": "two-part presentation"
     },
@@ -24924,7 +24924,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Projects are discussed by all members in the same session; every group component must be present for the presentation.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_1___computer_graphics_exam_rules_all_members_present",
+      "id": "_docs_1___computer_graphics_exam_rules_all_members_present",
       "community": 133,
       "norm_label": "all team members must be present"
     },
@@ -24938,7 +24938,7 @@
       "author": null,
       "contributor": null,
       "rationale": "The project itself determines a maximum total of 25 points in the final evaluation.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_1___computer_graphics_exam_rules_project_max_25_points",
+      "id": "_docs_1___computer_graphics_exam_rules_project_max_25_points",
       "community": 174,
       "norm_label": "project worth max 25 points"
     },
@@ -24952,7 +24952,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Quality of answers to individual questions about a particular part of the code determines up to 8 points.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_1___computer_graphics_exam_rules_individual_questions_8_points",
+      "id": "_docs_1___computer_graphics_exam_rules_individual_questions_8_points",
       "community": 160,
       "norm_label": "individual questions worth up to 8 points"
     },
@@ -24966,7 +24966,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Each student must know exactly and in great detail how their code works regardless of elapsed time; 'we did it long ago and don't remember' scores zero for that question.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_1___computer_graphics_exam_rules_must_know_code_detail",
+      "id": "_docs_1___computer_graphics_exam_rules_must_know_code_detail",
       "community": 160,
       "norm_label": "each student must know the code in detail"
     },
@@ -24980,7 +24980,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Students upload the source code; it is compiled and checked to work as shown in the presentation, and part of the grade is based on analysis of the delivered source.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_1___computer_graphics_exam_rules_source_code_upload_compile",
+      "id": "_docs_1___computer_graphics_exam_rules_source_code_upload_compile",
       "community": 33,
       "norm_label": "source code upload, compile and inspection"
     },
@@ -24994,7 +24994,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Students must always register via the online services page (plus project form) so the mark can be filled on the University server; the shown day/room is only one possible presentation day.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_1___computer_graphics_exam_rules_online_services_registration",
+      "id": "_docs_1___computer_graphics_exam_rules_online_services_registration",
       "community": 172,
       "norm_label": "servizi online exam registration"
     },
@@ -25008,7 +25008,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Final mark is the sum of project and question scores, with laude in special cases, communicated at end of session since code evaluation happens after presentations.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_1___computer_graphics_exam_rules_final_mark_sum_laude",
+      "id": "_docs_1___computer_graphics_exam_rules_final_mark_sum_laude",
       "community": 171,
       "norm_label": "final mark = project + questions (+ laude)"
     },
@@ -25022,7 +25022,7 @@
       "author": null,
       "contributor": null,
       "rationale": "If there is clear evidence the project was not done directly by the students, they must do a new one to pass.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_1___computer_graphics_exam_rules_plagiarism_redo",
+      "id": "_docs_1___computer_graphics_exam_rules_plagiarism_redo",
       "community": 161,
       "norm_label": "plagiarism forces a new project"
     },
@@ -25036,7 +25036,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Students may reject the mark and retry (one try per session); retriers must improve/re-discuss; members individually accept or reject, and accepters are 'removed' from the group leaving others to improve alone.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_1___computer_graphics_exam_rules_score_rejection_retrial",
+      "id": "_docs_1___computer_graphics_exam_rules_score_rejection_retrial",
       "community": 175,
       "norm_label": "score rejection and retrial rules"
     },
@@ -25049,7 +25049,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_document",
+      "id": "_docs_2___projects_rules_document",
       "community": 144,
       "norm_label": "projects rules (v1.0)"
     },
@@ -25063,7 +25063,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Projects must be done in teams of 2-3; individual projects only under special circumstances with motivation, groups of four only if pre-agreed with professors; all members discuss on the same exam date.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_team_size_two_or_three",
+      "id": "_docs_2___projects_rules_team_size_two_or_three",
       "community": 144,
       "norm_label": "teams of two or three students"
     },
@@ -25077,7 +25077,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Each project must be written in C++ using Vulkan and the course Starter.hpp.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_cpp_vulkan_starter",
+      "id": "_docs_2___projects_rules_cpp_vulkan_starter",
       "community": 33,
       "norm_label": "c++ + vulkan + starter.hpp mandatory"
     },
@@ -25091,7 +25091,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Code must explicitly set the shaders, which must be written by the students themselves.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_shaders_written_by_yourself",
+      "id": "_docs_2___projects_rules_shaders_written_by_yourself",
       "community": 114,
       "norm_label": "shaders must be written by yourself"
     },
@@ -25105,7 +25105,7 @@
       "author": null,
       "contributor": null,
       "rationale": "AI-based tools are allowed only if they give a minor contribution and the students fully understand EVERYTHING the tool created.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_ai_tools_minor_contribution",
+      "id": "_docs_2___projects_rules_ai_tools_minor_contribution",
       "community": 161,
       "norm_label": "ai tools only for minor contribution"
     },
@@ -25119,7 +25119,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Any helper library not relevant to 3D graphics (physics, collisions, AI) is allowed, but must be easily found/installed online, open source, and included with the delivery so it compiles.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_helper_libraries_open_source",
+      "id": "_docs_2___projects_rules_helper_libraries_open_source",
       "community": 33,
       "norm_label": "helper libraries must be open source"
     },
@@ -25133,7 +25133,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Code must have explicit sections that load/create geometries and textures, set shaders, define vertex formats and uniform blocks, create graphics pipelines and render passes, allocate command buffers, and record draw-calls.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_rendering_pipeline_requirements",
+      "id": "_docs_2___projects_rules_rendering_pipeline_requirements",
       "community": 183,
       "norm_label": "explicit vulkan pipeline requirements"
     },
@@ -25147,7 +25147,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Objects defined in local coordinates must pass through a local transform, then a view transform, then a projection to normalized screen coordinates.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_transform_pipeline",
+      "id": "_docs_2___projects_rules_transform_pipeline",
       "community": 114,
       "norm_label": "local/view/projection transform chain"
     },
@@ -25161,7 +25161,7 @@
       "author": null,
       "contributor": null,
       "rationale": "World matrices combine translation/rotation/scale (Euler or quaternion); view via look-at or look-in-direction; projection parallel or perspective, with the user able to view the scene from different points.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_world_view_projection_matrices",
+      "id": "_docs_2___projects_rules_world_view_projection_matrices",
       "community": 184,
       "norm_label": "world/view/projection matrix options"
     },
@@ -25175,7 +25175,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Objects are meshes with position, normals, texture coords and maybe tangent; loaded from OBJ/GLTF or generated procedurally; multiple vertex formats may coexist to reduce memory to needed attributes.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_mesh_vertex_formats",
+      "id": "_docs_2___projects_rules_mesh_vertex_formats",
       "community": 182,
       "norm_label": "meshes and multiple vertex formats"
     },
@@ -25189,7 +25189,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Navigation controls must allow viewing in first or third person via keyboard/mouse/joystick or a mix, and the user must interact with scene elements (moving objects or lights) that respond to input.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_navigation_controls",
+      "id": "_docs_2___projects_rules_navigation_controls",
       "community": 33,
       "norm_label": "first/third person navigation controls"
     },
@@ -25203,7 +25203,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Fragment shaders implement models such as Lambert or Oren-Nayar diffuse, Toon, Blinn/Phong/Ward specular, or Cook-Torrance with GGX or other distributions/geometric terms.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_shader_brdf_models",
+      "id": "_docs_2___projects_rules_shader_brdf_models",
       "community": 114,
       "norm_label": "brdf / shading models"
     },
@@ -25217,7 +25217,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Must use both direct lighting (directional, point, spotlights or custom) and indirect approximations such as ambient light or Image Based Lighting.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_lighting_direct_indirect",
+      "id": "_docs_2___projects_rules_lighting_direct_indirect",
       "community": 114,
       "norm_label": "direct and indirect lighting"
     },
@@ -25231,7 +25231,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Material parameters (diffuse/specular color, emission, roughness, metalness) come from uniforms or textures; textures also drive advanced techniques like normal maps or detail textures.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_material_textures",
+      "id": "_docs_2___projects_rules_material_textures",
       "community": 181,
       "norm_label": "material parameters and advanced textures"
     },
@@ -25245,7 +25245,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Final image quality and project size count; extra elements like animation, basic physics simulation, algorithmic intelligence, on-screen display, start-up menus, splash screens and scene changes are positively evaluated.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_extra_elements_quality",
+      "id": "_docs_2___projects_rules_extra_elements_quality",
       "community": 33,
       "norm_label": "image quality and extra elements"
     },
@@ -25259,7 +25259,7 @@
       "author": null,
       "contributor": null,
       "rationale": "An extensive asset set (food, furniture, cars, buildings, vegetation, dungeons, terrain, schools, hospital wards, textures, PBR materials, HDRI) is provided on WeBeep; using own/obtained assets is encouraged and positively evaluated.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_assets_3d_provided",
+      "id": "_docs_2___projects_rules_assets_3d_provided",
       "community": 143,
       "norm_label": "provided 3d assets (encouraged own)"
     },
@@ -25273,7 +25273,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Each group registers via a Microsoft Form (link on WeBeep) specifying curriculum, teammates, topic and a short feature description; open until mid-January 2027, suggested at ~40% implementation; unregistered students cannot present.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_project_registration_form",
+      "id": "_docs_2___projects_rules_project_registration_form",
       "community": 133,
       "norm_label": "project registration form (microsoft form)"
     },
@@ -25286,7 +25286,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c__users_simo_cg_graphify_corpus__docs_2_1___projects_topics_document",
+      "id": "_docs_2_1___projects_topics_document",
       "community": 33,
       "norm_label": "project topics list (v1.0)"
     },
@@ -25300,7 +25300,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Simplified 3D real-time exploration of a haunted castle; user navigates rooms and interacts (open secret passages, pick up objects, light candles, trigger hidden mechanisms).",
-      "id": "c__users_simo_cg_graphify_corpus__docs_2_1___projects_topics_haunted_castle_explorer",
+      "id": "_docs_2_1___projects_topics_haunted_castle_explorer",
       "community": 33,
       "norm_label": "topic: haunted castle explorer"
     },
@@ -25314,7 +25314,7 @@
       "author": null,
       "contributor": null,
       "rationale": "3D tavern where the user in first person approaches virtual characters (innkeeper, bard, merchant) and triggers interaction by getting close and pressing a key.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_2_1___projects_topics_dungeon_tavern_npc",
+      "id": "_docs_2_1___projects_topics_dungeon_tavern_npc",
       "community": 33,
       "norm_label": "topic: dungeon tavern npc"
     },
@@ -25328,7 +25328,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Simplified 3D real-time exploration of an enchanted forest; navigate and interact (collect herbs, activate glowing plants, feed animals, unlock hidden paths).",
-      "id": "c__users_simo_cg_graphify_corpus__docs_2_1___projects_topics_enchanted_forest_wanderer",
+      "id": "_docs_2_1___projects_topics_enchanted_forest_wanderer",
       "community": 33,
       "norm_label": "topic: enchanted forest wanderer"
     },
@@ -25342,7 +25342,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Interactive 3D environment to build/arrange a classroom by placing modular elements (desks, chairs, blackboards, shelves) in a room, moving/rotating/deleting via keyboard and/or GUI.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_2_1___projects_topics_modular_school_classroom_planner",
+      "id": "_docs_2_1___projects_topics_modular_school_classroom_planner",
       "community": 178,
       "norm_label": "topic: modular school classroom planner"
     },
@@ -25356,7 +25356,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Simplified 3D hospital simulation where the user relocates beds, equipment and supplies between rooms to meet changing ward requirements, navigating first person and interacting via keyboard/GUI.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_2_1___projects_topics_hospital_resource_mover",
+      "id": "_docs_2_1___projects_topics_hospital_resource_mover",
       "community": 177,
       "norm_label": "topic: hospital resource mover"
     },
@@ -25370,7 +25370,7 @@
       "author": null,
       "contributor": null,
       "rationale": "3D tabletop environment to roll dice, move tokens on a grid and interact with game elements on a virtual table; camera can rotate around the table and zoom to inspect the board.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_2_1___projects_topics_tabletop_dice_rpg_arena",
+      "id": "_docs_2_1___projects_topics_tabletop_dice_rpg_arena",
       "community": 179,
       "norm_label": "topic: tabletop dice rpg arena"
     },
@@ -25384,7 +25384,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Third-person farming-management style simulator (Stardew Valley/Hay Day) where a character herds animals to marked areas within a time limit; animal movements need not be animated.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_2_1___projects_topics_animal_herding_simulator",
+      "id": "_docs_2_1___projects_topics_animal_herding_simulator",
       "community": 176,
       "norm_label": "topic: animal herding simulator"
     },
@@ -25398,7 +25398,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Third-person simulator controlling a vehicle (car, truck, airplane, drone, helicopter) performing precise movement to reach marked pads in a 3D environment.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_2_1___projects_topics_vehicle_simulator",
+      "id": "_docs_2_1___projects_topics_vehicle_simulator",
       "community": 180,
       "norm_label": "topic: vehicle simulator"
     },
@@ -25411,7 +25411,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c__users_simo_cg_graphify_corpus__docs_3___project_registration_link_document",
+      "id": "_docs_3___project_registration_link_document",
       "community": 185,
       "norm_label": "project registration link (v1.0)"
     },
@@ -25425,7 +25425,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Project registration is done via a Microsoft Forms link; the form can be compiled starting Monday, May 18th.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_3___project_registration_link_registration_form_link",
+      "id": "_docs_3___project_registration_link_registration_form_link",
       "community": 133,
       "norm_label": "registration microsoft form link"
     },
@@ -25439,7 +25439,7 @@
       "author": null,
       "contributor": null,
       "rationale": "For an individual project, motivation is mandatory; lack of it was a main past reason for rejected proposals.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_3___project_registration_link_individual_motivation_mandatory",
+      "id": "_docs_3___project_registration_link_individual_motivation_mandatory",
       "community": 144,
       "norm_label": "individual project: motivation mandatory"
     },
@@ -25453,7 +25453,7 @@
       "author": null,
       "contributor": null,
       "rationale": "For groups of 2-3, ALL members must submit their own form entry confirming the other members' names and the topic, so the professor can verify each member agrees.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_3___project_registration_link_all_members_register_individually",
+      "id": "_docs_3___project_registration_link_all_members_register_individually",
       "community": 133,
       "norm_label": "every member registers individually"
     },
@@ -25466,7 +25466,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "id": "c__users_simo_cg_graphify_corpus__docs_4___starter_and_assets_document",
+      "id": "_docs_4___starter_and_assets_document",
       "community": 186,
       "norm_label": "starter and assets (assets doc)"
     },
@@ -25480,7 +25480,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Assets are stored in the mildly-encrypted proprietary .mgcg format, licensed ONLY for the CG final project (many bought from CGTrader); each thumbnail PNG helps pick objects; students must respect licensing and not reuse elsewhere.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_4___starter_and_assets_mgcg_asset_format",
+      "id": "_docs_4___starter_and_assets_mgcg_asset_format",
       "community": 143,
       "norm_label": "mgcg proprietary asset format"
     },
@@ -25494,7 +25494,7 @@
       "author": null,
       "contributor": null,
       "rationale": "All assets in folder XXX share texture Textures/Textures_XXX.png (e.g. City/Apartment_1.mgcg and City/Box_001.mgcg use Textures/Textures_City.png).",
-      "id": "c__users_simo_cg_graphify_corpus__docs_4___starter_and_assets_shared_textures_per_folder",
+      "id": "_docs_4___starter_and_assets_shared_textures_per_folder",
       "community": 143,
       "norm_label": "shared texture per asset folder"
     },
@@ -25508,7 +25508,7 @@
       "author": null,
       "contributor": null,
       "rationale": "The _Code/skeleton2026.zip with the latest Starter.hpp (including MGCG model readers) MUST be used as the project base; existing projects should migrate assets/sources into it (backward compatible).",
-      "id": "c__users_simo_cg_graphify_corpus__docs_4___starter_and_assets_skeleton2026_mandatory",
+      "id": "_docs_4___starter_and_assets_skeleton2026_mandatory",
       "community": 33,
       "norm_label": "skeleton2026 mandatory starting point"
     },
@@ -25522,7 +25522,7 @@
       "author": null,
       "contributor": null,
       "rationale": "Students are not allowed to change Starter.hpp or any file in the include folder of the skeleton.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_4___starter_and_assets_cannot_modify_starter",
+      "id": "_docs_4___starter_and_assets_cannot_modify_starter",
       "community": 33,
       "norm_label": "cannot modify starter.hpp / include folder"
     },
@@ -25536,7 +25536,7 @@
       "author": null,
       "contributor": null,
       "rationale": "At delivery the project is recompiled with a 'professor' version of Starter.hpp that also collects information about the implementation used to determine the grade, which is why the starting point must be fixed.",
-      "id": "c__users_simo_cg_graphify_corpus__docs_4___starter_and_assets_professor_starter_grading",
+      "id": "_docs_4___starter_and_assets_professor_starter_grading",
       "community": 33,
       "norm_label": "professor starter.hpp collects grading data"
     }
@@ -66764,8 +66764,8 @@
       "source_file": "E02 - Setup the environment/shaders/ColliderShow.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_collidershow_frag",
-      "target": "c_users_simo_cg_graphify_corpus_e03_shaders_collidershow_frag"
+      "source": "e02___setup_the_environment_shaders_collidershow_frag",
+      "target": "e03_shaders_collidershow_frag"
     },
     {
       "relation": "implements",
@@ -66774,7 +66774,7 @@
       "source_file": "E02 - Setup the environment/shaders/ColliderShow.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_collidershow_frag",
+      "source": "e02___setup_the_environment_shaders_collidershow_frag",
       "target": "concept_collider_visualization"
     },
     {
@@ -66784,8 +66784,8 @@
       "source_file": "E02 - Setup the environment/shaders/ColliderShow.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_collidershow_vert",
-      "target": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_collidershow_frag"
+      "source": "e02___setup_the_environment_shaders_collidershow_vert",
+      "target": "e02___setup_the_environment_shaders_collidershow_frag"
     },
     {
       "relation": "semantically_similar_to",
@@ -66794,8 +66794,8 @@
       "source_file": "E02 - Setup the environment/shaders/ColliderShow.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_collidershow_vert",
-      "target": "c_users_simo_cg_graphify_corpus_e03_shaders_collidershow_vert"
+      "source": "e02___setup_the_environment_shaders_collidershow_vert",
+      "target": "e03_shaders_collidershow_vert"
     },
     {
       "relation": "implements",
@@ -66804,7 +66804,7 @@
       "source_file": "E02 - Setup the environment/shaders/ColliderShow.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_collidershow_vert",
+      "source": "e02___setup_the_environment_shaders_collidershow_vert",
       "target": "concept_collider_visualization"
     },
     {
@@ -66814,8 +66814,8 @@
       "source_file": "E02 - Setup the environment/shaders/CookTorranceForCharacter.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_cooktorranceforcharacter_frag",
-      "target": "c_users_simo_cg_graphify_corpus_e03_shaders_cooktorranceforcharacter_frag"
+      "source": "e02___setup_the_environment_shaders_cooktorranceforcharacter_frag",
+      "target": "e03_shaders_cooktorranceforcharacter_frag"
     },
     {
       "relation": "implements",
@@ -66824,7 +66824,7 @@
       "source_file": "E02 - Setup the environment/shaders/CookTorranceForCharacter.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_cooktorranceforcharacter_frag",
+      "source": "e02___setup_the_environment_shaders_cooktorranceforcharacter_frag",
       "target": "concept_cook_torrance_brdf"
     },
     {
@@ -66834,7 +66834,7 @@
       "source_file": "E02 - Setup the environment/shaders/CookTorranceForCharacter.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_cooktorranceforcharacter_frag",
+      "source": "e02___setup_the_environment_shaders_cooktorranceforcharacter_frag",
       "target": "concept_pcf_shadow_filtering"
     },
     {
@@ -66844,7 +66844,7 @@
       "source_file": "E02 - Setup the environment/shaders/CookTorranceForCharacter.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_cooktorranceforcharacter_frag",
+      "source": "e02___setup_the_environment_shaders_cooktorranceforcharacter_frag",
       "target": "concept_shadow_mapping"
     },
     {
@@ -66854,8 +66854,8 @@
       "source_file": "E02 - Setup the environment/shaders/PosNormUvTanWeights.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_posnormuvtanweights_vert",
-      "target": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_cooktorranceforcharacter_frag"
+      "source": "e02___setup_the_environment_shaders_posnormuvtanweights_vert",
+      "target": "e02___setup_the_environment_shaders_cooktorranceforcharacter_frag"
     },
     {
       "relation": "semantically_similar_to",
@@ -66864,8 +66864,8 @@
       "source_file": "E02 - Setup the environment/shaders/PBR.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_pbr_frag",
-      "target": "c_users_simo_cg_graphify_corpus_e03_shaders_pbr_frag"
+      "source": "e02___setup_the_environment_shaders_pbr_frag",
+      "target": "e03_shaders_pbr_frag"
     },
     {
       "relation": "implements",
@@ -66874,7 +66874,7 @@
       "source_file": "E02 - Setup the environment/shaders/PBR.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_pbr_frag",
+      "source": "e02___setup_the_environment_shaders_pbr_frag",
       "target": "concept_cook_torrance_brdf"
     },
     {
@@ -66884,7 +66884,7 @@
       "source_file": "E02 - Setup the environment/shaders/PBR.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_pbr_frag",
+      "source": "e02___setup_the_environment_shaders_pbr_frag",
       "target": "concept_pbr"
     },
     {
@@ -66894,7 +66894,7 @@
       "source_file": "E02 - Setup the environment/shaders/PBR.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_pbr_frag",
+      "source": "e02___setup_the_environment_shaders_pbr_frag",
       "target": "concept_pcf_shadow_filtering"
     },
     {
@@ -66904,7 +66904,7 @@
       "source_file": "E02 - Setup the environment/shaders/PBR.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_pbr_frag",
+      "source": "e02___setup_the_environment_shaders_pbr_frag",
       "target": "concept_tangent_space_normal_mapping"
     },
     {
@@ -66914,8 +66914,8 @@
       "source_file": "E02 - Setup the environment/shaders/SimplePosNormUvTan.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_simpleposnormuvtan_vert",
-      "target": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_pbr_frag"
+      "source": "e02___setup_the_environment_shaders_simpleposnormuvtan_vert",
+      "target": "e02___setup_the_environment_shaders_pbr_frag"
     },
     {
       "relation": "semantically_similar_to",
@@ -66924,8 +66924,8 @@
       "source_file": "E02 - Setup the environment/shaders/PosNormUvTanWeights.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_posnormuvtanweights_vert",
-      "target": "c_users_simo_cg_graphify_corpus_e03_shaders_posnormuvtanweights_vert"
+      "source": "e02___setup_the_environment_shaders_posnormuvtanweights_vert",
+      "target": "e03_shaders_posnormuvtanweights_vert"
     },
     {
       "relation": "implements",
@@ -66934,7 +66934,7 @@
       "source_file": "E02 - Setup the environment/shaders/PosNormUvTanWeights.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_posnormuvtanweights_vert",
+      "source": "e02___setup_the_environment_shaders_posnormuvtanweights_vert",
       "target": "concept_gpu_skinning"
     },
     {
@@ -66944,8 +66944,8 @@
       "source_file": "E02 - Setup the environment/shaders/PosNormUvTanWeightsShadow.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_posnormuvtanweightsshadow_vert",
-      "target": "c_users_simo_cg_graphify_corpus_e03_shaders_posnormuvtanweightsshadow_vert"
+      "source": "e02___setup_the_environment_shaders_posnormuvtanweightsshadow_vert",
+      "target": "e03_shaders_posnormuvtanweightsshadow_vert"
     },
     {
       "relation": "implements",
@@ -66954,7 +66954,7 @@
       "source_file": "E02 - Setup the environment/shaders/PosNormUvTanWeightsShadow.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_posnormuvtanweightsshadow_vert",
+      "source": "e02___setup_the_environment_shaders_posnormuvtanweightsshadow_vert",
       "target": "concept_gpu_skinning"
     },
     {
@@ -66964,7 +66964,7 @@
       "source_file": "E02 - Setup the environment/shaders/PosNormUvTanWeightsShadow.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_posnormuvtanweightsshadow_vert",
+      "source": "e02___setup_the_environment_shaders_posnormuvtanweightsshadow_vert",
       "target": "concept_shadow_mapping"
     },
     {
@@ -66974,8 +66974,8 @@
       "source_file": "E02 - Setup the environment/shaders/ShadowMap.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_shadowmap_frag",
-      "target": "c_users_simo_cg_graphify_corpus_e03_shaders_shadowmap_frag"
+      "source": "e02___setup_the_environment_shaders_shadowmap_frag",
+      "target": "e03_shaders_shadowmap_frag"
     },
     {
       "relation": "implements",
@@ -66984,7 +66984,7 @@
       "source_file": "E02 - Setup the environment/shaders/ShadowMap.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_shadowmap_frag",
+      "source": "e02___setup_the_environment_shaders_shadowmap_frag",
       "target": "concept_shadow_mapping"
     },
     {
@@ -66994,8 +66994,8 @@
       "source_file": "E02 - Setup the environment/shaders/ShadowMap.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_shadowmap_vert",
-      "target": "c_users_simo_cg_graphify_corpus_e03_shaders_shadowmap_vert"
+      "source": "e02___setup_the_environment_shaders_shadowmap_vert",
+      "target": "e03_shaders_shadowmap_vert"
     },
     {
       "relation": "implements",
@@ -67004,7 +67004,7 @@
       "source_file": "E02 - Setup the environment/shaders/ShadowMap.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_shadowmap_vert",
+      "source": "e02___setup_the_environment_shaders_shadowmap_vert",
       "target": "concept_shadow_mapping"
     },
     {
@@ -67014,8 +67014,8 @@
       "source_file": "E02 - Setup the environment/shaders/SimplePosNormUvTan.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_simpleposnormuvtan_vert",
-      "target": "c_users_simo_cg_graphify_corpus_e03_shaders_simpleposnormuvtan_vert"
+      "source": "e02___setup_the_environment_shaders_simpleposnormuvtan_vert",
+      "target": "e03_shaders_simpleposnormuvtan_vert"
     },
     {
       "relation": "conceptually_related_to",
@@ -67024,7 +67024,7 @@
       "source_file": "E02 - Setup the environment/shaders/SimplePosNormUvTan.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_simpleposnormuvtan_vert",
+      "source": "e02___setup_the_environment_shaders_simpleposnormuvtan_vert",
       "target": "concept_pbr"
     },
     {
@@ -67034,8 +67034,8 @@
       "source_file": "E02 - Setup the environment/shaders/SkyBoxShader.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_skyboxshader_frag",
-      "target": "c_users_simo_cg_graphify_corpus_e03_shaders_skyboxshader_frag"
+      "source": "e02___setup_the_environment_shaders_skyboxshader_frag",
+      "target": "e03_shaders_skyboxshader_frag"
     },
     {
       "relation": "implements",
@@ -67044,7 +67044,7 @@
       "source_file": "E02 - Setup the environment/shaders/SkyBoxShader.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_skyboxshader_frag",
+      "source": "e02___setup_the_environment_shaders_skyboxshader_frag",
       "target": "concept_skybox"
     },
     {
@@ -67054,8 +67054,8 @@
       "source_file": "E02 - Setup the environment/shaders/SkyBoxShader.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_skyboxshader_vert",
-      "target": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_skyboxshader_frag"
+      "source": "e02___setup_the_environment_shaders_skyboxshader_vert",
+      "target": "e02___setup_the_environment_shaders_skyboxshader_frag"
     },
     {
       "relation": "semantically_similar_to",
@@ -67064,8 +67064,8 @@
       "source_file": "E02 - Setup the environment/shaders/SkyBoxShader.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_skyboxshader_vert",
-      "target": "c_users_simo_cg_graphify_corpus_e03_shaders_skyboxshader_vert"
+      "source": "e02___setup_the_environment_shaders_skyboxshader_vert",
+      "target": "e03_shaders_skyboxshader_vert"
     },
     {
       "relation": "implements",
@@ -67074,7 +67074,7 @@
       "source_file": "E02 - Setup the environment/shaders/SkyBoxShader.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_skyboxshader_vert",
+      "source": "e02___setup_the_environment_shaders_skyboxshader_vert",
       "target": "concept_skybox"
     },
     {
@@ -67084,8 +67084,8 @@
       "source_file": "E02 - Setup the environment/shaders/Text.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_text_frag",
-      "target": "c_users_simo_cg_graphify_corpus_e03_shaders_text_frag"
+      "source": "e02___setup_the_environment_shaders_text_frag",
+      "target": "e03_shaders_text_frag"
     },
     {
       "relation": "implements",
@@ -67094,7 +67094,7 @@
       "source_file": "E02 - Setup the environment/shaders/Text.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_text_frag",
+      "source": "e02___setup_the_environment_shaders_text_frag",
       "target": "concept_text_rendering"
     },
     {
@@ -67104,8 +67104,8 @@
       "source_file": "E02 - Setup the environment/shaders/Text.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_text_vert",
-      "target": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_text_frag"
+      "source": "e02___setup_the_environment_shaders_text_vert",
+      "target": "e02___setup_the_environment_shaders_text_frag"
     },
     {
       "relation": "semantically_similar_to",
@@ -67114,8 +67114,8 @@
       "source_file": "E02 - Setup the environment/shaders/Text.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_text_vert",
-      "target": "c_users_simo_cg_graphify_corpus_e03_shaders_text_vert"
+      "source": "e02___setup_the_environment_shaders_text_vert",
+      "target": "e03_shaders_text_vert"
     },
     {
       "relation": "implements",
@@ -67124,7 +67124,7 @@
       "source_file": "E02 - Setup the environment/shaders/Text.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_text_vert",
+      "source": "e02___setup_the_environment_shaders_text_vert",
       "target": "concept_text_rendering"
     },
     {
@@ -67134,7 +67134,7 @@
       "source_file": "E03/shaders/ColliderShow.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e03_shaders_collidershow_frag",
+      "source": "e03_shaders_collidershow_frag",
       "target": "concept_collider_visualization"
     },
     {
@@ -67144,7 +67144,7 @@
       "source_file": "E03/shaders/ColliderShow.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e03_shaders_collidershow_vert",
+      "source": "e03_shaders_collidershow_vert",
       "target": "concept_collider_visualization"
     },
     {
@@ -67154,7 +67154,7 @@
       "source_file": "E03/shaders/CookTorranceForCharacter.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e03_shaders_cooktorranceforcharacter_frag",
+      "source": "e03_shaders_cooktorranceforcharacter_frag",
       "target": "concept_cook_torrance_brdf"
     },
     {
@@ -67164,7 +67164,7 @@
       "source_file": "E03/shaders/CookTorranceForCharacter.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e03_shaders_cooktorranceforcharacter_frag",
+      "source": "e03_shaders_cooktorranceforcharacter_frag",
       "target": "concept_pcf_shadow_filtering"
     },
     {
@@ -67174,7 +67174,7 @@
       "source_file": "E03/shaders/PBR.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e03_shaders_pbr_frag",
+      "source": "e03_shaders_pbr_frag",
       "target": "concept_cook_torrance_brdf"
     },
     {
@@ -67184,7 +67184,7 @@
       "source_file": "E03/shaders/PBR.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e03_shaders_pbr_frag",
+      "source": "e03_shaders_pbr_frag",
       "target": "concept_pbr"
     },
     {
@@ -67194,7 +67194,7 @@
       "source_file": "E03/shaders/PBR.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e03_shaders_pbr_frag",
+      "source": "e03_shaders_pbr_frag",
       "target": "concept_tangent_space_normal_mapping"
     },
     {
@@ -67204,7 +67204,7 @@
       "source_file": "E03/shaders/PosNormUvTanWeights.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e03_shaders_posnormuvtanweights_vert",
+      "source": "e03_shaders_posnormuvtanweights_vert",
       "target": "concept_gpu_skinning"
     },
     {
@@ -67214,7 +67214,7 @@
       "source_file": "E03/shaders/PosNormUvTanWeightsShadow.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e03_shaders_posnormuvtanweightsshadow_vert",
+      "source": "e03_shaders_posnormuvtanweightsshadow_vert",
       "target": "concept_gpu_skinning"
     },
     {
@@ -67224,7 +67224,7 @@
       "source_file": "E03/shaders/PosNormUvTanWeightsShadow.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e03_shaders_posnormuvtanweightsshadow_vert",
+      "source": "e03_shaders_posnormuvtanweightsshadow_vert",
       "target": "concept_shadow_mapping"
     },
     {
@@ -67234,7 +67234,7 @@
       "source_file": "E03/shaders/ShadowMap.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e03_shaders_shadowmap_frag",
+      "source": "e03_shaders_shadowmap_frag",
       "target": "concept_shadow_mapping"
     },
     {
@@ -67244,7 +67244,7 @@
       "source_file": "E03/shaders/ShadowMap.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e03_shaders_shadowmap_vert",
+      "source": "e03_shaders_shadowmap_vert",
       "target": "concept_shadow_mapping"
     },
     {
@@ -67254,7 +67254,7 @@
       "source_file": "E03/shaders/SkyBoxShader.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e03_shaders_skyboxshader_frag",
+      "source": "e03_shaders_skyboxshader_frag",
       "target": "concept_skybox"
     },
     {
@@ -67264,7 +67264,7 @@
       "source_file": "E03/shaders/SkyBoxShader.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e03_shaders_skyboxshader_vert",
+      "source": "e03_shaders_skyboxshader_vert",
       "target": "concept_skybox"
     },
     {
@@ -67274,7 +67274,7 @@
       "source_file": "E03/shaders/Text.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e03_shaders_text_frag",
+      "source": "e03_shaders_text_frag",
       "target": "concept_text_rendering"
     },
     {
@@ -67284,7 +67284,7 @@
       "source_file": "E03/shaders/Text.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e03_shaders_text_vert",
+      "source": "e03_shaders_text_vert",
       "target": "concept_text_rendering"
     },
     {
@@ -67294,7 +67294,7 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/CookTorranceForCharacter.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_cooktorranceforcharacter_frag_shader",
+      "source": "e05_build_the_models_e05_build_the_models_shaders_cooktorranceforcharacter_frag_shader",
       "target": "concept_cook_torrance_brdf"
     },
     {
@@ -67304,7 +67304,7 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/PBRfromPos.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_pbrfrompos_frag_shader",
+      "source": "e05_build_the_models_e05_build_the_models_shaders_pbrfrompos_frag_shader",
       "target": "concept_cook_torrance_brdf"
     },
     {
@@ -67314,7 +67314,7 @@
       "source_file": "E06 - Motion systems~E06 - Motion systems/shaders/CookTorranceForCharacter.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_cooktorranceforcharacter_frag_shader",
+      "source": "e06_motion_systems_e06_motion_systems_shaders_cooktorranceforcharacter_frag_shader",
       "target": "concept_cook_torrance_brdf"
     },
     {
@@ -67324,7 +67324,7 @@
       "source_file": "E06 - Motion systems~E06 - Motion systems/shaders/CookTorranceFromPos.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_cooktorrancefrompos_frag_shader",
+      "source": "e06_motion_systems_e06_motion_systems_shaders_cooktorrancefrompos_frag_shader",
       "target": "concept_cook_torrance_brdf"
     },
     {
@@ -67334,7 +67334,7 @@
       "source_file": "E07 - Shadow map~E07 - Shadow map/shaders/CookTorranceForCharacter.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_cooktorranceforcharacter_frag_shader",
+      "source": "e07_shadow_map_e07_shadow_map_shaders_cooktorranceforcharacter_frag_shader",
       "target": "concept_cook_torrance_brdf"
     },
     {
@@ -67344,7 +67344,7 @@
       "source_file": "E07 - Shadow map~E07 - Shadow map/shaders/CookTorranceFromPos.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_cooktorrancefrompos_frag_shader",
+      "source": "e07_shadow_map_e07_shadow_map_shaders_cooktorrancefrompos_frag_shader",
       "target": "concept_cook_torrance_brdf"
     },
     {
@@ -67364,7 +67364,7 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/PBRfromPos.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_pbrfrompos_frag_shader",
+      "source": "e05_build_the_models_e05_build_the_models_shaders_pbrfrompos_frag_shader",
       "target": "concept_pbr"
     },
     {
@@ -67374,7 +67374,7 @@
       "source_file": "E06 - Motion systems~E06 - Motion systems/shaders/CookTorranceFromPos.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_cooktorrancefrompos_frag_shader",
+      "source": "e06_motion_systems_e06_motion_systems_shaders_cooktorrancefrompos_frag_shader",
       "target": "concept_pbr"
     },
     {
@@ -67384,7 +67384,7 @@
       "source_file": "E07 - Shadow map~E07 - Shadow map/shaders/CookTorranceFromPos.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_cooktorrancefrompos_frag_shader",
+      "source": "e07_shadow_map_e07_shadow_map_shaders_cooktorrancefrompos_frag_shader",
       "target": "concept_pbr"
     },
     {
@@ -67394,7 +67394,7 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/CookTorranceForCharacter.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_cooktorranceforcharacter_frag_shader",
+      "source": "e05_build_the_models_e05_build_the_models_shaders_cooktorranceforcharacter_frag_shader",
       "target": "concept_shadow_mapping"
     },
     {
@@ -67404,7 +67404,7 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/PosNormUvTanWeights.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_posnormuvtanweights_vert_shader",
+      "source": "e05_build_the_models_e05_build_the_models_shaders_posnormuvtanweights_vert_shader",
       "target": "concept_shadow_mapping"
     },
     {
@@ -67414,7 +67414,7 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/PosNormUvTanWeightsShadow.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_posnormuvtanweightsshadow_vert_shader",
+      "source": "e05_build_the_models_e05_build_the_models_shaders_posnormuvtanweightsshadow_vert_shader",
       "target": "concept_shadow_mapping"
     },
     {
@@ -67424,7 +67424,7 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/ShadowMap.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_shadowmap_frag_shader",
+      "source": "e05_build_the_models_e05_build_the_models_shaders_shadowmap_frag_shader",
       "target": "concept_shadow_mapping"
     },
     {
@@ -67434,7 +67434,7 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/ShadowMap.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_shadowmap_vert_shader",
+      "source": "e05_build_the_models_e05_build_the_models_shaders_shadowmap_vert_shader",
       "target": "concept_shadow_mapping"
     },
     {
@@ -67444,7 +67444,7 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/SimplePos.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_simplepos_vert_shader",
+      "source": "e05_build_the_models_e05_build_the_models_shaders_simplepos_vert_shader",
       "target": "concept_shadow_mapping"
     },
     {
@@ -67454,7 +67454,7 @@
       "source_file": "E06 - Motion systems~E06 - Motion systems/shaders/CookTorranceForCharacter.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_cooktorranceforcharacter_frag_shader",
+      "source": "e06_motion_systems_e06_motion_systems_shaders_cooktorranceforcharacter_frag_shader",
       "target": "concept_shadow_mapping"
     },
     {
@@ -67464,7 +67464,7 @@
       "source_file": "E06 - Motion systems~E06 - Motion systems/shaders/PosNormUvTanWeights.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_posnormuvtanweights_vert_shader",
+      "source": "e06_motion_systems_e06_motion_systems_shaders_posnormuvtanweights_vert_shader",
       "target": "concept_shadow_mapping"
     },
     {
@@ -67474,7 +67474,7 @@
       "source_file": "E06 - Motion systems~E06 - Motion systems/shaders/PosNormUvTanWeightsShadow.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_posnormuvtanweightsshadow_vert_shader",
+      "source": "e06_motion_systems_e06_motion_systems_shaders_posnormuvtanweightsshadow_vert_shader",
       "target": "concept_shadow_mapping"
     },
     {
@@ -67484,7 +67484,7 @@
       "source_file": "E06 - Motion systems~E06 - Motion systems/shaders/ShadowMap.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_shadowmap_frag_shader",
+      "source": "e06_motion_systems_e06_motion_systems_shaders_shadowmap_frag_shader",
       "target": "concept_shadow_mapping"
     },
     {
@@ -67494,7 +67494,7 @@
       "source_file": "E06 - Motion systems~E06 - Motion systems/shaders/ShadowMap.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_shadowmap_vert_shader",
+      "source": "e06_motion_systems_e06_motion_systems_shaders_shadowmap_vert_shader",
       "target": "concept_shadow_mapping"
     },
     {
@@ -67504,7 +67504,7 @@
       "source_file": "E06 - Motion systems~E06 - Motion systems/shaders/SimplePos.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_simplepos_vert_shader",
+      "source": "e06_motion_systems_e06_motion_systems_shaders_simplepos_vert_shader",
       "target": "concept_shadow_mapping"
     },
     {
@@ -67514,7 +67514,7 @@
       "source_file": "E07 - Shadow map~E07 - Shadow map/shaders/CookTorranceForCharacter.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_cooktorranceforcharacter_frag_shader",
+      "source": "e07_shadow_map_e07_shadow_map_shaders_cooktorranceforcharacter_frag_shader",
       "target": "concept_shadow_mapping"
     },
     {
@@ -67524,7 +67524,7 @@
       "source_file": "E07 - Shadow map~E07 - Shadow map/shaders/CookTorranceFromPos.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_cooktorrancefrompos_frag_shader",
+      "source": "e07_shadow_map_e07_shadow_map_shaders_cooktorrancefrompos_frag_shader",
       "target": "concept_shadow_mapping"
     },
     {
@@ -67534,7 +67534,7 @@
       "source_file": "E07 - Shadow map~E07 - Shadow map/shaders/PosNormUvTanWeights.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_posnormuvtanweights_vert_shader",
+      "source": "e07_shadow_map_e07_shadow_map_shaders_posnormuvtanweights_vert_shader",
       "target": "concept_shadow_mapping"
     },
     {
@@ -67544,7 +67544,7 @@
       "source_file": "E07 - Shadow map~E07 - Shadow map/shaders/PosNormUvTanWeightsShadow.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_posnormuvtanweightsshadow_vert_shader",
+      "source": "e07_shadow_map_e07_shadow_map_shaders_posnormuvtanweightsshadow_vert_shader",
       "target": "concept_shadow_mapping"
     },
     {
@@ -67554,7 +67554,7 @@
       "source_file": "E07 - Shadow map~E07 - Shadow map/shaders/ShadowMap.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_shadowmap_frag_shader",
+      "source": "e07_shadow_map_e07_shadow_map_shaders_shadowmap_frag_shader",
       "target": "concept_shadow_mapping"
     },
     {
@@ -67564,7 +67564,7 @@
       "source_file": "E07 - Shadow map~E07 - Shadow map/shaders/ShadowMap.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_shadowmap_vert_shader",
+      "source": "e07_shadow_map_e07_shadow_map_shaders_shadowmap_vert_shader",
       "target": "concept_shadow_mapping"
     },
     {
@@ -67574,7 +67574,7 @@
       "source_file": "E07 - Shadow map~E07 - Shadow map/shaders/ShowShadowMap.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_showshadowmap_frag_shader",
+      "source": "e07_shadow_map_e07_shadow_map_shaders_showshadowmap_frag_shader",
       "target": "concept_shadow_mapping"
     },
     {
@@ -67584,7 +67584,7 @@
       "source_file": "E07 - Shadow map~E07 - Shadow map/shaders/SimplePos.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_simplepos_vert_shader",
+      "source": "e07_shadow_map_e07_shadow_map_shaders_simplepos_vert_shader",
       "target": "concept_shadow_mapping"
     },
     {
@@ -67604,7 +67604,7 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/SkyBoxShader.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_skyboxshader_frag_shader",
+      "source": "e05_build_the_models_e05_build_the_models_shaders_skyboxshader_frag_shader",
       "target": "concept_skybox"
     },
     {
@@ -67614,7 +67614,7 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/SkyBoxShader.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_skyboxshader_vert_shader",
+      "source": "e05_build_the_models_e05_build_the_models_shaders_skyboxshader_vert_shader",
       "target": "concept_skybox"
     },
     {
@@ -67624,7 +67624,7 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/Text.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_text_frag_shader",
+      "source": "e05_build_the_models_e05_build_the_models_shaders_text_frag_shader",
       "target": "concept_text_rendering"
     },
     {
@@ -67634,7 +67634,7 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/Text.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_text_vert_shader",
+      "source": "e05_build_the_models_e05_build_the_models_shaders_text_vert_shader",
       "target": "concept_text_rendering"
     },
     {
@@ -67644,7 +67644,7 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/ColliderShow.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_collidershow_frag_shader",
+      "source": "e05_build_the_models_e05_build_the_models_shaders_collidershow_frag_shader",
       "target": "concept_collider_visualization"
     },
     {
@@ -67654,7 +67654,7 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/ColliderShow.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_collidershow_vert_shader",
+      "source": "e05_build_the_models_e05_build_the_models_shaders_collidershow_vert_shader",
       "target": "concept_collider_visualization"
     },
     {
@@ -67664,7 +67664,7 @@
       "source_file": "E07 - Shadow map~E07 - Shadow map/shaders/ShowShadowMap.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_showshadowmap_frag_shader",
+      "source": "e07_shadow_map_e07_shadow_map_shaders_showshadowmap_frag_shader",
       "target": "concept_shadow_map_visualization"
     },
     {
@@ -67674,7 +67674,7 @@
       "source_file": "E07 - Shadow map~E07 - Shadow map/shaders/ShowShadowMap.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_showshadowmap_vert_shader",
+      "source": "e07_shadow_map_e07_shadow_map_shaders_showshadowmap_vert_shader",
       "target": "concept_shadow_map_visualization"
     },
     {
@@ -67684,7 +67684,7 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/SimplePos.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_simplepos_vert_shader",
+      "source": "e05_build_the_models_e05_build_the_models_shaders_simplepos_vert_shader",
       "target": "concept_model_building"
     },
     {
@@ -67694,7 +67694,7 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/PosNormUvTanWeights.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_posnormuvtanweights_vert_shader",
+      "source": "e05_build_the_models_e05_build_the_models_shaders_posnormuvtanweights_vert_shader",
       "target": "concept_motion_skeletal_animation"
     },
     {
@@ -67704,7 +67704,7 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/PosNormUvTanWeightsShadow.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_posnormuvtanweightsshadow_vert_shader",
+      "source": "e05_build_the_models_e05_build_the_models_shaders_posnormuvtanweightsshadow_vert_shader",
       "target": "concept_motion_skeletal_animation"
     },
     {
@@ -67714,7 +67714,7 @@
       "source_file": "E06 - Motion systems~E06 - Motion systems/shaders/PosNormUvTanWeights.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_posnormuvtanweights_vert_shader",
+      "source": "e06_motion_systems_e06_motion_systems_shaders_posnormuvtanweights_vert_shader",
       "target": "concept_motion_skeletal_animation"
     },
     {
@@ -67724,7 +67724,7 @@
       "source_file": "E06 - Motion systems~E06 - Motion systems/shaders/PosNormUvTanWeightsShadow.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_posnormuvtanweightsshadow_vert_shader",
+      "source": "e06_motion_systems_e06_motion_systems_shaders_posnormuvtanweightsshadow_vert_shader",
       "target": "concept_motion_skeletal_animation"
     },
     {
@@ -67734,7 +67734,7 @@
       "source_file": "E07 - Shadow map~E07 - Shadow map/shaders/PosNormUvTanWeights.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_posnormuvtanweights_vert_shader",
+      "source": "e07_shadow_map_e07_shadow_map_shaders_posnormuvtanweights_vert_shader",
       "target": "concept_motion_skeletal_animation"
     },
     {
@@ -67744,7 +67744,7 @@
       "source_file": "E07 - Shadow map~E07 - Shadow map/shaders/PosNormUvTanWeightsShadow.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_posnormuvtanweightsshadow_vert_shader",
+      "source": "e07_shadow_map_e07_shadow_map_shaders_posnormuvtanweightsshadow_vert_shader",
       "target": "concept_motion_skeletal_animation"
     },
     {
@@ -67754,8 +67754,8 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/ColliderShow.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_collidershow_frag_shader",
-      "target": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_collidershow_vert_shader"
+      "source": "e05_build_the_models_e05_build_the_models_shaders_collidershow_frag_shader",
+      "target": "e05_build_the_models_e05_build_the_models_shaders_collidershow_vert_shader"
     },
     {
       "relation": "semantically_similar_to",
@@ -67764,8 +67764,8 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/CookTorranceForCharacter.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_cooktorranceforcharacter_frag_shader",
-      "target": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_cooktorranceforcharacter_frag_shader"
+      "source": "e05_build_the_models_e05_build_the_models_shaders_cooktorranceforcharacter_frag_shader",
+      "target": "e06_motion_systems_e06_motion_systems_shaders_cooktorranceforcharacter_frag_shader"
     },
     {
       "relation": "semantically_similar_to",
@@ -67774,8 +67774,8 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/CookTorranceForCharacter.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_cooktorranceforcharacter_frag_shader",
-      "target": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_cooktorranceforcharacter_frag_shader"
+      "source": "e05_build_the_models_e05_build_the_models_shaders_cooktorranceforcharacter_frag_shader",
+      "target": "e07_shadow_map_e07_shadow_map_shaders_cooktorranceforcharacter_frag_shader"
     },
     {
       "relation": "semantically_similar_to",
@@ -67784,8 +67784,8 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/PBRfromPos.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_pbrfrompos_frag_shader",
-      "target": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_cooktorrancefrompos_frag_shader"
+      "source": "e05_build_the_models_e05_build_the_models_shaders_pbrfrompos_frag_shader",
+      "target": "e06_motion_systems_e06_motion_systems_shaders_cooktorrancefrompos_frag_shader"
     },
     {
       "relation": "semantically_similar_to",
@@ -67794,8 +67794,8 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/PosNormUvTanWeights.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_posnormuvtanweights_vert_shader",
-      "target": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_posnormuvtanweights_vert_shader"
+      "source": "e05_build_the_models_e05_build_the_models_shaders_posnormuvtanweights_vert_shader",
+      "target": "e06_motion_systems_e06_motion_systems_shaders_posnormuvtanweights_vert_shader"
     },
     {
       "relation": "semantically_similar_to",
@@ -67804,8 +67804,8 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/PosNormUvTanWeights.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_posnormuvtanweights_vert_shader",
-      "target": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_posnormuvtanweights_vert_shader"
+      "source": "e05_build_the_models_e05_build_the_models_shaders_posnormuvtanweights_vert_shader",
+      "target": "e07_shadow_map_e07_shadow_map_shaders_posnormuvtanweights_vert_shader"
     },
     {
       "relation": "semantically_similar_to",
@@ -67814,8 +67814,8 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/PosNormUvTanWeightsShadow.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_posnormuvtanweightsshadow_vert_shader",
-      "target": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_posnormuvtanweightsshadow_vert_shader"
+      "source": "e05_build_the_models_e05_build_the_models_shaders_posnormuvtanweightsshadow_vert_shader",
+      "target": "e06_motion_systems_e06_motion_systems_shaders_posnormuvtanweightsshadow_vert_shader"
     },
     {
       "relation": "semantically_similar_to",
@@ -67824,8 +67824,8 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/PosNormUvTanWeightsShadow.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_posnormuvtanweightsshadow_vert_shader",
-      "target": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_posnormuvtanweightsshadow_vert_shader"
+      "source": "e05_build_the_models_e05_build_the_models_shaders_posnormuvtanweightsshadow_vert_shader",
+      "target": "e07_shadow_map_e07_shadow_map_shaders_posnormuvtanweightsshadow_vert_shader"
     },
     {
       "relation": "semantically_similar_to",
@@ -67834,8 +67834,8 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/ShadowMap.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_shadowmap_frag_shader",
-      "target": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_shadowmap_frag_shader"
+      "source": "e05_build_the_models_e05_build_the_models_shaders_shadowmap_frag_shader",
+      "target": "e06_motion_systems_e06_motion_systems_shaders_shadowmap_frag_shader"
     },
     {
       "relation": "semantically_similar_to",
@@ -67844,8 +67844,8 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/ShadowMap.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_shadowmap_frag_shader",
-      "target": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_shadowmap_frag_shader"
+      "source": "e05_build_the_models_e05_build_the_models_shaders_shadowmap_frag_shader",
+      "target": "e07_shadow_map_e07_shadow_map_shaders_shadowmap_frag_shader"
     },
     {
       "relation": "semantically_similar_to",
@@ -67854,8 +67854,8 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/ShadowMap.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_shadowmap_vert_shader",
-      "target": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_shadowmap_vert_shader"
+      "source": "e05_build_the_models_e05_build_the_models_shaders_shadowmap_vert_shader",
+      "target": "e06_motion_systems_e06_motion_systems_shaders_shadowmap_vert_shader"
     },
     {
       "relation": "semantically_similar_to",
@@ -67864,8 +67864,8 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/ShadowMap.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_shadowmap_vert_shader",
-      "target": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_shadowmap_vert_shader"
+      "source": "e05_build_the_models_e05_build_the_models_shaders_shadowmap_vert_shader",
+      "target": "e07_shadow_map_e07_shadow_map_shaders_shadowmap_vert_shader"
     },
     {
       "relation": "semantically_similar_to",
@@ -67874,8 +67874,8 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/SimplePos.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_simplepos_vert_shader",
-      "target": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_simplepos_vert_shader"
+      "source": "e05_build_the_models_e05_build_the_models_shaders_simplepos_vert_shader",
+      "target": "e06_motion_systems_e06_motion_systems_shaders_simplepos_vert_shader"
     },
     {
       "relation": "semantically_similar_to",
@@ -67884,8 +67884,8 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/SimplePos.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_simplepos_vert_shader",
-      "target": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_simplepos_vert_shader"
+      "source": "e05_build_the_models_e05_build_the_models_shaders_simplepos_vert_shader",
+      "target": "e07_shadow_map_e07_shadow_map_shaders_simplepos_vert_shader"
     },
     {
       "relation": "shares_data_with",
@@ -67894,8 +67894,8 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/SkyBoxShader.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_skyboxshader_frag_shader",
-      "target": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_skyboxshader_vert_shader"
+      "source": "e05_build_the_models_e05_build_the_models_shaders_skyboxshader_frag_shader",
+      "target": "e05_build_the_models_e05_build_the_models_shaders_skyboxshader_vert_shader"
     },
     {
       "relation": "shares_data_with",
@@ -67904,8 +67904,8 @@
       "source_file": "E05 - Build the models~E05 - Build the models/shaders/Text.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_text_frag_shader",
-      "target": "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_text_vert_shader"
+      "source": "e05_build_the_models_e05_build_the_models_shaders_text_frag_shader",
+      "target": "e05_build_the_models_e05_build_the_models_shaders_text_vert_shader"
     },
     {
       "relation": "semantically_similar_to",
@@ -67914,8 +67914,8 @@
       "source_file": "E06 - Motion systems~E06 - Motion systems/shaders/CookTorranceForCharacter.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_cooktorranceforcharacter_frag_shader",
-      "target": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_cooktorranceforcharacter_frag_shader"
+      "source": "e06_motion_systems_e06_motion_systems_shaders_cooktorranceforcharacter_frag_shader",
+      "target": "e07_shadow_map_e07_shadow_map_shaders_cooktorranceforcharacter_frag_shader"
     },
     {
       "relation": "semantically_similar_to",
@@ -67924,8 +67924,8 @@
       "source_file": "E06 - Motion systems~E06 - Motion systems/shaders/CookTorranceFromPos.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_cooktorrancefrompos_frag_shader",
-      "target": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_cooktorrancefrompos_frag_shader"
+      "source": "e06_motion_systems_e06_motion_systems_shaders_cooktorrancefrompos_frag_shader",
+      "target": "e07_shadow_map_e07_shadow_map_shaders_cooktorrancefrompos_frag_shader"
     },
     {
       "relation": "semantically_similar_to",
@@ -67934,8 +67934,8 @@
       "source_file": "E06 - Motion systems~E06 - Motion systems/shaders/PosNormUvTanWeights.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_posnormuvtanweights_vert_shader",
-      "target": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_posnormuvtanweights_vert_shader"
+      "source": "e06_motion_systems_e06_motion_systems_shaders_posnormuvtanweights_vert_shader",
+      "target": "e07_shadow_map_e07_shadow_map_shaders_posnormuvtanweights_vert_shader"
     },
     {
       "relation": "semantically_similar_to",
@@ -67944,8 +67944,8 @@
       "source_file": "E06 - Motion systems~E06 - Motion systems/shaders/PosNormUvTanWeightsShadow.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_posnormuvtanweightsshadow_vert_shader",
-      "target": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_posnormuvtanweightsshadow_vert_shader"
+      "source": "e06_motion_systems_e06_motion_systems_shaders_posnormuvtanweightsshadow_vert_shader",
+      "target": "e07_shadow_map_e07_shadow_map_shaders_posnormuvtanweightsshadow_vert_shader"
     },
     {
       "relation": "semantically_similar_to",
@@ -67954,8 +67954,8 @@
       "source_file": "E06 - Motion systems~E06 - Motion systems/shaders/ShadowMap.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_shadowmap_frag_shader",
-      "target": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_shadowmap_frag_shader"
+      "source": "e06_motion_systems_e06_motion_systems_shaders_shadowmap_frag_shader",
+      "target": "e07_shadow_map_e07_shadow_map_shaders_shadowmap_frag_shader"
     },
     {
       "relation": "semantically_similar_to",
@@ -67964,8 +67964,8 @@
       "source_file": "E06 - Motion systems~E06 - Motion systems/shaders/ShadowMap.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_shadowmap_vert_shader",
-      "target": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_shadowmap_vert_shader"
+      "source": "e06_motion_systems_e06_motion_systems_shaders_shadowmap_vert_shader",
+      "target": "e07_shadow_map_e07_shadow_map_shaders_shadowmap_vert_shader"
     },
     {
       "relation": "semantically_similar_to",
@@ -67974,8 +67974,8 @@
       "source_file": "E06 - Motion systems~E06 - Motion systems/shaders/SimplePos.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_simplepos_vert_shader",
-      "target": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_simplepos_vert_shader"
+      "source": "e06_motion_systems_e06_motion_systems_shaders_simplepos_vert_shader",
+      "target": "e07_shadow_map_e07_shadow_map_shaders_simplepos_vert_shader"
     },
     {
       "relation": "shares_data_with",
@@ -67984,8 +67984,8 @@
       "source_file": "E07 - Shadow map~E07 - Shadow map/shaders/ShowShadowMap.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_showshadowmap_frag_shader",
-      "target": "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_showshadowmap_vert_shader"
+      "source": "e07_shadow_map_e07_shadow_map_shaders_showshadowmap_frag_shader",
+      "target": "e07_shadow_map_e07_shadow_map_shaders_showshadowmap_vert_shader"
     },
     {
       "relation": "implements",
@@ -68464,8 +68464,8 @@
       "source_file": "E13 - Setting up rendering Part 2~E13 - Setting up rendering Part 2~A/shaders/LambertBlinn.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus_e13___setting_up_rendering_part_2_e13___setting_up_rendering_part_2_a_shaders_lambertblinn_frag_shader",
-      "target": "c__users_simo_cg_graphify_corpus_e13___setting_up_rendering_part_2_e13___setting_up_rendering_part_2_b_shaders_lambertblinn_frag_shader"
+      "source": "e13___setting_up_rendering_part_2_e13___setting_up_rendering_part_2_a_shaders_lambertblinn_frag_shader",
+      "target": "e13___setting_up_rendering_part_2_e13___setting_up_rendering_part_2_b_shaders_lambertblinn_frag_shader"
     },
     {
       "relation": "implements",
@@ -68474,7 +68474,7 @@
       "source_file": "E13 - Setting up rendering Part 2~E13 - Setting up rendering Part 2~A/shaders/LambertBlinn.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus_e13___setting_up_rendering_part_2_e13___setting_up_rendering_part_2_a_shaders_lambertblinn_frag_shader",
+      "source": "e13___setting_up_rendering_part_2_e13___setting_up_rendering_part_2_a_shaders_lambertblinn_frag_shader",
       "target": "concept_lambert_blinn_phong_lighting"
     },
     {
@@ -68484,8 +68484,8 @@
       "source_file": "E13 - Setting up rendering Part 2~E13 - Setting up rendering Part 2~A/shaders/PosNorm.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus_e13___setting_up_rendering_part_2_e13___setting_up_rendering_part_2_a_shaders_posnorm_vert_shader",
-      "target": "c__users_simo_cg_graphify_corpus_e13___setting_up_rendering_part_2_e13___setting_up_rendering_part_2_b_shaders_posnorm_vert_shader"
+      "source": "e13___setting_up_rendering_part_2_e13___setting_up_rendering_part_2_a_shaders_posnorm_vert_shader",
+      "target": "e13___setting_up_rendering_part_2_e13___setting_up_rendering_part_2_b_shaders_posnorm_vert_shader"
     },
     {
       "relation": "implements",
@@ -68494,7 +68494,7 @@
       "source_file": "E13 - Setting up rendering Part 2~E13 - Setting up rendering Part 2~A/shaders/PosNorm.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus_e13___setting_up_rendering_part_2_e13___setting_up_rendering_part_2_a_shaders_posnorm_vert_shader",
+      "source": "e13___setting_up_rendering_part_2_e13___setting_up_rendering_part_2_a_shaders_posnorm_vert_shader",
       "target": "concept_lambert_blinn_phong_lighting"
     },
     {
@@ -68504,7 +68504,7 @@
       "source_file": "E13 - Setting up rendering Part 2~E13 - Setting up rendering Part 2~B/shaders/LambertBlinn.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus_e13___setting_up_rendering_part_2_e13___setting_up_rendering_part_2_b_shaders_lambertblinn_frag_shader",
+      "source": "e13___setting_up_rendering_part_2_e13___setting_up_rendering_part_2_b_shaders_lambertblinn_frag_shader",
       "target": "concept_lambert_blinn_phong_lighting"
     },
     {
@@ -68514,7 +68514,7 @@
       "source_file": "E13 - Setting up rendering Part 2~E13 - Setting up rendering Part 2~B/shaders/PosNorm.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus_e13___setting_up_rendering_part_2_e13___setting_up_rendering_part_2_b_shaders_posnorm_vert_shader",
+      "source": "e13___setting_up_rendering_part_2_e13___setting_up_rendering_part_2_b_shaders_posnorm_vert_shader",
       "target": "concept_lambert_blinn_phong_lighting"
     },
     {
@@ -68524,7 +68524,7 @@
       "source_file": "E14 - Advanced texturing~E14 - Advanced texturing/shaders/AdvancedTexturingExercise.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus_e14___advanced_texturing_e14___advanced_texturing_shaders_advancedtexturingexercise_frag_shader",
+      "source": "e14___advanced_texturing_e14___advanced_texturing_shaders_advancedtexturingexercise_frag_shader",
       "target": "concept_advanced_texturing_tbn"
     },
     {
@@ -68534,8 +68534,8 @@
       "source_file": "E15 - Image Based Lighting~E15 - Image Based Lighting/shaders/MeshTBN.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus_e14___advanced_texturing_e14___advanced_texturing_shaders_meshtbn_vert_shader",
-      "target": "c__users_simo_cg_graphify_corpus_e15___image_based_lighting_e15___image_based_lighting_shaders_meshtbn_vert_shader"
+      "source": "e14___advanced_texturing_e14___advanced_texturing_shaders_meshtbn_vert_shader",
+      "target": "e15___image_based_lighting_e15___image_based_lighting_shaders_meshtbn_vert_shader"
     },
     {
       "relation": "implements",
@@ -68544,7 +68544,7 @@
       "source_file": "E14 - Advanced texturing~E14 - Advanced texturing/shaders/MeshTBN.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus_e14___advanced_texturing_e14___advanced_texturing_shaders_meshtbn_vert_shader",
+      "source": "e14___advanced_texturing_e14___advanced_texturing_shaders_meshtbn_vert_shader",
       "target": "concept_advanced_texturing_tbn"
     },
     {
@@ -68554,7 +68554,7 @@
       "source_file": "E15 - Image Based Lighting~E15 - Image Based Lighting/shaders/MeshTBN.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus_e15___image_based_lighting_e15___image_based_lighting_shaders_meshtbn_vert_shader",
+      "source": "e15___image_based_lighting_e15___image_based_lighting_shaders_meshtbn_vert_shader",
       "target": "concept_image_based_lighting"
     },
     {
@@ -68564,8 +68564,8 @@
       "source_file": "E17 - Maze~E17 - Maze/shaders/LambertBlinnTexture.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus_e16___setting_up_rendering_part_3_e16___setting_up_rendering_part_3_shaders_lambertblinntexture_frag_shader",
-      "target": "c__users_simo_cg_graphify_corpus_e17___maze_e17___maze_shaders_lambertblinntexture_frag_shader"
+      "source": "e16___setting_up_rendering_part_3_e16___setting_up_rendering_part_3_shaders_lambertblinntexture_frag_shader",
+      "target": "e17___maze_e17___maze_shaders_lambertblinntexture_frag_shader"
     },
     {
       "relation": "implements",
@@ -68574,7 +68574,7 @@
       "source_file": "E16 - Setting up rendering Part 3~E16 - Setting up rendering Part 3/shaders/LambertBlinnTexture.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus_e16___setting_up_rendering_part_3_e16___setting_up_rendering_part_3_shaders_lambertblinntexture_frag_shader",
+      "source": "e16___setting_up_rendering_part_3_e16___setting_up_rendering_part_3_shaders_lambertblinntexture_frag_shader",
       "target": "concept_textured_blinn_rendering"
     },
     {
@@ -68584,7 +68584,7 @@
       "source_file": "E16 - Setting up rendering Part 3~E16 - Setting up rendering Part 3/shaders/PosNormUV.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus_e16___setting_up_rendering_part_3_e16___setting_up_rendering_part_3_shaders_posnormuv_vert_shader",
+      "source": "e16___setting_up_rendering_part_3_e16___setting_up_rendering_part_3_shaders_posnormuv_vert_shader",
       "target": "concept_textured_blinn_rendering"
     },
     {
@@ -68594,7 +68594,7 @@
       "source_file": "E17 - Maze~E17 - Maze/shaders/LambertBlinnTexture.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus_e17___maze_e17___maze_shaders_lambertblinntexture_frag_shader",
+      "source": "e17___maze_e17___maze_shaders_lambertblinntexture_frag_shader",
       "target": "concept_maze_rendering_pipeline"
     },
     {
@@ -68604,7 +68604,7 @@
       "source_file": "E17 - Maze~E17 - Maze/shaders/LambertBlinnTexture.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus_e17___maze_e17___maze_shaders_lambertblinntexture_frag_shader",
+      "source": "e17___maze_e17___maze_shaders_lambertblinntexture_frag_shader",
       "target": "concept_textured_blinn_rendering"
     },
     {
@@ -68614,7 +68614,7 @@
       "source_file": "E17 - Maze~E17 - Maze/shaders/Map.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus_e17___maze_e17___maze_shaders_map_frag_shader",
+      "source": "e17___maze_e17___maze_shaders_map_frag_shader",
       "target": "concept_minimap_offscreen_rendering"
     },
     {
@@ -68624,7 +68624,7 @@
       "source_file": "E17 - Maze~E17 - Maze/shaders/Map.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus_e17___maze_e17___maze_shaders_map_vert_shader",
+      "source": "e17___maze_e17___maze_shaders_map_vert_shader",
       "target": "concept_minimap_offscreen_rendering"
     },
     {
@@ -68634,7 +68634,7 @@
       "source_file": "E17 - Maze~E17 - Maze/shaders/PosNormUVInstance.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus_e17___maze_e17___maze_shaders_posnormuvinstance_vert_shader",
+      "source": "e17___maze_e17___maze_shaders_posnormuvinstance_vert_shader",
       "target": "concept_instanced_rendering"
     },
     {
@@ -68644,7 +68644,7 @@
       "source_file": "E17 - Maze~E17 - Maze/shaders/PosNormUVpc.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus_e17___maze_e17___maze_shaders_posnormuvpc_vert_shader",
+      "source": "e17___maze_e17___maze_shaders_posnormuvpc_vert_shader",
       "target": "concept_per_instance_push_constants"
     },
     {
@@ -68654,7 +68654,7 @@
       "source_file": "E17 - Maze~E17 - Maze/shaders/ShowMap.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus_e17___maze_e17___maze_shaders_showmap_frag_shader",
+      "source": "e17___maze_e17___maze_shaders_showmap_frag_shader",
       "target": "concept_minimap_offscreen_rendering"
     },
     {
@@ -68664,7 +68664,7 @@
       "source_file": "E17 - Maze~E17 - Maze/shaders/ShowMap.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus_e17___maze_e17___maze_shaders_showmap_vert_shader",
+      "source": "e17___maze_e17___maze_shaders_showmap_vert_shader",
       "target": "concept_minimap_offscreen_rendering"
     },
     {
@@ -68774,8 +68774,8 @@
       "source_file": "_final_project/notes.md",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__final_project_notes_camera_input_handling",
-      "target": "c__users_simo_cg_graphify_corpus__final_project_notes_document"
+      "source": "_final_project_notes_camera_input_handling",
+      "target": "_final_project_notes_document"
     },
     {
       "relation": "implements",
@@ -68784,8 +68784,8 @@
       "source_file": "_final_project/shaders/toChangeBlinnFromPos.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__final_project_shaders_tochangeblinnfrompos_frag_shader",
-      "target": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_lighting_direct_indirect"
+      "source": "_final_project_shaders_tochangeblinnfrompos_frag_shader",
+      "target": "_docs_2___projects_rules_lighting_direct_indirect"
     },
     {
       "relation": "implements",
@@ -68794,8 +68794,8 @@
       "source_file": "_final_project/shaders/toChangeBlinnFromPos.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__final_project_shaders_tochangeblinnfrompos_frag_shader",
-      "target": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_shader_brdf_models"
+      "source": "_final_project_shaders_tochangeblinnfrompos_frag_shader",
+      "target": "_docs_2___projects_rules_shader_brdf_models"
     },
     {
       "relation": "references",
@@ -68804,8 +68804,8 @@
       "source_file": "_final_project/shaders/toChangeBlinnFromPos.frag.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__final_project_shaders_tochangeblinnfrompos_frag_shader",
-      "target": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_shaders_written_by_yourself"
+      "source": "_final_project_shaders_tochangeblinnfrompos_frag_shader",
+      "target": "_docs_2___projects_rules_shaders_written_by_yourself"
     },
     {
       "relation": "shares_data_with",
@@ -68814,8 +68814,8 @@
       "source_file": "_final_project/shaders/toChangeSimplePos.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__final_project_shaders_tochangesimplepos_vert_shader",
-      "target": "c__users_simo_cg_graphify_corpus__final_project_shaders_tochangeblinnfrompos_frag_shader"
+      "source": "_final_project_shaders_tochangesimplepos_vert_shader",
+      "target": "_final_project_shaders_tochangeblinnfrompos_frag_shader"
     },
     {
       "relation": "references",
@@ -68824,8 +68824,8 @@
       "source_file": "_final_project/shaders/toChangeSimplePos.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__final_project_shaders_tochangesimplepos_vert_shader",
-      "target": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_shaders_written_by_yourself"
+      "source": "_final_project_shaders_tochangesimplepos_vert_shader",
+      "target": "_docs_2___projects_rules_shaders_written_by_yourself"
     },
     {
       "relation": "implements",
@@ -68834,8 +68834,8 @@
       "source_file": "_final_project/shaders/toChangeSimplePos.vert.txt",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__final_project_shaders_tochangesimplepos_vert_shader",
-      "target": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_transform_pipeline"
+      "source": "_final_project_shaders_tochangesimplepos_vert_shader",
+      "target": "_docs_2___projects_rules_transform_pipeline"
     },
     {
       "relation": "semantically_similar_to",
@@ -68844,8 +68844,8 @@
       "source_file": "_final_project/notes.md",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__final_project_notes_camera_input_handling",
-      "target": "c__users_simo_cg_graphify_corpus__docs_2_1___projects_topics_dungeon_tavern_npc"
+      "source": "_final_project_notes_camera_input_handling",
+      "target": "_docs_2_1___projects_topics_dungeon_tavern_npc"
     },
     {
       "relation": "semantically_similar_to",
@@ -68854,8 +68854,8 @@
       "source_file": "_final_project/notes.md",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__final_project_notes_camera_input_handling",
-      "target": "c__users_simo_cg_graphify_corpus__docs_2_1___projects_topics_enchanted_forest_wanderer"
+      "source": "_final_project_notes_camera_input_handling",
+      "target": "_docs_2_1___projects_topics_enchanted_forest_wanderer"
     },
     {
       "relation": "semantically_similar_to",
@@ -68864,8 +68864,8 @@
       "source_file": "_final_project/notes.md",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__final_project_notes_camera_input_handling",
-      "target": "c__users_simo_cg_graphify_corpus__docs_2_1___projects_topics_haunted_castle_explorer"
+      "source": "_final_project_notes_camera_input_handling",
+      "target": "_docs_2_1___projects_topics_haunted_castle_explorer"
     },
     {
       "relation": "conceptually_related_to",
@@ -68874,8 +68874,8 @@
       "source_file": "_final_project/notes.md",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__final_project_notes_camera_input_handling",
-      "target": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_navigation_controls"
+      "source": "_final_project_notes_camera_input_handling",
+      "target": "_docs_2___projects_rules_navigation_controls"
     },
     {
       "relation": "references",
@@ -68884,8 +68884,8 @@
       "source_file": "_final_project/notes.md",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__final_project_notes_camera_input_handling",
-      "target": "c__users_simo_cg_graphify_corpus__docs_4___starter_and_assets_cannot_modify_starter"
+      "source": "_final_project_notes_camera_input_handling",
+      "target": "_docs_4___starter_and_assets_cannot_modify_starter"
     },
     {
       "relation": "conceptually_related_to",
@@ -68894,8 +68894,8 @@
       "source_file": "_final_project/notes.md",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__final_project_notes_camera_gravity",
-      "target": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_extra_elements_quality"
+      "source": "_final_project_notes_camera_gravity",
+      "target": "_docs_2___projects_rules_extra_elements_quality"
     },
     {
       "relation": "references",
@@ -68904,8 +68904,8 @@
       "source_file": "_final_project/notes.md",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__final_project_notes_cheatflags_struct",
-      "target": "c__users_simo_cg_graphify_corpus__final_project_notes_camera_gravity"
+      "source": "_final_project_notes_cheatflags_struct",
+      "target": "_final_project_notes_camera_gravity"
     },
     {
       "relation": "references",
@@ -68914,8 +68914,8 @@
       "source_file": "_final_project/notes.md",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__final_project_notes_cheatflags_struct",
-      "target": "c__users_simo_cg_graphify_corpus__final_project_notes_jump"
+      "source": "_final_project_notes_cheatflags_struct",
+      "target": "_final_project_notes_jump"
     },
     {
       "relation": "rationale_for",
@@ -68924,8 +68924,8 @@
       "source_file": "_final_project/notes.md",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__final_project_notes_grounded_detection",
-      "target": "c__users_simo_cg_graphify_corpus__final_project_notes_jump"
+      "source": "_final_project_notes_grounded_detection",
+      "target": "_final_project_notes_jump"
     },
     {
       "relation": "conceptually_related_to",
@@ -68934,8 +68934,8 @@
       "source_file": "_final_project/notes.md",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__final_project_notes_jump",
-      "target": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_extra_elements_quality"
+      "source": "_final_project_notes_jump",
+      "target": "_docs_2___projects_rules_extra_elements_quality"
     },
     {
       "relation": "shares_data_with",
@@ -68944,8 +68944,8 @@
       "source_file": "_final_project/notes.md",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__final_project_notes_floor_collider_aabb",
-      "target": "c__users_simo_cg_graphify_corpus__final_project_notes_grounded_detection"
+      "source": "_final_project_notes_floor_collider_aabb",
+      "target": "_final_project_notes_grounded_detection"
     },
     {
       "relation": "rationale_for",
@@ -68954,8 +68954,8 @@
       "source_file": "_final_project/notes.md",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__final_project_notes_grounded_detection",
-      "target": "c__users_simo_cg_graphify_corpus__final_project_notes_sprint"
+      "source": "_final_project_notes_grounded_detection",
+      "target": "_final_project_notes_sprint"
     },
     {
       "relation": "references",
@@ -68964,8 +68964,8 @@
       "source_file": "_final_project/notes.md",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__final_project_notes_cheatflags_struct",
-      "target": "c__users_simo_cg_graphify_corpus__final_project_notes_sprint"
+      "source": "_final_project_notes_cheatflags_struct",
+      "target": "_final_project_notes_sprint"
     },
     {
       "relation": "conceptually_related_to",
@@ -68974,8 +68974,8 @@
       "source_file": "_final_project/notes.md",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__final_project_notes_sprint",
-      "target": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_navigation_controls"
+      "source": "_final_project_notes_sprint",
+      "target": "_docs_2___projects_rules_navigation_controls"
     },
     {
       "relation": "conceptually_related_to",
@@ -68984,8 +68984,8 @@
       "source_file": "_final_project/notes.md",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__final_project_notes_collision_optional_noclip",
-      "target": "c__users_simo_cg_graphify_corpus__final_project_notes_floor_collider_aabb"
+      "source": "_final_project_notes_collision_optional_noclip",
+      "target": "_final_project_notes_floor_collider_aabb"
     },
     {
       "relation": "conceptually_related_to",
@@ -68994,8 +68994,8 @@
       "source_file": "_final_project/notes.md",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__final_project_notes_floor_collider_aabb",
-      "target": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_helper_libraries_open_source"
+      "source": "_final_project_notes_floor_collider_aabb",
+      "target": "_docs_2___projects_rules_helper_libraries_open_source"
     },
     {
       "relation": "references",
@@ -69004,8 +69004,8 @@
       "source_file": "_final_project/notes.md",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__final_project_notes_cheatflags_struct",
-      "target": "c__users_simo_cg_graphify_corpus__final_project_notes_collision_optional_noclip"
+      "source": "_final_project_notes_cheatflags_struct",
+      "target": "_final_project_notes_collision_optional_noclip"
     },
     {
       "relation": "conceptually_related_to",
@@ -69014,8 +69014,8 @@
       "source_file": "_final_project/notes.md",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__final_project_notes_movementparams_struct",
-      "target": "c__users_simo_cg_graphify_corpus__final_project_notes_cheatflags_struct"
+      "source": "_final_project_notes_movementparams_struct",
+      "target": "_final_project_notes_cheatflags_struct"
     },
     {
       "relation": "rationale_for",
@@ -69024,8 +69024,8 @@
       "source_file": "_final_project/notes.md",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__final_project_notes_no_persistence",
-      "target": "c__users_simo_cg_graphify_corpus__final_project_notes_cheatflags_struct"
+      "source": "_final_project_notes_no_persistence",
+      "target": "_final_project_notes_cheatflags_struct"
     },
     {
       "relation": "conceptually_related_to",
@@ -69034,8 +69034,8 @@
       "source_file": "_docs/3 - Project registration link.pdf",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__docs_3___project_registration_link_all_members_register_individually",
-      "target": "c__users_simo_cg_graphify_corpus__docs_1___computer_graphics_exam_rules_all_members_present"
+      "source": "_docs_3___project_registration_link_all_members_register_individually",
+      "target": "_docs_1___computer_graphics_exam_rules_all_members_present"
     },
     {
       "relation": "conceptually_related_to",
@@ -69044,8 +69044,8 @@
       "source_file": "_docs/1 - Computer Graphics exam rules.pdf",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__docs_1___computer_graphics_exam_rules_individual_questions_8_points",
-      "target": "c__users_simo_cg_graphify_corpus__docs_1___computer_graphics_exam_rules_must_know_code_detail"
+      "source": "_docs_1___computer_graphics_exam_rules_individual_questions_8_points",
+      "target": "_docs_1___computer_graphics_exam_rules_must_know_code_detail"
     },
     {
       "relation": "conceptually_related_to",
@@ -69054,8 +69054,8 @@
       "source_file": "_docs/1 - Computer Graphics exam rules.pdf",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__docs_1___computer_graphics_exam_rules_source_code_upload_compile",
-      "target": "c__users_simo_cg_graphify_corpus__docs_4___starter_and_assets_professor_starter_grading"
+      "source": "_docs_1___computer_graphics_exam_rules_source_code_upload_compile",
+      "target": "_docs_4___starter_and_assets_professor_starter_grading"
     },
     {
       "relation": "conceptually_related_to",
@@ -69064,8 +69064,8 @@
       "source_file": "_docs/1 - Computer Graphics exam rules.pdf",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__docs_1___computer_graphics_exam_rules_plagiarism_redo",
-      "target": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_ai_tools_minor_contribution"
+      "source": "_docs_1___computer_graphics_exam_rules_plagiarism_redo",
+      "target": "_docs_2___projects_rules_ai_tools_minor_contribution"
     },
     {
       "relation": "references",
@@ -69074,8 +69074,8 @@
       "source_file": "_docs/2 - Projects rules.pdf",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_team_size_two_or_three",
-      "target": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_document"
+      "source": "_docs_2___projects_rules_team_size_two_or_three",
+      "target": "_docs_2___projects_rules_document"
     },
     {
       "relation": "conceptually_related_to",
@@ -69084,18 +69084,8 @@
       "source_file": "_docs/3 - Project registration link.pdf",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__docs_3___project_registration_link_individual_motivation_mandatory",
-      "target": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_team_size_two_or_three"
-    },
-    {
-      "relation": "conceptually_related_to",
-      "confidence": "INFERRED",
-      "confidence_score": 0.85,
-      "source_file": "_docs/4 - Starter and assets.pdf",
-      "source_location": null,
-      "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__docs_4___starter_and_assets_skeleton2026_mandatory",
-      "target": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_cpp_vulkan_starter"
+      "source": "_docs_3___project_registration_link_individual_motivation_mandatory",
+      "target": "_docs_2___projects_rules_team_size_two_or_three"
     },
     {
       "relation": "conceptually_related_to",
@@ -69104,8 +69094,18 @@
       "source_file": "_docs/4 - Starter and assets.pdf",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__docs_4___starter_and_assets_mgcg_asset_format",
-      "target": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_assets_3d_provided"
+      "source": "_docs_4___starter_and_assets_skeleton2026_mandatory",
+      "target": "_docs_2___projects_rules_cpp_vulkan_starter"
+    },
+    {
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "source_file": "_docs/4 - Starter and assets.pdf",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "_docs_4___starter_and_assets_mgcg_asset_format",
+      "target": "_docs_2___projects_rules_assets_3d_provided"
     },
     {
       "relation": "references",
@@ -69114,8 +69114,8 @@
       "source_file": "_docs/3 - Project registration link.pdf",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__docs_3___project_registration_link_all_members_register_individually",
-      "target": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_project_registration_form"
+      "source": "_docs_3___project_registration_link_all_members_register_individually",
+      "target": "_docs_2___projects_rules_project_registration_form"
     },
     {
       "relation": "references",
@@ -69124,8 +69124,8 @@
       "source_file": "_docs/3 - Project registration link.pdf",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__docs_3___project_registration_link_registration_form_link",
-      "target": "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_project_registration_form"
+      "source": "_docs_3___project_registration_link_registration_form_link",
+      "target": "_docs_2___projects_rules_project_registration_form"
     },
     {
       "relation": "references",
@@ -69134,8 +69134,8 @@
       "source_file": "_docs/2.1 - Projects topics.pdf",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__docs_2_1___projects_topics_haunted_castle_explorer",
-      "target": "c__users_simo_cg_graphify_corpus__docs_2_1___projects_topics_document"
+      "source": "_docs_2_1___projects_topics_haunted_castle_explorer",
+      "target": "_docs_2_1___projects_topics_document"
     },
     {
       "relation": "conceptually_related_to",
@@ -69144,8 +69144,8 @@
       "source_file": "_docs/4 - Starter and assets.pdf",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__docs_4___starter_and_assets_shared_textures_per_folder",
-      "target": "c__users_simo_cg_graphify_corpus__docs_4___starter_and_assets_mgcg_asset_format"
+      "source": "_docs_4___starter_and_assets_shared_textures_per_folder",
+      "target": "_docs_4___starter_and_assets_mgcg_asset_format"
     },
     {
       "relation": "conceptually_related_to",
@@ -69154,8 +69154,8 @@
       "source_file": "_docs/4 - Starter and assets.pdf",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__docs_4___starter_and_assets_skeleton2026_mandatory",
-      "target": "c__users_simo_cg_graphify_corpus__docs_4___starter_and_assets_cannot_modify_starter"
+      "source": "_docs_4___starter_and_assets_skeleton2026_mandatory",
+      "target": "_docs_4___starter_and_assets_cannot_modify_starter"
     },
     {
       "relation": "rationale_for",
@@ -69164,8 +69164,8 @@
       "source_file": "_docs/4 - Starter and assets.pdf",
       "source_location": null,
       "weight": 1.0,
-      "source": "c__users_simo_cg_graphify_corpus__docs_4___starter_and_assets_professor_starter_grading",
-      "target": "c__users_simo_cg_graphify_corpus__docs_4___starter_and_assets_cannot_modify_starter"
+      "source": "_docs_4___starter_and_assets_professor_starter_grading",
+      "target": "_docs_4___starter_and_assets_cannot_modify_starter"
     }
   ],
   "hyperedges": [
@@ -69173,11 +69173,11 @@
       "id": "shadow_mapping_pipeline_e02",
       "label": "E02 Shadow Mapping Pipeline (depth pass + shadowed lighting)",
       "nodes": [
-        "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_shadowmap_vert",
-        "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_shadowmap_frag",
-        "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_posnormuvtanweightsshadow_vert",
-        "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_cooktorranceforcharacter_frag",
-        "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_pbr_frag",
+        "e02___setup_the_environment_shaders_shadowmap_vert",
+        "e02___setup_the_environment_shaders_shadowmap_frag",
+        "e02___setup_the_environment_shaders_posnormuvtanweightsshadow_vert",
+        "e02___setup_the_environment_shaders_cooktorranceforcharacter_frag",
+        "e02___setup_the_environment_shaders_pbr_frag",
         "concept_shadow_mapping"
       ],
       "relation": "participate_in",
@@ -69189,8 +69189,8 @@
       "id": "pbr_lighting_pipeline_e02",
       "label": "E02 PBR Lighting Pipeline (geometry vertex + PBR fragment)",
       "nodes": [
-        "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_simpleposnormuvtan_vert",
-        "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_pbr_frag",
+        "e02___setup_the_environment_shaders_simpleposnormuvtan_vert",
+        "e02___setup_the_environment_shaders_pbr_frag",
         "concept_pbr",
         "concept_tangent_space_normal_mapping",
         "concept_cook_torrance_brdf"
@@ -69204,8 +69204,8 @@
       "id": "skinned_character_pipeline_e02",
       "label": "E02 Skinned Character Pipeline (skinning vertex + Cook-Torrance fragment)",
       "nodes": [
-        "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_posnormuvtanweights_vert",
-        "c_users_simo_cg_graphify_corpus_e02___setup_the_environment_shaders_cooktorranceforcharacter_frag",
+        "e02___setup_the_environment_shaders_posnormuvtanweights_vert",
+        "e02___setup_the_environment_shaders_cooktorranceforcharacter_frag",
         "concept_gpu_skinning",
         "concept_cook_torrance_brdf"
       ],
@@ -69218,10 +69218,10 @@
       "id": "e07_shadow_mapping_pipeline",
       "label": "E07 two-pass shadow mapping pipeline (depth pass -> main pass PCF sampling -> debug view)",
       "nodes": [
-        "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_shadowmap_vert_shader",
-        "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_shadowmap_frag_shader",
-        "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_cooktorranceforcharacter_frag_shader",
-        "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_showshadowmap_frag_shader",
+        "e07_shadow_map_e07_shadow_map_shaders_shadowmap_vert_shader",
+        "e07_shadow_map_e07_shadow_map_shaders_shadowmap_frag_shader",
+        "e07_shadow_map_e07_shadow_map_shaders_cooktorranceforcharacter_frag_shader",
+        "e07_shadow_map_e07_shadow_map_shaders_showshadowmap_frag_shader",
         "concept_shadow_mapping"
       ],
       "relation": "participate_in",
@@ -69233,9 +69233,9 @@
       "id": "cook_torrance_character_lineage",
       "label": "CookTorranceForCharacter Cook-Torrance BRDF shared across E05/E06/E07",
       "nodes": [
-        "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_cooktorranceforcharacter_frag_shader",
-        "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_cooktorranceforcharacter_frag_shader",
-        "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_cooktorranceforcharacter_frag_shader",
+        "e05_build_the_models_e05_build_the_models_shaders_cooktorranceforcharacter_frag_shader",
+        "e06_motion_systems_e06_motion_systems_shaders_cooktorranceforcharacter_frag_shader",
+        "e07_shadow_map_e07_shadow_map_shaders_cooktorranceforcharacter_frag_shader",
         "concept_cook_torrance_brdf"
       ],
       "relation": "implement",
@@ -69247,9 +69247,9 @@
       "id": "skeletal_skinning_lineage",
       "label": "PosNormUvTanWeights skeletal skinning vertex shaders across E05/E06/E07",
       "nodes": [
-        "c_users_simo_cg_graphify_corpus_e05_build_the_models_e05_build_the_models_shaders_posnormuvtanweights_vert_shader",
-        "c_users_simo_cg_graphify_corpus_e06_motion_systems_e06_motion_systems_shaders_posnormuvtanweights_vert_shader",
-        "c_users_simo_cg_graphify_corpus_e07_shadow_map_e07_shadow_map_shaders_posnormuvtanweights_vert_shader",
+        "e05_build_the_models_e05_build_the_models_shaders_posnormuvtanweights_vert_shader",
+        "e06_motion_systems_e06_motion_systems_shaders_posnormuvtanweights_vert_shader",
+        "e07_shadow_map_e07_shadow_map_shaders_posnormuvtanweights_vert_shader",
         "concept_motion_skeletal_animation"
       ],
       "relation": "implement",
@@ -69302,8 +69302,8 @@
       "id": "shared_meshtbn_tangent_pipeline",
       "label": "Shared MeshTBN tangent-space vertex pipeline across E14 and E15",
       "nodes": [
-        "c__users_simo_cg_graphify_corpus_e14___advanced_texturing_e14___advanced_texturing_shaders_meshtbn_vert_shader",
-        "c__users_simo_cg_graphify_corpus_e15___image_based_lighting_e15___image_based_lighting_shaders_meshtbn_vert_shader",
+        "e14___advanced_texturing_e14___advanced_texturing_shaders_meshtbn_vert_shader",
+        "e15___image_based_lighting_e15___image_based_lighting_shaders_meshtbn_vert_shader",
         "concept_image_based_lighting"
       ],
       "relation": "participate_in",
@@ -69315,12 +69315,12 @@
       "id": "mandatory_project_spec",
       "label": "Mandatory project specification",
       "nodes": [
-        "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_cpp_vulkan_starter",
-        "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_shaders_written_by_yourself",
-        "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_rendering_pipeline_requirements",
-        "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_navigation_controls",
-        "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_shader_brdf_models",
-        "c__users_simo_cg_graphify_corpus__docs_2___projects_rules_team_size_two_or_three"
+        "_docs_2___projects_rules_cpp_vulkan_starter",
+        "_docs_2___projects_rules_shaders_written_by_yourself",
+        "_docs_2___projects_rules_rendering_pipeline_requirements",
+        "_docs_2___projects_rules_navigation_controls",
+        "_docs_2___projects_rules_shader_brdf_models",
+        "_docs_2___projects_rules_team_size_two_or_three"
       ],
       "relation": "form",
       "confidence": "INFERRED",
@@ -69331,10 +69331,10 @@
       "id": "exam_evaluation_scheme",
       "label": "Exam evaluation scheme",
       "nodes": [
-        "c__users_simo_cg_graphify_corpus__docs_1___computer_graphics_exam_rules_project_max_25_points",
-        "c__users_simo_cg_graphify_corpus__docs_1___computer_graphics_exam_rules_individual_questions_8_points",
-        "c__users_simo_cg_graphify_corpus__docs_1___computer_graphics_exam_rules_final_mark_sum_laude",
-        "c__users_simo_cg_graphify_corpus__docs_1___computer_graphics_exam_rules_must_know_code_detail"
+        "_docs_1___computer_graphics_exam_rules_project_max_25_points",
+        "_docs_1___computer_graphics_exam_rules_individual_questions_8_points",
+        "_docs_1___computer_graphics_exam_rules_final_mark_sum_laude",
+        "_docs_1___computer_graphics_exam_rules_must_know_code_detail"
       ],
       "relation": "form",
       "confidence": "EXTRACTED",
@@ -69345,11 +69345,11 @@
       "id": "cheat_flags_group",
       "label": "Grouped cheat/debug toggles",
       "nodes": [
-        "c__users_simo_cg_graphify_corpus__final_project_notes_cheatflags_struct",
-        "c__users_simo_cg_graphify_corpus__final_project_notes_camera_gravity",
-        "c__users_simo_cg_graphify_corpus__final_project_notes_collision_optional_noclip",
-        "c__users_simo_cg_graphify_corpus__final_project_notes_jump",
-        "c__users_simo_cg_graphify_corpus__final_project_notes_sprint"
+        "_final_project_notes_cheatflags_struct",
+        "_final_project_notes_camera_gravity",
+        "_final_project_notes_collision_optional_noclip",
+        "_final_project_notes_jump",
+        "_final_project_notes_sprint"
       ],
       "relation": "participate_in",
       "confidence": "EXTRACTED",
