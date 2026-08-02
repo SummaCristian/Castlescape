@@ -42,6 +42,13 @@ graphify-out/*
 graphify-out/cache/*
 !graphify-out/cache/semantic/
 
+# Live workspace behind graphify-lectures/lectures/: the text extracted from the
+# professor's slide PDFs, plus the graphify working directory that queries it.
+# The finished graph next to it (graph.html / graph.json / GRAPH_REPORT.md) IS committed;
+# this is only what is needed to re-query or --update it. The extracted slide text is the
+# professor's material to distribute, not ours, which is the other reason it stays out.
+graphify-lectures/lectures/workspace/
+
 # OS cruft
 .DS_Store
 Thumbs.db
