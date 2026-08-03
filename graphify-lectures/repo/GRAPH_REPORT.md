@@ -1,399 +1,174 @@
-# Graph Report - Computer_Graphics  (2026-08-02)
+# Graph Report - .  (2026-08-03)
 
 ## Corpus Check
-- Corpus is ~31,578 words - fits in a single context window. You may not need a graph.
+- 16 files · ~30,780 words
+- Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 919 nodes · 1899 edges · 73 communities (63 shown, 10 thin omitted)
-- Extraction: 96% EXTRACTED · 4% INFERRED · 0% AMBIGUOUS · INFERRED: 70 edges (avg confidence: 0.86)
-- Token cost: 66,359 input · 0 output
+- 242 nodes · 484 edges · 19 communities detected
+- Extraction: 91% EXTRACTED · 9% INFERRED · 0% AMBIGUOUS · INFERRED: 43 edges (avg confidence: 0.79)
+- Token cost: 0 input · 0 output
 
 ## Community Hubs (Navigation)
-- [[_COMMUNITY_Skeletal Animation and Character Chain|Skeletal Animation and Character Chain]]
-- [[_COMMUNITY_BaseProject Vulkan Core State|BaseProject Vulkan Core State]]
-- [[_COMMUNITY_TextMaker HUD Rendering|TextMaker HUD Rendering]]
-- [[_COMMUNITY_Graphics Pipeline Object|Graphics Pipeline Object]]
-- [[_COMMUNITY_Vertex Descriptor and Bindings|Vertex Descriptor and Bindings]]
-- [[_COMMUNITY_Collider Debug Visualizer|Collider Debug Visualizer]]
-- [[_COMMUNITY_Collision Intersection Tests|Collision Intersection Tests]]
-- [[_COMMUNITY_Model Loading and GLTF Nodes|Model Loading and GLTF Nodes]]
-- [[_COMMUNITY_Collider Construction and Types|Collider Construction and Types]]
-- [[_COMMUNITY_Text Block Layout|Text Block Layout]]
-- [[_COMMUNITY_Physical Device and Swapchain|Physical Device and Swapchain]]
-- [[_COMMUNITY_Scene Asset Registry|Scene Asset Registry]]
-- [[_COMMUNITY_App Class and Camera State|App Class and Camera State]]
-- [[_COMMUNITY_Asset File Types OBJ GLTF|Asset File Types OBJ GLTF]]
-- [[_COMMUNITY_Vulkan Init and Lifecycle|Vulkan Init and Lifecycle]]
-- [[_COMMUNITY_Named Command Buffers|Named Command Buffers]]
-- [[_COMMUNITY_Render Pass Attachments|Render Pass Attachments]]
-- [[_COMMUNITY_Framebuffer Attachments|Framebuffer Attachments]]
-- [[_COMMUNITY_Texture Sampler|Texture Sampler]]
-- [[_COMMUNITY_Render Pass Object|Render Pass Object]]
-- [[_COMMUNITY_Movement Cheats and Build Setup|Movement Cheats and Build Setup]]
-- [[_COMMUNITY_Texture Creation and Mipmaps|Texture Creation and Mipmaps]]
-- [[_COMMUNITY_Descriptor Layouts and Shader Modules|Descriptor Layouts and Shader Modules]]
-- [[_COMMUNITY_Course Corpus and Framework Shaders|Course Corpus and Framework Shaders]]
-- [[_COMMUNITY_Scene Instance Record|Scene Instance Record]]
-- [[_COMMUNITY_Exam Rules and Project Topics|Exam Rules and Project Topics]]
-- [[_COMMUNITY_Font Definition and Atlas|Font Definition and Atlas]]
-- [[_COMMUNITY_Image Layout Transitions|Image Layout Transitions]]
-- [[_COMMUNITY_Buffer and Image Allocation|Buffer and Image Allocation]]
-- [[_COMMUNITY_Text Colors and Alignment|Text Colors and Alignment]]
-- [[_COMMUNITY_Technique Definitions|Technique Definitions]]
-- [[_COMMUNITY_Descriptor Set|Descriptor Set]]
-- [[_COMMUNITY_Light Models and Main Shaders|Light Models and Main Shaders]]
-- [[_COMMUNITY_Scene Lifecycle Hooks|Scene Lifecycle Hooks]]
-- [[_COMMUNITY_OBJ Loading and Screenshot|OBJ Loading and Screenshot]]
-- [[_COMMUNITY_Command Buffer Submission|Command Buffer Submission]]
-- [[_COMMUNITY_Vulkan Debug Messenger|Vulkan Debug Messenger]]
-- [[_COMMUNITY_Descriptor Layout Bindings|Descriptor Layout Bindings]]
-- [[_COMMUNITY_Font Character Metrics|Font Character Metrics]]
-- [[_COMMUNITY_Model View Projection Uniforms|Model View Projection Uniforms]]
-- [[_COMMUNITY_Global Uniform and Lighting|Global Uniform and Lighting]]
-- [[_COMMUNITY_Main Entry and Vertex Format|Main Entry and Vertex Format]]
-- [[_COMMUNITY_Collider Definitions in Scene|Collider Definitions in Scene]]
-- [[_COMMUNITY_AABB Extents|AABB Extents]]
-- [[_COMMUNITY_Cleanup Paths|Cleanup Paths]]
-- [[_COMMUNITY_Command Buffer Initializers|Command Buffer Initializers]]
-- [[_COMMUNITY_Image Memory Barriers|Image Memory Barriers]]
-- [[_COMMUNITY_Application Main Loop|Application Main Loop]]
-- [[_COMMUNITY_Descriptor Pool Sizes|Descriptor Pool Sizes]]
-- [[_COMMUNITY_Shown Collider Record|Shown Collider Record]]
-- [[_COMMUNITY_Vertex Descriptor Reference|Vertex Descriptor Reference]]
-- [[_COMMUNITY_Texture Definitions|Texture Definitions]]
-- [[_COMMUNITY_Validation Debug Callback|Validation Debug Callback]]
-- [[_COMMUNITY_E13 Command Buffer Lesson|E13 Command Buffer Lesson]]
-- [[_COMMUNITY_Tangent Space Chain E14 E15|Tangent Space Chain E14 E15]]
-- [[_COMMUNITY_Technique Instances|Technique Instances]]
-- [[_COMMUNITY_Instance Creation and Validation|Instance Creation and Validation]]
-- [[_COMMUNITY_Depth Format Selection|Depth Format Selection]]
-- [[_COMMUNITY_Text Vertex Format|Text Vertex Format]]
-- [[_COMMUNITY_Window Resize Handling|Window Resize Handling]]
-- [[_COMMUNITY_Stock Attachment Configurations|Stock Attachment Configurations]]
-- [[_COMMUNITY_ColliderShow Push Constant|ColliderShow Push Constant]]
-- [[_COMMUNITY_Swapchain Extent|Swapchain Extent]]
-- [[_COMMUNITY_Image View Creation|Image View Creation]]
-- [[_COMMUNITY_TextMaker Model Pair|TextMaker Model Pair]]
-- [[_COMMUNITY_Mat3 Printing|Mat3 Printing]]
-- [[_COMMUNITY_Run Script|Run Script]]
-- [[_COMMUNITY_Vec2 Printing|Vec2 Printing]]
-- [[_COMMUNITY_Vec4 Printing|Vec4 Printing]]
-- [[_COMMUNITY_Image Create Info|Image Create Info]]
-- [[_COMMUNITY_Memory Allocate Info|Memory Allocate Info]]
-- [[_COMMUNITY_E09 Texture Mapping Lesson|E09 Texture Mapping Lesson]]
-- [[_COMMUNITY_E16 Rendering Part 3 Lesson|E16 Rendering Part 3 Lesson]]
+- [[_COMMUNITY_Collision Detection (AABBOOBBBVH)|Collision Detection (AABB/OOBB/BVH)]]
+- [[_COMMUNITY_Framework Bootstrap (BaseProjectStarter)|Framework Bootstrap (BaseProject/Starter)]]
+- [[_COMMUNITY_Vulkan Resource Creation|Vulkan Resource Creation]]
+- [[_COMMUNITY_Debug Collider Rendering & Cheat Flags|Debug Collider Rendering & Cheat Flags]]
+- [[_COMMUNITY_Vulkan Device & Swapchain Setup|Vulkan Device & Swapchain Setup]]
+- [[_COMMUNITY_App Lifecycle (initmain loopcleanup)|App Lifecycle (init/main loop/cleanup)]]
+- [[_COMMUNITY_Text Rendering (TextMaker)|Text Rendering (TextMaker)]]
+- [[_COMMUNITY_Skeletal Animation|Skeletal Animation]]
+- [[_COMMUNITY_Mesh Loading (glTFOBJ)|Mesh Loading (glTF/OBJ)]]
+- [[_COMMUNITY_Render Pass & Vertex Layout|Render Pass & Vertex Layout]]
+- [[_COMMUNITY_Command Buffers & Draw Loop|Command Buffers & Draw Loop]]
+- [[_COMMUNITY_Command Buffer Helpers (vks)|Command Buffer Helpers (vks)]]
+- [[_COMMUNITY_DepthFormat Support Queries|Depth/Format Support Queries]]
+- [[_COMMUNITY_Command Buffer Allocation (vks)|Command Buffer Allocation (vks)]]
+- [[_COMMUNITY_Project README|Project README]]
+- [[_COMMUNITY_Libs.cpp Entry|Libs.cpp Entry]]
+- [[_COMMUNITY_GLFW Dependency|GLFW Dependency]]
+- [[_COMMUNITY_GLM Dependency|GLM Dependency]]
+- [[_COMMUNITY_Asset Copy Build Step|Asset Copy Build Step]]
 
 ## God Nodes (most connected - your core abstractions)
-1. `BaseProject` - 167 edges
-2. `Collider` - 56 edges
-3. `TextMaker` - 52 edges
-4. `Scene` - 51 edges
-5. `Pipeline` - 50 edges
-6. `Skeleton26ReplaceName` - 47 edges
-7. `ColliderShow` - 43 edges
-8. `Model` - 41 edges
-9. `RenderPass` - 38 edges
-10. `size` - 36 edges
+1. `PrintVkError()` - 19 edges
+2. `init()` - 18 edges
+3. `initVulkan()` - 13 edges
+4. `collidesWith()` - 12 edges
+5. `cleanup()` - 10 edges
+6. `createSwapChain()` - 9 edges
+7. `end()` - 9 edges
+8. `recreateSwapChain()` - 8 edges
+9. `saveScreenshot()` - 8 edges
+10. `initFromAsset()` - 8 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `E13 - Setting up rendering Part 2 (UBO, Global UBO, command buffer)` --conceptually_related_to--> `GlobalUniformBufferObject`  [INFERRED]
-  docs/riassunto-corso.md → skeleton/source/src/main.cpp
-- `CheatFlags struct (grouped debug/cheat toggles, no persistence)` --semantically_similar_to--> `Libs.cpp compiled with -g0 to cut build cost`  [AMBIGUOUS] [semantically similar]
-  notes.md → skeleton/CMakeLists.txt
-- `E06 - Motion systems (skeletal animation)` --conceptually_related_to--> `AnimBlender`  [INFERRED]
-  docs/riassunto-corso.md → skeleton/source/include/modules/Animations.hpp
-- `Optional collision detection (no-clip cheat)` --references--> `collidesWith`  [INFERRED]
-  notes.md → skeleton/source/include/modules/Colliders.hpp
-- `Grounded state computed against colliders, not from zero vertical velocity` --references--> `getExtents`  [INFERRED]
-  notes.md → skeleton/source/include/modules/Colliders.hpp
-
-## Import Cycles
-- None detected.
+- `ColliderShow.vert main()` --semantically_similar_to--> `AABB Floor Collider (Colliders.hpp / Scene.hpp)`  [INFERRED] [semantically similar]
+  skeleton/source/shaders/framework/ColliderShow.vert → notes.md
+- `ColliderShow PushConsts (colliderIndex)` --semantically_similar_to--> `Collision Detection Toggle (no-clip cheat)`  [INFERRED] [semantically similar]
+  skeleton/source/shaders/framework/ColliderShow.vert → notes.md
+- `toChangeBlinnFromPos.frag main()` --semantically_similar_to--> `toChangeSimplePos UniformBufferObject (mvpMat, mMat)`  [AMBIGUOUS] [semantically similar]
+  skeleton/source/shaders/toChangeBlinnFromPos.frag → skeleton/source/shaders/toChangeSimplePos.vert
+- `CreateColliderRecursive()` --calls--> `initPoint()`  [INFERRED]
+  skeleton/source/include/modules/Scene.hpp → skeleton/source/include/modules/Colliders.hpp
+- `CreateColliderRecursive()` --calls--> `initSphere()`  [INFERRED]
+  skeleton/source/include/modules/Scene.hpp → skeleton/source/include/modules/Colliders.hpp
 
 ## Hyperedges (group relationships)
-- **First-person movement system (input, gravity, jump, sprint, ground contact)** — notes_camera, notes_gravity, notes_jump, notes_sprint, notes_grounded_detection, skeleton_source_src_main_skeleton26replacename_gamelogic, skeleton_source_include_modules_starter_baseproject_getsixaxis [INFERRED 0.90]
-- **Cheat toggles vs numeric tuning split on the app class** — notes_cheatflags, notes_movementparams, skeleton_source_src_main_skeleton26replacename_cheats, skeleton_source_src_main_skeleton26replacename_movement, skeleton_source_src_main_skeleton26replacename [INFERRED 0.90]
-- **Main object render pipeline (vert + frag + UBO/GUBO + shader build step)** — skeleton_source_shaders_tochangesimplepos_vert_main, skeleton_source_shaders_tochangeblinnfrompos_frag_main, skeleton_source_src_main_uniformbufferobject, skeleton_source_src_main_globaluniformbufferobject, skeleton_source_src_main_skeleton26replacename_updateuniformbuffer, skeleton_cmakelists_shaders_target [INFERRED 0.90]
+- **Blinn-Phong Shading Pipeline (position-based normals)** — tochangesimplepos_main, tochangesimplepos_uniformbufferobject, tochangeblinnfrompos_main, tochangeblinnfrompos_globaluniformbufferobject [INFERRED 0.85]
+- **Collider Debug Visualization Pipeline** — collidershow_main_vert, collidershow_main_frag, collidershow_uniformbufferobject, collidershow_pushconsts [INFERRED 0.85]
+- **Cheat/Debug Flags System** — notes_cheatflags_struct, notes_gravity_cheat, notes_jump_cheat, notes_sprint_cheat, notes_collision_cheat [EXTRACTED 1.00]
 
-## Communities (73 total, 10 thin omitted)
+## Communities
 
-### Community 0 - "Skeletal Animation and Character Chain"
-Cohesion: 0.05
-Nodes (64): Animated character chain (E05 -> E06 -> E07, one shared pipeline), CookTorranceForCharacter.frag (Cook-Torrance BRDF), E05 - Build the models, E06 - Motion systems (skeletal animation), E07 - Shadow map, PosNormUvTanWeights.vert (skinning vertex shader), Animations, AF (+56 more)
+### Community 0 - "Collision Detection (AABB/OOBB/BVH)"
+Cohesion: 0.14
+Nodes (32): checkIntersectAxis(), Collider, ColliderShow, collidesWith(), collisionAABBAABB(), collisionBVHCollider(), collisionOOBBAABB(), collisionOOBBOOBB() (+24 more)
 
-### Community 1 - "BaseProject Vulkan Core State"
-Cohesion: 0.05
-Nodes (42): BaseProject, commandPool, currentFrame, debugMessenger, descriptorPool, device, DPSZs, framebufferResized (+34 more)
+### Community 1 - "Framework Bootstrap (BaseProject/Starter)"
+Cohesion: 0.08
+Nodes (8): AssetFile, BaseProject, checkIfItHasExtension(), deviceReport, getRequiredExtensions(), getSixAxis(), handleGamePad(), Model
 
-### Community 2 - "TextMaker HUD Rendering"
+### Community 2 - "Vulkan Resource Creation"
+Cohesion: 0.12
+Nodes (27): beginSingleTimeCommands(), copyBufferToImage(), createBuffer(), createImage(), createImageView(), createIndexBuffer(), createResources(), createShaderModule() (+19 more)
+
+### Community 3 - "Debug Collider Rendering & Cheat Flags"
 Cohesion: 0.09
-Nodes (37): unordered_map, VkCommandBuffer, TextMaker, atlasToUV, Blocks, BP, commandBufferMustUpdate, createTextDescriptorSetAndVertexLayout (+29 more)
+Nodes (27): Shader Compilation Pipeline (glslc, GLOB_RECURSE), Vulkan::Vulkan Dependency, ColliderShow.frag main(), ColliderShow.vert main(), ColliderShow PushConsts (colliderIndex), ColliderShow UniformBufferObject (vpMat, strokeColors[20]), AABB Floor Collider (Colliders.hpp / Scene.hpp), CheatFlags Struct (+19 more)
 
-### Community 3 - "Graphics Pipeline Object"
-Cohesion: 0.07
-Nodes (36): Pipeline, BP, cleanup, CM, compareOp, D, fragShaderModule, graphicsPipeline (+28 more)
-
-### Community 4 - "Vertex Descriptor and Bindings"
-Cohesion: 0.06
-Nodes (33): VertexBindingDescriptorElement, binding, inputRate, stride, VertexComponent, hasIt, offset, VertexDescriptor (+25 more)
-
-### Community 5 - "Collider Debug Visualizer"
-Cohesion: 0.08
-Nodes (17): ColliderShow, BP, clds, commandBufferMustUpdate, DS, DSL, M, P (+9 more)
-
-### Community 6 - "Collision Intersection Tests"
-Cohesion: 0.22
-Nodes (25): checkIntersectAxis, collidesWith, collisionAABBAABB, collisionOOBBAABB, collisionOOBBOOBB, collisionPointAABB, collisionPointOOBB, collisionPointPoint (+17 more)
-
-### Community 7 - "Model Loading and GLTF Nodes"
+### Community 4 - "Vulkan Device & Swapchain Setup"
 Cohesion: 0.12
-Nodes (26): Node, Primitive, printMat4, printQuat, mat4, quat, Model, BP (+18 more)
+Nodes (26): checkIfItHasDeviceExtension(), checkValidationLayerSupport(), chooseSwapExtent(), chooseSwapPresentMode(), chooseSwapSurfaceFormat(), createCommandPool(), CreateDebugUtilsMessengerEXT(), createDescriptorPool() (+18 more)
 
-### Community 8 - "Collider Construction and Types"
-Cohesion: 0.14
-Nodes (26): Collider, children, collisionBVHCollider, fitAABB, fitOOBB, getModelExtentsAABB, initAABB, initBVH (+18 more)
+### Community 5 - "App Lifecycle (init/main loop/cleanup)"
+Cohesion: 0.09
+Nodes (20): main(), Skeleton26ReplaceName, init(), localCleanup(), pipelinesAndDescriptorSetsCleanup(), pipelinesAndDescriptorSetsInit(), populateCommandBuffer(), Scene (+12 more)
 
-### Community 9 - "Text Block Layout"
-Cohesion: 0.08
-Nodes (25): TextBlock, Alignment, Bold, Fill, FontFace, fontId, h, Italic (+17 more)
+### Community 6 - "Text Rendering (TextMaker)"
+Cohesion: 0.13
+Nodes (18): setCompareOp(), setCullMode(), setTransparency(), submitCommandBuffer(), atlasToUV(), createTextDescriptorSetAndVertexLayout(), createTextDescriptorSets(), createTextMesh() (+10 more)
 
-### Community 10 - "Physical Device and Swapchain"
-Cohesion: 0.12
-Nodes (24): deviceReport, optional, checkDeviceExtensionSupport, checkIfItHasDeviceExtension, chooseSwapPresentMode, chooseSwapSurfaceFormat, createCommandPool, createSwapChain (+16 more)
+### Community 7 - "Skeletal Animation"
+Cohesion: 0.17
+Nodes (9): Animations, Blend(), getAnim(), getSampleTransforms(), init(), Sample(), SkeletalAnimation, getGLTFnodeTransforms() (+1 more)
 
-### Community 11 - "Scene Asset Registry"
-Cohesion: 0.08
-Nodes (24): unordered_map, Scene, As, AsIds, AssetFileCount, BP, ColShow, GlobalColliders (+16 more)
+### Community 8 - "Mesh Loading (glTF/OBJ)"
+Cohesion: 0.31
+Nodes (10): begin(), checkDeviceExtensionSupport(), end(), initFromAsset(), makeGLTFMesh(), makeOBJMesh(), removeBuffer(), saveScreenshot() (+2 more)
 
-### Community 12 - "App Class and Camera State"
-Cohesion: 0.10
-Nodes (18): First-person camera notes, GlobalUniformBufferObject in fragment shader (lightDir, lightColor, eyePos), vector, Skeleton26ReplaceName, camPitch, camPos, camYaw, DSglobal (+10 more)
-
-### Community 13 - "Asset File Types OBJ GLTF"
-Cohesion: 0.12
-Nodes (21): material_t, ModelType, AssetFile, attrib, cleanup, GLTFmeshes, GLTFnodes, init (+13 more)
-
-### Community 14 - "Vulkan Init and Lifecycle"
-Cohesion: 0.23
-Nodes (20): createDescriptorPool, createImageViews, createLogicalDevice, createSurface, createSyncObjects, initVulkan, pipelinesAndDescriptorSetsInit, recreateSwapChain (+12 more)
-
-### Community 15 - "Named Command Buffers"
-Cohesion: 0.12
-Nodes (20): NamedCommandBuffersStates, pNCBfree, pNCBfunc, clearNamedCommandBuffer, clearNamedCommandBufferForImage, createCommandBuffer, submitCommandBuffer, updateCommandBuffers (+12 more)
-
-### Community 16 - "Render Pass Attachments"
-Cohesion: 0.11
-Nodes (19): AttchmentType, AttachmentProperties, aspect, clearValue, doDepthTransition, finalLayout, format, initialLayout (+11 more)
-
-### Community 17 - "Framebuffer Attachments"
-Cohesion: 0.12
-Nodes (18): FrameBufferAttachment, cleanup, createDescriptionAndReference, descr, freeSampler, getView, image, init (+10 more)
-
-### Community 18 - "Texture Sampler"
-Cohesion: 0.14
-Nodes (17): VkBool32, getViewAndSampler, VkDescriptorImageInfo, getViewAndSampler, setSampler, TextureSampler, BP, cleanup (+9 more)
-
-### Community 19 - "Render Pass Object"
-Cohesion: 0.12
-Nodes (17): RenderPass, attachments, BP, clearValues, colorAttchementsCount, dependencies, depthAttIdx, firstColorAttIdx (+9 more)
-
-### Community 20 - "Movement Cheats and Build Setup"
-Cohesion: 0.15
-Nodes (16): CheatFlags struct (grouped debug/cheat toggles, no persistence), Gravity handled in the camera (optional, enables fly cheat), Grounded state computed against colliders, not from zero vertical velocity, Jump as upward velocity impulse on spacebar (fire output of getSixAxis), MovementParams struct (numeric tuning separated from on/off flags), Sprint on Ctrl polled via glfwGetKey (no momentum through a jump), POST_BUILD asset directory copy, Libs.cpp compiled with -g0 to cut build cost (+8 more)
-
-### Community 21 - "Texture Creation and Mipmaps"
-Cohesion: 0.23
-Nodes (16): Texture, BP, createTexture, createTextureImage, createTextureImageView, imgs, init, initCubic (+8 more)
-
-### Community 22 - "Descriptor Layouts and Shader Modules"
-Cohesion: 0.18
-Nodes (15): DescriptorSetLayout, Bindings, BP, cleanup, descriptorSetLayout, imgInfoSize, vector, createShaderModule (+7 more)
-
-### Community 23 - "Course Corpus and Framework Shaders"
-Cohesion: 0.19
-Nodes (14): Course Knowledge Graph (E02-E17 corpus), E02 - Setup the environment, E03 (reduced variant of E02), E04 - 3D projections in Excel (WVP chain without code), E17 - Maze (instanced rendering, per-instance push constants, offscreen minimap), Optional collision detection (no-clip cheat), shaders target (glslc compile + SPIR-V copy stamps), ColliderShow.frag main (flat pass-through color) (+6 more)
-
-### Community 24 - "Scene Instance Record"
-Cohesion: 0.14
-Nodes (14): mat4, Instance, C, D, DS, id, Iid, Mid (+6 more)
-
-### Community 25 - "Exam Rules and Project Topics"
-Cohesion: 0.18
-Nodes (12): Exam rules and project constraints, First-person camera fits the three exploration topics, Mandatory technical content (Vulkan pipeline setup, WVP chain, vertex formats, navigation, light models and BRDF, direct/indirect lighting, materials and textures), The 8 official project topics, Starter.hpp must not be modified, Hardcoded input handling in Starter.hpp (WASD, arrows, mouse only with left button), Computer Graphics Final Project (PoliMi a.y. 2025-2026), getSixAxis (+4 more)
-
-### Community 26 - "Font Definition and Atlas"
-Cohesion: 0.18
-Nodes (12): Font, faces, maxChar, minChar, texH, textureFile, texW, FontDef (+4 more)
-
-### Community 27 - "Image Layout Transitions"
-Cohesion: 0.27
-Nodes (11): beginSingleTimeCommands, copyBufferToImage, endSingleTimeCommands, generateMipmaps, hasStencilComponent, transitionImageLayout, bind, VkCommandBuffer (+3 more)
-
-### Community 28 - "Buffer and Image Allocation"
-Cohesion: 0.24
-Nodes (11): createBuffer, createImage, findMemoryType, VkBuffer, VkBufferUsageFlags, VkDeviceMemory, VkDeviceSize, VkImageCreateFlags (+3 more)
-
-### Community 29 - "Text Colors and Alignment"
-Cohesion: 0.20
-Nodes (11): string, vec4, TextColorPushConstant, Fill, Shadow, Stroke, measureText, print (+3 more)
-
-### Community 30 - "Technique Definitions"
-Cohesion: 0.27
-Nodes (10): vector, PipelineAndTexturesDefs, P, texDefs, TechniqueRef, id, init, Ntextures (+2 more)
-
-### Community 31 - "Descriptor Set"
-Cohesion: 0.20
-Nodes (10): DescriptorSet, BP, cleanup, descriptorSets, Layout, map, toFree, uniformBuffers (+2 more)
-
-### Community 32 - "Light Models and Main Shaders"
-Cohesion: 0.22
-Nodes (9): E08 - Light Models (Lambert, Blinn-Phong), E10 - Mesh Normals and Smoothing, E11 - Advanced BRDFs, E12 - Setting up rendering Part 1, Light models chain (E08 -> E12 -> E11), albedoMap sampler (set 1, binding 1) with sRGB decode, Screen-space normal reconstruction via dFdx/dFdy cross product, toChangeBlinnFromPos.frag main (Blinn-Phong from world position) (+1 more)
-
-### Community 33 - "Scene Lifecycle Hooks"
-Cohesion: 0.22
-Nodes (8): vec4, VkCommandBuffer, localCleanup, pipelinesAndDescriptorSetsCleanup, pipelinesAndDescriptorSetsInit, populateCommandBuffer, refreshColliderVisualizer, setColliderStroke
-
-### Community 34 - "OBJ Loading and Screenshot"
+### Community 9 - "Render Pass & Vertex Layout"
 Cohesion: 0.29
-Nodes (8): attrib_t, shape_t, removeBuffer, saveScreenshot, loadModelOBJ, makeOBJMesh, begin, end
+Nodes (7): create(), createDescriptionAndReference(), createFramebuffers(), createRenderPass(), getAttributeDescriptions(), getBindingDescription(), getView()
 
-### Community 35 - "Command Buffer Submission"
-Cohesion: 0.25
-Nodes (8): clearCommandBuffers, vks_initializers_fenceCreateInfo, vks_initializers_submitInfo, vulkanDevice_flushCommandBuffer, VkFenceCreateFlags, VkFenceCreateInfo, VkQueue, VkSubmitInfo
+### Community 10 - "Command Buffers & Draw Loop"
+Cohesion: 0.4
+Nodes (6): clearNamedCommandBuffer(), clearNamedCommandBufferForImage(), createCommandBuffer(), drawFrame(), mainLoop(), updateCommandBuffers()
 
-### Community 36 - "Vulkan Debug Messenger"
-Cohesion: 0.36
-Nodes (8): populateDebugMessengerCreateInfo, setupDebugMessenger, CreateDebugUtilsMessengerEXT(), DestroyDebugUtilsMessengerEXT(), VkAllocationCallbacks, VkDebugUtilsMessengerCreateInfoEXT, VkDebugUtilsMessengerEXT, VkInstance
+### Community 11 - "Command Buffer Helpers (vks)"
+Cohesion: 0.5
+Nodes (4): clearCommandBuffers(), vks_initializers_fenceCreateInfo(), vks_initializers_submitInfo(), vulkanDevice_flushCommandBuffer()
 
-### Community 37 - "Descriptor Layout Bindings"
-Cohesion: 0.25
-Nodes (8): DescriptorSetLayoutBinding, binding, count, flags, linkSize, type, VkDescriptorType, VkShaderStageFlags
-
-### Community 38 - "Font Character Metrics"
-Cohesion: 0.25
-Nodes (8): CharData, height, width, x, xadvance, xoffset, y, yoffset
-
-### Community 39 - "Model View Projection Uniforms"
-Cohesion: 0.29
-Nodes (8): ColliderShow UniformBufferObject (vpMat + strokeColors[MAX_COLLIDERS]), UniformBufferObject in vertex shader (mvpMat, mMat), mat4, Ar, ViewPrj, UniformBufferObject, mMat, mvpMat
-
-### Community 40 - "Global Uniform and Lighting"
-Cohesion: 0.32
-Nodes (6): vec3, vec4, GlobalUniformBufferObject, eyePos, lightColor, lightDir
-
-### Community 41 - "Main Entry and Vertex Format"
-Cohesion: 0.29
-Nodes (6): json, vec2, main(), Vertex, pos, UV
-
-### Community 42 - "Collider Definitions in Scene"
-Cohesion: 0.29
-Nodes (7): AABB-based ground detection declared in scene.json, ColliderDef, children, hasCollider, params, type, visible
-
-### Community 43 - "AABB Extents"
-Cohesion: 0.29
-Nodes (7): AABBextents, xMax, xMin, yMax, yMin, zMax, zMin
-
-### Community 44 - "Cleanup Paths"
-Cohesion: 0.29
-Nodes (7): cleanup, cleanupSwapChain, localCleanup, pipelinesAndDescriptorSetsCleanup, destroy, cleanup, cleanup
-
-### Community 45 - "Command Buffer Initializers"
-Cohesion: 0.38
-Nodes (7): vks_initializers_commandBufferAllocateInfo, vks_initializers_commandBufferBeginInfo, vulkanDevice_createCommandBuffer, VkCommandBufferAllocateInfo, VkCommandBufferBeginInfo, VkCommandBufferLevel, VkCommandPool
-
-### Community 46 - "Image Memory Barriers"
-Cohesion: 0.29
-Nodes (7): vks_initializers_imageMemoryBarrier, vks_tools_insertImageMemoryBarrier, VkAccessFlags, VkImageLayout, VkImageMemoryBarrier, VkImageSubresourceRange, VkPipelineStageFlags
-
-### Community 47 - "Application Main Loop"
-Cohesion: 0.33
-Nodes (6): drawFrame, initWindow, mainLoop, run, setWindowParameters, updateUniformBuffer
-
-### Community 48 - "Descriptor Pool Sizes"
-Cohesion: 0.33
-Nodes (6): PoolSizes, sampledImagesInPool, samplersInPool, setsInPool, texturesInPool, uniformBlocksInPool
-
-### Community 49 - "Shown Collider Record"
-Cohesion: 0.40
-Nodes (5): ShownCollider, c, len, start, Stroke
-
-### Community 50 - "Vertex Descriptor Reference"
-Cohesion: 0.40
-Nodes (5): string, VertexDescriptorRef, id, init, VD
-
-### Community 51 - "Texture Definitions"
-Cohesion: 0.40
-Nodes (5): VkDescriptorImageInfo, TextureDefs, fromInstance, info, pos
-
-### Community 52 - "Validation Debug Callback"
-Cohesion: 0.40
-Nodes (5): debugCallback, VKAPI_ATTR, VkDebugUtilsMessageSeverityFlagBitsEXT, VkDebugUtilsMessageTypeFlagsEXT, VkDebugUtilsMessengerCallbackDataEXT
-
-### Community 54 - "Tangent Space Chain E14 E15"
-Cohesion: 0.50
-Nodes (4): E14 - Advanced texturing (tangent space), E15 - Image Based Lighting, MeshTBN.vert (tangent-space vertex pipeline), Tangent space chain (E14 + E15 share MeshTBN.vert)
-
-### Community 55 - "Technique Instances"
-Cohesion: 0.50
-Nodes (4): TechniqueInstances, I, InstanceCount, T
-
-### Community 56 - "Instance Creation and Validation"
-Cohesion: 0.50
-Nodes (4): checkIfItHasExtension, checkValidationLayerSupport, createInstance, getRequiredExtensions
-
-### Community 57 - "Depth Format Selection"
-Cohesion: 0.50
-Nodes (4): findDepthFormat, findSupportedFormat, VkFormatFeatureFlags, VkImageTiling
-
-### Community 58 - "Text Vertex Format"
-Cohesion: 0.50
-Nodes (4): vec2, TextVertex, pos, texCoord
-
-### Community 59 - "Window Resize Handling"
+### Community 12 - "Depth/Format Support Queries"
 Cohesion: 0.67
-Nodes (3): GLFWwindow, framebufferResizeCallback, onWindowResize
+Nodes (3): findDepthFormat(), findSupportedFormat(), getStandardAttchmentsProperties()
 
-### Community 61 - "ColliderShow Push Constant"
+### Community 13 - "Command Buffer Allocation (vks)"
 Cohesion: 0.67
-Nodes (3): ColliderShowPushConstant, colliderIndex, colliderType
+Nodes (3): vks_initializers_commandBufferAllocateInfo(), vks_initializers_commandBufferBeginInfo(), vulkanDevice_createCommandBuffer()
 
-### Community 62 - "Swapchain Extent"
-Cohesion: 0.67
-Nodes (3): chooseSwapExtent, VkExtent2D, VkSurfaceCapabilitiesKHR
+### Community 14 - "Project README"
+Cohesion: 1.0
+Nodes (2): Politecnico di Milano CG Exam 2025-2026, Computer_Graphics Final Project
 
-### Community 63 - "Image View Creation"
-Cohesion: 0.67
-Nodes (3): createImageView, VkImageAspectFlags, VkImageViewType
+### Community 15 - "Libs.cpp Entry"
+Cohesion: 1.0
+Nodes (0): 
 
-### Community 64 - "TextMaker Model Pair"
-Cohesion: 0.67
-Nodes (3): TextMakerAndModel, M, txt
+### Community 16 - "GLFW Dependency"
+Cohesion: 1.0
+Nodes (1): GLFW FetchContent Dependency
+
+### Community 17 - "GLM Dependency"
+Cohesion: 1.0
+Nodes (1): GLM FetchContent Dependency
+
+### Community 18 - "Asset Copy Build Step"
+Cohesion: 1.0
+Nodes (1): Asset Copy Post-Build Step
 
 ## Ambiguous Edges - Review These
-- `Instance` → `albedoMap sampler (set 1, binding 1) with sRGB decode`  [AMBIGUOUS]
-  skeleton/source/shaders/toChangeBlinnFromPos.frag · relation: shares_data_with
-- `CheatFlags struct (grouped debug/cheat toggles, no persistence)` → `Libs.cpp compiled with -g0 to cut build cost`  [AMBIGUOUS]
-  notes.md · relation: semantically_similar_to
+- `toChangeSimplePos UniformBufferObject (mvpMat, mMat)` → `toChangeBlinnFromPos.frag main()`  [AMBIGUOUS]
+  skeleton/source/shaders/toChangeBlinnFromPos.frag · relation: semantically_similar_to
 
 ## Knowledge Gaps
-- **385 isolated node(s):** `run.sh script`, `time`, `T`, `Q`, `S` (+380 more)
+- **26 isolated node(s):** `SkeletalAnimation`, `Animations`, `ColliderShow`, `Collider`, `Scene` (+21 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **10 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **Thin community `Project README`** (2 nodes): `Politecnico di Milano CG Exam 2025-2026`, `Computer_Graphics Final Project`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Libs.cpp Entry`** (1 nodes): `Libs.cpp`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `GLFW Dependency`** (1 nodes): `GLFW FetchContent Dependency`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `GLM Dependency`** (1 nodes): `GLM FetchContent Dependency`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Asset Copy Build Step`** (1 nodes): `Asset Copy Post-Build Step`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **What is the exact relationship between `Instance` and `albedoMap sampler (set 1, binding 1) with sRGB decode`?**
-  _Edge tagged AMBIGUOUS (relation: shares_data_with) - confidence is low._
-- **What is the exact relationship between `CheatFlags struct (grouped debug/cheat toggles, no persistence)` and `Libs.cpp compiled with -g0 to cut build cost`?**
+- **What is the exact relationship between `toChangeSimplePos UniformBufferObject (mvpMat, mMat)` and `toChangeBlinnFromPos.frag main()`?**
   _Edge tagged AMBIGUOUS (relation: semantically_similar_to) - confidence is low._
-- **Why does `BaseProject` connect `BaseProject Vulkan Core State` to `TextMaker HUD Rendering`, `Graphics Pipeline Object`, `Vertex Descriptor and Bindings`, `Collider Debug Visualizer`, `Model Loading and GLTF Nodes`, `Collider Construction and Types`, `Physical Device and Swapchain`, `Scene Asset Registry`, `App Class and Camera State`, `Asset File Types OBJ GLTF`, `Vulkan Init and Lifecycle`, `Named Command Buffers`, `Framebuffer Attachments`, `Texture Sampler`, `Render Pass Object`, `Texture Creation and Mipmaps`, `Descriptor Layouts and Shader Modules`, `Course Corpus and Framework Shaders`, `Exam Rules and Project Topics`, `Image Layout Transitions`, `Buffer and Image Allocation`, `Descriptor Set`, `OBJ Loading and Screenshot`, `Command Buffer Submission`, `Vulkan Debug Messenger`, `Cleanup Paths`, `Command Buffer Initializers`, `Image Memory Barriers`, `Application Main Loop`, `Descriptor Pool Sizes`, `Validation Debug Callback`, `Instance Creation and Validation`, `Depth Format Selection`, `Window Resize Handling`, `Stock Attachment Configurations`, `Swapchain Extent`, `Image View Creation`, `Mat3 Printing`, `Vec2 Printing`, `Vec4 Printing`, `Image Create Info`, `Memory Allocate Info`?**
-  _High betweenness centrality (0.278) - this node is a cross-community bridge._
-- **Why does `TextMaker` connect `TextMaker HUD Rendering` to `TextMaker Model Pair`, `BaseProject Vulkan Core State`, `Skeletal Animation and Character Chain`, `Graphics Pipeline Object`, `Vertex Descriptor and Bindings`, `Model Loading and GLTF Nodes`, `Text Block Layout`, `Main Entry and Vertex Format`, `App Class and Camera State`, `Render Pass Object`, `Texture Creation and Mipmaps`, `Descriptor Layouts and Shader Modules`, `Font Definition and Atlas`, `Text Colors and Alignment`, `Descriptor Set`?**
-  _High betweenness centrality (0.185) - this node is a cross-community bridge._
-- **Why does `Scene` connect `Scene Asset Registry` to `Skeletal Animation and Character Chain`, `Scene Lifecycle Hooks`, `BaseProject Vulkan Core State`, `Vertex Descriptor and Bindings`, `Collider Debug Visualizer`, `Model Loading and GLTF Nodes`, `Collider Construction and Types`, `Main Entry and Vertex Format`, `Collider Definitions in Scene`, `App Class and Camera State`, `Asset File Types OBJ GLTF`, `Vertex Descriptor Reference`, `Texture Creation and Mipmaps`, `Technique Instances`, `Scene Instance Record`, `Technique Definitions`?**
-  _High betweenness centrality (0.149) - this node is a cross-community bridge._
-- **What connects `run.sh script`, `time`, `T` to the rest of the system?**
-  _385 weakly-connected nodes found - possible documentation gaps or missing edges._
-- **Should `Skeletal Animation and Character Chain` be split into smaller, more focused modules?**
-  _Cohesion score 0.05174825174825175 - nodes in this community are weakly interconnected._
+- **Why does `init()` connect `App Lifecycle (init/main loop/cleanup)` to `Collision Detection (AABB/OOBB/BVH)`, `Mesh Loading (glTF/OBJ)`?**
+  _High betweenness centrality (0.187) - this node is a cross-community bridge._
+- **Why does `initFromAsset()` connect `Mesh Loading (glTF/OBJ)` to `Framework Bootstrap (BaseProject/Starter)`, `Vulkan Resource Creation`, `App Lifecycle (init/main loop/cleanup)`, `Skeletal Animation`?**
+  _High betweenness centrality (0.173) - this node is a cross-community bridge._
+- **Why does `setWorldMatrix()` connect `Collision Detection (AABB/OOBB/BVH)` to `App Lifecycle (init/main loop/cleanup)`?**
+  _High betweenness centrality (0.113) - this node is a cross-community bridge._
+- **Are the 5 inferred relationships involving `cleanup()` (e.g. with `pipelinesAndDescriptorSetsCleanup()` and `localCleanup()`) actually correct?**
+  _`cleanup()` has 5 INFERRED edges - model-reasoned connections that need verification._
+- **What connects `SkeletalAnimation`, `Animations`, `ColliderShow` to the rest of the system?**
+  _26 weakly-connected nodes found - possible documentation gaps or missing edges._
+- **Should `Collision Detection (AABB/OOBB/BVH)` be split into smaller, more focused modules?**
+  _Cohesion score 0.14 - nodes in this community are weakly interconnected._
