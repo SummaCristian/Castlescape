@@ -11,3 +11,9 @@
 
 #define ANIMATIONS_IMPLEMENTATION
 #include "modules/Animations.hpp"
+
+#define UIQUAD_IMPLEMENTATION
+#include "modules/UiQuad.hpp"
+
+#define CHEATHUD_IMPLEMENTATION
+#include "modules/CheatHud.hpp"

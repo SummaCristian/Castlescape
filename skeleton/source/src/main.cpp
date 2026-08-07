@@ -9,6 +9,8 @@
 #include "modules/Starter.hpp"
 #include "modules/TextMaker.hpp"
 #include "modules/Scene.hpp"
+#include "modules/UiQuad.hpp"
+#include "modules/CheatHud.hpp"
 
 // The uniform buffer object used in this example
 struct UniformBufferObject {
@@ -51,7 +53,13 @@ class Skeleton26ReplaceName : public BaseProject {
 
 	// to provide textual feedback
 	TextMaker txt;
-	
+
+	// Flat-colored quads: background/highlight panel behind the cheat HUD's text.
+	UiQuad uiQuad;
+
+	// Toggle-based pause menu for the cheats below, opened/closed with L.
+	CheatHud hud;
+
 	// Other application parameters
 	float Ar;	// Aspect ratio
 
@@ -114,7 +122,7 @@ class Skeleton26ReplaceName : public BaseProject {
 
 	// Here you set the main application parameters
 	void setWindowParameters() {
-		// window size, titile and initial background
+		// window size, title and initial background
 		windowWidth = 800;
 		windowHeight = 600;
 		windowTitle = "Skeleton: place the name of your app here";
@@ -131,12 +139,19 @@ class Skeleton26ReplaceName : public BaseProject {
 		// Update Render Pass
 		RP.width = w;
 		RP.height = h;
-		
+
+		// windowWidth/windowHeight are otherwise only set once in
+		// setWindowParameters() and never refreshed here; the cheat HUD
+		// needs the current size for its pixel-based layout math.
+		windowWidth = (uint32_t)w;
+		windowHeight = (uint32_t)h;
+
 		// updates the textual output
 		txt.resizeScreen(w, h);
+		uiQuad.resizeScreen(w, h);
 	}
 	
-	// Here you load and setup all your Vulkan Models and Texutures.
+	// Here you load and setup all your Vulkan Models and Textures.
 	// Here you also create your Descriptor set layouts and load the shaders for the pipelines
 	void localInit() {
 		// Descriptor Layouts [what will be passed to the shaders]
@@ -205,6 +220,8 @@ class Skeleton26ReplaceName : public BaseProject {
 
 		// initializes the textual output
 		txt.init(this, windowWidth, windowHeight);
+		// initializes the flat-quad background/highlight layer for the cheat HUD
+		uiQuad.init(this, windowWidth, windowHeight);
 
 		// submits the main command buffer
 		submitCommandBuffer("main", 0, populateCommandBufferAccess, this);
@@ -212,6 +229,13 @@ class Skeleton26ReplaceName : public BaseProject {
 		// Prepares for showing the FPS count
 		txt.print(1.0f, 1.0f, "FPS:",1,"CO",false,false,true,TAL_RIGHT,TRH_RIGHT,TRV_BOTTOM,{1.0f,0.0f,0.0f,1.0f},{0.8f,0.8f,0.0f,1.0f});
 
+		// Wires the cheat HUD to the actual cheat flags, so toggling a row
+		// in the menu flips the exact same bools GameLogic() reads.
+		hud.init(&txt, &uiQuad);
+		hud.addToggle("Gravity", &cheats.gravityEnabled);
+		hud.addToggle("Collision", &cheats.collisionEnabled);
+		hud.addToggle("Jump", &cheats.jumpEnabled);
+		hud.addToggle("Sprint", &cheats.sprintEnabled);
 	}
 	
 	// Here you create your pipelines and Descriptor Sets!
@@ -230,6 +254,7 @@ class Skeleton26ReplaceName : public BaseProject {
 
 		SC.pipelinesAndDescriptorSetsInit();
 		txt.pipelinesAndDescriptorSetsInit();
+		uiQuad.pipelinesAndDescriptorSetsInit();
 	}
 
 	// Here you destroy your pipelines and Descriptor Sets!
@@ -242,6 +267,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		
 		SC.pipelinesAndDescriptorSetsCleanup();
 		txt.pipelinesAndDescriptorSetsCleanup();
+		uiQuad.pipelinesAndDescriptorSetsCleanup();
 	}
 
 	// Here you destroy all the Models, Texture and Desc. Set Layouts you created!
@@ -256,6 +282,7 @@ class Skeleton26ReplaceName : public BaseProject {
 
 		SC.localCleanup();
 		txt.localCleanup();
+		uiQuad.localCleanup();
 	}
 	
 	// Here it is the creation of the command buffer:
@@ -342,6 +369,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		}
 		
 		txt.updateCommandBuffer();
+		uiQuad.updateCommandBuffer();
 	}
 	
 	float GameLogic() {
@@ -358,7 +386,24 @@ class Skeleton26ReplaceName : public BaseProject {
 		float deltaT;
 		glm::vec3 m = glm::vec3(0.0f), r = glm::vec3(0.0f);
 		bool fire = false;
+
+		// Poll/render the cheat HUD BEFORE getSixAxis. getSixAxis turns on
+		// GLFW_STICKY_MOUSE_BUTTONS, which makes glfwGetMouseButton a
+		// one-shot read (it flips back to "released" once polled). Reading
+		// the HUD's own click hit-test first guarantees the HUD gets that
+		// one authoritative read of a click, not getSixAxis's drag-look check.
+		hud.update(window, windowWidth, windowHeight);
+
 		getSixAxis(deltaT, m, r, fire);
+
+		if(hud.isOpen()) {
+			// HUD is open: discard camera-look/move/fire input this frame so
+			// a HUD click or drag can't also spin the camera underneath the
+			// menu.
+			m = glm::vec3(0.0f);
+			r = glm::vec3(0.0f);
+			fire = false;
+		}
 
 		// Projection
 		glm::mat4 Prj = glm::perspective(FOVy, Ar, nearPlane, farPlane);
@@ -387,87 +432,92 @@ class Skeleton26ReplaceName : public BaseProject {
 		glm::vec3 right = glm::normalize(glm::cross(front, worldUp));
 		glm::vec3 up = glm::normalize(glm::cross(right, front));
 
-		// Sprint: Ctrl multiplies movement speed, gated behind sprintEnabled like
-		// the other cheats/debug toggles. Polled directly (not through getSixAxis/
-		// "fire") since Starter.hpp doesn't wire Ctrl to anything.
-		// Can only be started while grounded (no starting a sprint mid-jump), but
-		// releasing Ctrl always stops it right away, air or not.
-		bool ctrlHeld = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) || glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL);
-		if(!cheats.sprintEnabled || !ctrlHeld) {
-			sprinting = false;
-		} else if(grounded) {
-			sprinting = true;
-		}
-		float moveSpeed = movement.moveSpeed;
-		if(sprinting) {
-			moveSpeed *= movement.sprintMultiplier;
-		}
-
-		// Update position from WASD/R/F: m.x = strafe, m.z = -forward, m.y = world up/down
-		camPos += (right * m.x - front * m.z + worldUp * m.y) * moveSpeed * deltaT;
-
-		// Jump: spacebar (wired to "fire" in Starter.hpp) gives the camera an upward
-		// velocity impulse. Edge-triggered (only on the frame the key goes down) and
-		// only while grounded (refreshed each frame by the floor collision check
-		// below). Gated behind jumpEnabled like the other cheats/debug toggles.
-		// If gravity is off, the impulse gets reset straight back to 0 below, so
-		// jumping naturally has no effect without gravity to bring us back down.
-		if(cheats.jumpEnabled) {
-			if(fire && !jumpKeyWasPressed && grounded) {
-				camVerticalVelocity = movement.jumpSpeed;
+		// Freeze all movement/physics while the cheat HUD is open, so opening
+		// it pauses the game exactly where it was (camera included, since m/r
+		// were already zeroed above).
+		if(!hud.isOpen()) {
+			// Sprint: Ctrl multiplies movement speed, gated behind sprintEnabled like
+			// the other cheats/debug toggles. Polled directly (not through getSixAxis/
+			// "fire") since Starter.hpp doesn't wire Ctrl to anything.
+			// Can only be started while grounded (no starting a sprint mid-jump), but
+			// releasing Ctrl always stops it right away, air or not.
+			bool ctrlHeld = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) || glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL);
+			if(!cheats.sprintEnabled || !ctrlHeld) {
+				sprinting = false;
+			} else if(grounded) {
+				sprinting = true;
 			}
-		}
-		jumpKeyWasPressed = fire;
+			float moveSpeed = movement.moveSpeed;
+			if(sprinting) {
+				moveSpeed *= movement.sprintMultiplier;
+			}
 
-		// Gravity: constant downward acceleration, integrated into a vertical
-		// velocity each frame. Resolved against the ground below (collision
-		// block right after this), which zeroes the velocity out on landing.
-		if(cheats.gravityEnabled) {
-			camVerticalVelocity += movement.gravity * deltaT;
-			camPos.y += camVerticalVelocity * deltaT;
-		} else {
-			// Don't let velocity build up while gravity's off, so re-enabling
-			// it later doesn't suddenly slam the camera down/up
-			camVerticalVelocity = 0.0f;
-		}
+			// Update position from WASD/R/F: m.x = strafe, m.z = -forward, m.y = world up/down
+			camPos += (right * m.x - front * m.z + worldUp * m.y) * moveSpeed * deltaT;
 
-		// (Floor) Collision detection.
-		// Wired-in using Scene.hpp and Colliders.hpp.
-		// Look for every solid collider whose horizontal position is under the current position,
-		// then update the camera's vertical position so that the player's feet don't clip into it.
-		// In case of non-flat meshes, take the tallest surface as the standing height.
-		// Same thing in case of multiple colliders, always take the tallest surface.
-		if(cheats.collisionEnabled) {
-			const float EYE_HEIGHT = 1.0f;
-			// Compute feet height from the (camera) eye height
-			float feetY = camPos.y - EYE_HEIGHT;
-			float groundY = -std::numeric_limits<float>::infinity();
-			for(Collider *C : SC.GlobalColliders) {
-				// for every collider, check collision
-				AABBextents E = C->getExtents();
-				bool insideXZ = camPos.x >= E.xMin && camPos.x <= E.xMax &&
-								camPos.z >= E.zMin && camPos.z <= E.zMax;
-				// Update with the highest (max) surface found so far
-				if(insideXZ && E.yMax > groundY) {
-					groundY = E.yMax;
+			// Jump: spacebar (wired to "fire" in Starter.hpp) gives the camera an upward
+			// velocity impulse. Edge-triggered (only on the frame the key goes down) and
+			// only while grounded (refreshed each frame by the floor collision check
+			// below). Gated behind jumpEnabled like the other cheats/debug toggles.
+			// If gravity is off, the impulse gets reset straight back to 0 below, so
+			// jumping naturally has no effect without gravity to bring us back down.
+			if(cheats.jumpEnabled) {
+				if(fire && !jumpKeyWasPressed && grounded) {
+					camVerticalVelocity = movement.jumpSpeed;
 				}
 			}
-			// Clamp height if clipping through the highest surface found
-			if(feetY < groundY) {
-				feetY = groundY;
-				// Landed: stop falling instead of accumulating velocity forever
-				if(camVerticalVelocity < 0.0f) {
-					camVerticalVelocity = 0.0f;
-				}
+			jumpKeyWasPressed = fire;
+
+			// Gravity: constant downward acceleration, integrated into a vertical
+			// velocity each frame. Resolved against the ground below (collision
+			// block right after this), which zeroes the velocity out on landing.
+			if(cheats.gravityEnabled) {
+				camVerticalVelocity += movement.gravity * deltaT;
+				camPos.y += camVerticalVelocity * deltaT;
+			} else {
+				// Don't let velocity build up while gravity's off, so re-enabling
+				// it later doesn't suddenly slam the camera down/up
+				camVerticalVelocity = 0.0f;
 			}
-			// Ground-contact test for jumping.
-			// Allows to jump only when within a certain distance threshold from the ground.
-			// Some tolerance allows to jump even when irregular floor slightly lifts the
-			// player's model from the ground
-			const float GROUND_EPSILON = 0.05f;
-			grounded = feetY <= groundY + GROUND_EPSILON;
-			// Set camera position to the new one + player height
-			camPos.y = feetY + EYE_HEIGHT;
+
+			// (Floor) Collision detection.
+			// Wired-in using Scene.hpp and Colliders.hpp.
+			// Look for every solid collider whose horizontal position is under the current position,
+			// then update the camera's vertical position so that the player's feet don't clip into it.
+			// In case of non-flat meshes, take the tallest surface as the standing height.
+			// Same thing in case of multiple colliders, always take the tallest surface.
+			if(cheats.collisionEnabled) {
+				const float EYE_HEIGHT = 1.0f;
+				// Compute feet height from the (camera) eye height
+				float feetY = camPos.y - EYE_HEIGHT;
+				float groundY = -std::numeric_limits<float>::infinity();
+				for(Collider *C : SC.GlobalColliders) {
+					// for every collider, check collision
+					AABBextents E = C->getExtents();
+					bool insideXZ = camPos.x >= E.xMin && camPos.x <= E.xMax &&
+									camPos.z >= E.zMin && camPos.z <= E.zMax;
+					// Update with the highest (max) surface found so far
+					if(insideXZ && E.yMax > groundY) {
+						groundY = E.yMax;
+					}
+				}
+				// Clamp height if clipping through the highest surface found
+				if(feetY < groundY) {
+					feetY = groundY;
+					// Landed: stop falling instead of accumulating velocity forever
+					if(camVerticalVelocity < 0.0f) {
+						camVerticalVelocity = 0.0f;
+					}
+				}
+				// Ground-contact test for jumping.
+				// Allows to jump only when within a certain distance threshold from the ground.
+				// Some tolerance allows to jump even when irregular floor slightly lifts the
+				// player's model from the ground
+				const float GROUND_EPSILON = 0.05f;
+				grounded = feetY <= groundY + GROUND_EPSILON;
+				// Set camera position to the new one + player height
+				camPos.y = feetY + EYE_HEIGHT;
+			}
 		}
 
 		// View
