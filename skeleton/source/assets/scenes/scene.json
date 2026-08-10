@@ -5,7 +5,7 @@
 		{"id": "castleWall01", "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Castle_Wall_01.mgcg", "format":"MGCG", "collider": "AABB"},
 		{"id": "castleWall02", "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Castle_Wall_02.mgcg", "format":"MGCG", "collider": "AABB"},
 		{"id": "castleTower",  "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Castle_Tower.mgcg",  "format":"MGCG", "collider": "AABB"},
-		{"id": "castleGate",   "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Castle_02.mgcg",     "format":"MGCG", "collider": "AABB"},
+		{"id": "castleGate",   "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Castle_02.mgcg",     "format":"MGCG"},
 		{"id": "castleKeep",   "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Castle_01.mgcg",     "format":"MGCG", "collider": "AABB"},
 		{"id": "castleSteps",  "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Castle_Steps.mgcg",  "format":"MGCG", "collider": "AABB"},
 

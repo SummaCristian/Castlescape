@@ -79,6 +79,16 @@ class Skeleton26ReplaceName : public BaseProject {
 	// Reset to 0 whenever the ground collision clamp catches us (i.e. we've landed).
 	float camVerticalVelocity = 0.0f;
 
+	// World floor height (top surface of the "floor" scene instance), cached once
+	// after the scene loads. Used as a last-resort clamp while no-clipping through
+	// walls, so falling under the map is never possible even with collisions off.
+	float worldFloorY = 0.0f;
+
+	// All colliders used for gameplay collision: a copy of SC.GlobalColliders plus a
+	// few hand-authored boxes (see localInit) for shapes the auto-fit AABB can't
+	// represent, such as the gate's archway opening. Built once after the scene loads.
+	std::vector<Collider *> allColliders;
+
 	// Debug/cheat toggles, isolated in a utility struct.
 	// Not persisted across runs, reset to default values on launch.
 	struct CheatFlags {
@@ -223,6 +233,40 @@ class Skeleton26ReplaceName : public BaseProject {
 		if(SC.init(this, 1, VDRs, PRs, "assets/scenes/scene.json") != 0) {
 			std::cout << "ERROR LOADING THE SCENE\n";
 			exit(0);
+		}
+
+		// Cache the floor's top Y once, for the no-clip under-the-map safety clamp below.
+		// Falls back to 0.0f (this scene's actual floor height) if the scene has no
+		// instance named "floor".
+		auto floorIt = SC.InstanceIds.find("floor");
+		if(floorIt != SC.InstanceIds.end() && SC.I[floorIt->second]->C != nullptr) {
+			worldFloorY = SC.I[floorIt->second]->C->getExtents().yMax;
+		}
+
+		// Gameplay collision list: start from every collider scene.json authored, then
+		// add a few hand-built ones for shapes an auto-fit AABB can't represent.
+		allColliders = SC.GlobalColliders;
+
+		// The "gate" model has no collider of its own (see scene.json): a single
+		// auto-fit AABB would cover its archway opening too, blocking the passage.
+		// Instead, author the solid parts by hand as three boxes (left pier, right
+		// pier, lintel above the opening), reusing the "gate" instance's own already
+		// -computed world matrix so they line up with the rendered mesh automatically.
+		auto gateIt = SC.InstanceIds.find("gate");
+		if(gateIt != SC.InstanceIds.end()) {
+			glm::mat4 gateWm = SC.I[gateIt->second]->Wm;
+			auto addGateBox = [&](float x1, float y1, float z1, float x2, float y2, float z2) {
+				Collider *c = new Collider();
+				c->initAABB(x1, y1, z1, x2, y2, z2);
+				c->setWorldMatrix(gateWm);
+				allColliders.push_back(c);
+			};
+			// Coordinates are in the gate mesh's local space (found by inspecting its
+			// geometry): X spans the pier gap, Z spans floor-to-roof (becomes world Y
+			// after the instance's rotation), underside of the lintel at local Z=-5.463.
+			addGateBox(-7.4445f, -6.0476f, -15.0065f, -2.40f, 7.2854f, 0.0012f);    // left pier
+			addGateBox(2.40f, -6.0476f, -15.0065f, 7.4383f, 7.2854f, 0.0012f);      // right pier
+			addGateBox(-7.4445f, -6.0476f, -15.0065f, 7.4383f, 7.2854f, -5.463f);   // lintel
 		}
 
 		// initializes the textual output
@@ -493,7 +537,64 @@ class Skeleton26ReplaceName : public BaseProject {
 			}
 
 			// Update position from WASD/R/F: m.x = strafe, m.z = -forward, m.y = world up/down
-			camPos += (right * m.x - front * m.z + worldUp * m.y) * moveSpeed * deltaT;
+			// Forward/strafe movement is flattened to the horizontal plane (yaw only), not
+			// the full pitch-tilted `front` used for looking around: otherwise looking up
+			// and pressing W pushes you upward (feels like a jump), and looking up while
+			// walking backward pushes you down through the floor. Vertical movement only
+			// ever comes from R/F (m.y), jumping, and gravity.
+			glm::vec3 frontFlat = glm::normalize(glm::vec3(front.x, 0.0f, front.z));
+			camPos += (right * m.x - frontFlat * m.z + worldUp * m.y) * moveSpeed * deltaT;
+
+			// (Wall) Collision resolution: push the camera back out of any collider whose
+			// vertical span the player's body is actually inside (not just resting on top
+			// of, which is what the floor check above already handles), so walking into a
+			// wall/pillar/gate frame stops you horizontally instead of clipping through.
+			if(cheats.collisionEnabled) {
+				const float EYE_HEIGHT = 1.0f;
+				const float PLAYER_HEIGHT = 1.8f;
+				const float PLAYER_RADIUS = 0.3f;
+				// Small vertical margin so a collider we're merely standing on top of
+				// (feet level with its yMax) isn't treated as something we're "inside".
+				const float VERTICAL_MARGIN = 0.1f;
+				float feetY = camPos.y - EYE_HEIGHT;
+				float headY = feetY + PLAYER_HEIGHT;
+				for(Collider *C : allColliders) {
+					AABBextents E = C->getExtents();
+					// Only resolve against colliders the player's body actually overlaps
+					// vertically (walls/pillars), not ones we're standing on (floors).
+					bool verticallyInside = feetY < E.yMax - VERTICAL_MARGIN && headY > E.yMin + VERTICAL_MARGIN;
+					if(!verticallyInside) continue;
+
+					// Closest point on the collider's XZ footprint to the camera
+					float closestX = glm::clamp(camPos.x, E.xMin, E.xMax);
+					float closestZ = glm::clamp(camPos.z, E.zMin, E.zMax);
+					float dx = camPos.x - closestX;
+					float dz = camPos.z - closestZ;
+					float dist = std::sqrt(dx * dx + dz * dz);
+
+					if(dist < PLAYER_RADIUS) {
+						if(dist > 1e-5f) {
+							// Push the camera away from the collider along the horizontal
+							// vector to the closest surface point, just past the radius.
+							float push = (PLAYER_RADIUS - dist) / dist;
+							camPos.x += dx * push;
+							camPos.z += dz * push;
+						} else {
+							// Camera's XZ is exactly inside the footprint (e.g. spawned
+							// there): push out along whichever side is nearest.
+							float pushXNeg = camPos.x - E.xMin, pushXPos = E.xMax - camPos.x;
+							float pushZNeg = camPos.z - E.zMin, pushZPos = E.zMax - camPos.z;
+							float minX = std::min(pushXNeg, pushXPos);
+							float minZ = std::min(pushZNeg, pushZPos);
+							if(minX < minZ) {
+								camPos.x += (pushXNeg < pushXPos ? -1.0f : 1.0f) * (PLAYER_RADIUS + minX);
+							} else {
+								camPos.z += (pushZNeg < pushZPos ? -1.0f : 1.0f) * (PLAYER_RADIUS + minZ);
+							}
+						}
+					}
+				}
+			}
 
 			// Jump: spacebar (wired to "fire" in Starter.hpp) gives the camera an upward
 			// velocity impulse. Edge-triggered (only on the frame the key goes down) and
@@ -534,7 +635,7 @@ class Skeleton26ReplaceName : public BaseProject {
 				// Compute feet height from the (camera) eye height
 				float feetY = camPos.y - EYE_HEIGHT;
 				float groundY = -std::numeric_limits<float>::infinity();
-				for(Collider *C : SC.GlobalColliders) {
+				for(Collider *C : allColliders) {
 					// for every collider, check collision
 					AABBextents E = C->getExtents();
 					bool insideXZ = camPos.x >= E.xMin && camPos.x <= E.xMax &&
@@ -563,6 +664,19 @@ class Skeleton26ReplaceName : public BaseProject {
 				grounded = feetY <= groundY + GROUND_EPSILON;
 				// Set camera position to the new one + player height
 				camPos.y = feetY + EYE_HEIGHT;
+			} else {
+				// No-clip: walls/objects are ignored entirely (handled by the blocks
+				// above being skipped), but the world floor still acts as a hard
+				// floor, so no-clipping lets you walk through walls without letting
+				// you fall out of the map underneath it.
+				const float EYE_HEIGHT = 1.0f;
+				if(camPos.y - EYE_HEIGHT < worldFloorY) {
+					camPos.y = worldFloorY + EYE_HEIGHT;
+					if(camVerticalVelocity < 0.0f) {
+						camVerticalVelocity = 0.0f;
+					}
+				}
+				grounded = camPos.y - EYE_HEIGHT <= worldFloorY + 0.05f;
 			}
 		}
 
