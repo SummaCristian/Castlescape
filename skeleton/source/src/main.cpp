@@ -526,8 +526,11 @@ class Skeleton26ReplaceName : public BaseProject {
 			// then update the camera's vertical position so that the player's feet don't clip into it.
 			// In case of non-flat meshes, take the tallest surface as the standing height.
 			// Same thing in case of multiple colliders, always take the tallest surface.
+			// Only surfaces close to the feet (within MAX_STEP_HEIGHT) qualify as ground, so
+			// gates, doors and other hole-shaped models allow the player to pass through.
 			if(cheats.collisionEnabled) {
 				const float EYE_HEIGHT = 1.0f;
+				const float MAX_STEP_HEIGHT = 0.5f;
 				// Compute feet height from the (camera) eye height
 				float feetY = camPos.y - EYE_HEIGHT;
 				float groundY = -std::numeric_limits<float>::infinity();
@@ -536,8 +539,11 @@ class Skeleton26ReplaceName : public BaseProject {
 					AABBextents E = C->getExtents();
 					bool insideXZ = camPos.x >= E.xMin && camPos.x <= E.xMax &&
 									camPos.z >= E.zMin && camPos.z <= E.zMax;
+					// Only consider surfaces near the feet (a small step up, or below), not
+					// anything towering overhead (e.g. the top of a wall being walked past).
+					bool nearFeet = E.yMax <= feetY + MAX_STEP_HEIGHT;
 					// Update with the highest (max) surface found so far
-					if(insideXZ && E.yMax > groundY) {
+					if(insideXZ && nearFeet && E.yMax > groundY) {
 						groundY = E.yMax;
 					}
 				}
