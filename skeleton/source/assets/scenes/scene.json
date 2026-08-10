@@ -1,13 +1,59 @@
 {
 	"models": [
-		{"id": "floor", "VD": "VDposUV", "model": "assets/models/Plane.gltf",  "format":"GLTF", "collider": "AABB"}
+		{"id": "floor", "VD": "VDposUV", "model": "assets/models/Plane.gltf",  "format":"GLTF", "collider": "AABB"},
+
+		{"id": "castleWall01", "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Castle_Wall_01.mgcg", "format":"MGCG", "collider": "AABB"},
+		{"id": "castleWall02", "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Castle_Wall_02.mgcg", "format":"MGCG", "collider": "AABB"},
+		{"id": "castleTower",  "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Castle_Tower.mgcg",  "format":"MGCG", "collider": "AABB"},
+		{"id": "castleGate",   "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Castle_02.mgcg",     "format":"MGCG", "collider": "AABB"},
+		{"id": "castleKeep",   "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Castle_01.mgcg",     "format":"MGCG", "collider": "AABB"},
+		{"id": "castleSteps",  "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Castle_Steps.mgcg",  "format":"MGCG", "collider": "AABB"},
+
+		{"id": "road",   "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Road_01.mgcg", "format":"MGCG"},
+		{"id": "flag",   "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Flag.mgcg",    "format":"MGCG"},
+		{"id": "light",  "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Light.mgcg",   "format":"MGCG"},
+		{"id": "barrel", "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Barrel.mgcg",  "format":"MGCG"},
+		{"id": "box01",  "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Box_01.mgcg",  "format":"MGCG"},
+		{"id": "box02",  "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Box_02.mgcg",  "format":"MGCG"},
+		{"id": "box03",  "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Box_03.mgcg",  "format":"MGCG"}
 	],
 	"textures": [
-		{"id": "tex", "texture": "assets/textures/toChange.jpg", "format": "C"}
+		{"id": "tex",          "texture": "assets/textures/toChange.jpg",         "format": "C"},
+		{"id": "medievalTex",  "texture": "assets/textures/Castle/SPW_Medieval.png", "format": "C"}
 	],
 	"instances": [
 		{"technique": "BlinnPos", "elements": [
-			{"id": "floor", "model": "floor",   "texture": ["tex"], "scale": [100.0, 100.0, 100.0]}
+			{"id": "floor", "model": "floor", "texture": ["tex"], "scale": [100.0, 100.0, 100.0]},
+
+			{"id": "towerNW", "model": "castleTower", "texture": ["medievalTex"], "translate": [-21.0, 0.0, -16.0], "eulerAngles": [90.0, 0.0, 0.0]},
+			{"id": "towerNE", "model": "castleTower", "texture": ["medievalTex"], "translate": [21.0, 0.0, -16.0], "eulerAngles": [90.0, 0.0, 0.0]},
+			{"id": "towerSW", "model": "castleTower", "texture": ["medievalTex"], "translate": [-21.0, 0.0, 16.0], "eulerAngles": [90.0, 0.0, 0.0]},
+			{"id": "towerSE", "model": "castleTower", "texture": ["medievalTex"], "translate": [21.0, 0.0, 16.0], "eulerAngles": [90.0, 0.0, 0.0]},
+
+			{"id": "wallN1", "model": "castleWall02", "texture": ["medievalTex"], "translate": [-10.0, 0.0, -16.0], "eulerAngles": [90.0, 0.0, 0.0]},
+			{"id": "wallN2", "model": "castleWall02", "texture": ["medievalTex"], "translate": [10.0, 0.0, -16.0], "eulerAngles": [90.0, 0.0, 0.0]},
+
+			{"id": "wallS1", "model": "castleWall01", "texture": ["medievalTex"], "translate": [-12.44, 0.0, 16.0], "eulerAngles": [90.0, 0.0, 0.0]},
+			{"id": "wallS2", "model": "castleWall01", "texture": ["medievalTex"], "translate": [12.44, 0.0, 16.0], "eulerAngles": [90.0, 0.0, 0.0]},
+			{"id": "gate",   "model": "castleGate",   "texture": ["medievalTex"], "translate": [0.0, 0.0, 16.0], "eulerAngles": [90.0, 0.0, 0.0]},
+
+			{"id": "wallE1", "model": "castleWall02", "texture": ["medievalTex"], "translate": [21.0, 0.0, 0.0], "eulerAngles": [90.0, 90.0, 0.0]},
+			{"id": "wallW1", "model": "castleWall02", "texture": ["medievalTex"], "translate": [-21.0, 0.0, 0.0], "eulerAngles": [90.0, 90.0, 0.0]},
+
+			{"id": "keep",  "model": "castleKeep",  "texture": ["medievalTex"], "translate": [0.0, 0.0, -2.0], "eulerAngles": [90.0, 0.0, 0.0]},
+			{"id": "steps", "model": "castleSteps", "texture": ["medievalTex"], "translate": [0.0, 0.0, 6.0], "eulerAngles": [90.0, 180.0, 0.0]},
+			{"id": "road",  "model": "road",        "texture": ["medievalTex"], "translate": [0.0, 0.02, 36.0], "scale": [1.0, 4.0, 1.0], "eulerAngles": [90.0, 0.0, 0.0]},
+
+			{"id": "flagSW", "model": "flag", "texture": ["medievalTex"], "translate": [-21.0, 16.2, 16.0], "eulerAngles": [90.0, 0.0, 0.0]},
+			{"id": "flagSE", "model": "flag", "texture": ["medievalTex"], "translate": [21.0, 16.2, 16.0], "eulerAngles": [90.0, 0.0, 0.0]},
+
+			{"id": "lightGateL", "model": "light", "texture": ["medievalTex"], "translate": [-5.0, 0.0, 13.0], "eulerAngles": [90.0, 0.0, 0.0]},
+			{"id": "lightGateR", "model": "light", "texture": ["medievalTex"], "translate": [5.0, 0.0, 13.0], "eulerAngles": [90.0, 0.0, 0.0]},
+
+			{"id": "barrel1", "model": "barrel", "texture": ["medievalTex"], "translate": [6.0, 0.0, 4.0], "eulerAngles": [90.0, 20.0, 0.0]},
+			{"id": "box1",    "model": "box01",  "texture": ["medievalTex"], "translate": [-6.0, 0.0, 4.0], "eulerAngles": [90.0, -15.0, 0.0]},
+			{"id": "box2",    "model": "box02",  "texture": ["medievalTex"], "translate": [-8.0, 0.0, 6.0], "eulerAngles": [90.0, 40.0, 0.0]},
+			{"id": "box3",    "model": "box03",  "texture": ["medievalTex"], "translate": [8.0, 0.0, 7.0], "eulerAngles": [90.0, -60.0, 0.0]}
 		]}
 	]
 }
