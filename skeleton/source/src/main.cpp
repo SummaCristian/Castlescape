@@ -90,6 +90,13 @@ class Skeleton26ReplaceName : public BaseProject {
 		bool jumpEnabled = true;
 		// Sprint flag
 		bool sprintEnabled = true;
+		// Debug overlay: continuously prints the camera's world-space
+		// position/yaw in the bottom-right corner, meant as a live readout
+		// for hand-placing scene.json objects (see notes.md). Unlike the
+		// other flags, true isn't "the legit/no-cheat default": there's no
+		// gameplay behavior to preserve here, so it defaults to off (hidden)
+		// instead.
+		bool showCoordinates = false;
 	} cheats;
 
 	// Numeric tuning for the movement cheats above, isolated the same way but
@@ -236,6 +243,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		hud.addToggle("Collision", &cheats.collisionEnabled);
 		hud.addToggle("Jump", &cheats.jumpEnabled);
 		hud.addToggle("Sprint", &cheats.sprintEnabled);
+		hud.addToggle("Show Coordinates", &cheats.showCoordinates);
 	}
 	
 	// Here you create your pipelines and Descriptor Sets!
@@ -367,7 +375,39 @@ class Skeleton26ReplaceName : public BaseProject {
 			elapsedT = 0.0f;
 		    countedFrames = 0;
 		}
-		
+
+		// Coordinates debug overlay (Show Coordinates cheat). Sits just above
+		// the FPS line, bottom-right. Throttled to 10Hz rather than every
+		// frame: print() unconditionally marks the text command buffer
+		// dirty, so printing every frame would force a mesh/command-buffer
+		// rebuild every frame just to show a live camera readout.
+		static float coordsElapsedT = 0.0f;
+		static bool coordsShown = false;
+		coordsElapsedT += deltaT;
+		if(cheats.showCoordinates) {
+			if(!coordsShown || coordsElapsedT > 0.1f) {
+				std::ostringstream coss;
+				coss << "X: " << camPos.x << "  Y: " << camPos.y << "  Z: " << camPos.z
+					 << "  Yaw: " << camYaw << "\n";
+
+				// FPS is anchored at pixel-NDC (1,1), i.e. the screen's
+				// bottom-right corner; this line sits a fixed pixel offset
+				// above it so the two never overlap, converted through the
+				// same pixelToScr TextMaker uses internally.
+				float sx, sy;
+				txt.pixelToScr((float)windowWidth - 1.0f, (float)windowHeight - 40.0f, sx, sy);
+				txt.print(sx, sy, coss.str(), 2, "CO", false, false, true,
+						  TAL_RIGHT, TRH_RIGHT, TRV_BOTTOM,
+						  {1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f});
+
+				coordsShown = true;
+				coordsElapsedT = 0.0f;
+			}
+		} else if(coordsShown) {
+			txt.removeText(2);
+			coordsShown = false;
+		}
+
 		txt.updateCommandBuffer();
 		uiQuad.updateCommandBuffer();
 	}
