@@ -12,8 +12,14 @@
 #define ANIMATIONS_IMPLEMENTATION
 #include "modules/Animations.hpp"
 
+// Everything above this line is the skeleton's, and must not be modified.
+// Everything below is ours: see source/include/custom/.
+
 #define UIQUAD_IMPLEMENTATION
-#include "modules/UiQuad.hpp"
+#include "custom/UiQuad.hpp"
 
 #define CHEATHUD_IMPLEMENTATION
-#include "modules/CheatHud.hpp"
+#include "custom/CheatHud.hpp"
+
+#define SCENECOLLIDERS_IMPLEMENTATION
+#include "custom/SceneColliders.hpp"

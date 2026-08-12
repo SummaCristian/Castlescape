@@ -10,7 +10,7 @@
 // CHEATHUD_IMPLEMENTATION (defined once in Libs.cpp). Like those modules, none
 // of these headers are self-guarded against double inclusion, so this file
 // assumes "modules/Starter.hpp", "modules/TextMaker.hpp" and
-// "modules/UiQuad.hpp" are already included by whoever includes this one.
+// "custom/UiQuad.hpp" are already included by whoever includes this one.
 
 #include <algorithm>
 #include <string>
