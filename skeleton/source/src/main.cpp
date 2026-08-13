@@ -12,6 +12,7 @@
 #include "custom/UiQuad.hpp"
 #include "custom/CheatHud.hpp"
 #include "custom/SceneColliders.hpp"
+#include "custom/SceneMaterials.hpp"
 
 // The uniform buffer object used in this example
 struct UniformBufferObject {
@@ -22,6 +23,12 @@ struct UniformBufferObject {
 	// surface (this scene has one: the road instance is scaled [1,4,1]). Passed in
 	// as a mat4 for the std140 alignment rules, used as its upper-left mat3.
 	alignas(16) glm::mat4 nMat;
+	// Material parameters for the BRDF, per instance. mD (the diffuse color) is
+	// not here: it comes from the albedo texture, per fragment.
+	// The two pack into one 16-byte slot exactly as GLSL's std140 lays out a
+	// vec3 followed by a float, so no explicit padding is needed between them.
+	alignas(16) glm::vec3 mS;	// specular color
+	float gamma;				// specular exponent
 };
 
 struct GlobalUniformBufferObject {
@@ -100,6 +107,10 @@ class Skeleton26ReplaceName : public BaseProject {
 	// Owns the hand-authored collision geometry loaded from assets/scenes/colliders.json
 	// and merges it with the colliders scene.json built.
 	SceneColliders colliderSet;
+
+	// Per-model BRDF parameters (specular color and exponent), loaded from
+	// assets/scenes/materials.json. See SceneMaterials.hpp.
+	SceneMaterials materials;
 
 	// Flat list of every collider gameplay collides against, taken from colliderSet
 	// once the scene has loaded. Kept as its own member so the per-frame collision
@@ -214,7 +225,10 @@ class Skeleton26ReplaceName : public BaseProject {
 					// first  element : the binding number
 					// second element : the type of element (buffer or texture)
 					// third  element : the pipeline stage where it will be used
-					{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, sizeof(UniformBufferObject), 1},
+					// ALL_GRAPHICS, not VERTEX_BIT: this buffer used to hold only
+					// matrices, but it now also carries the instance's material,
+					// which the fragment shader reads.
+					{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_ALL_GRAPHICS, sizeof(UniformBufferObject), 1},
 					{1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 1}
 				  });
 		DSLglobal.init(this, {
@@ -288,6 +302,9 @@ class Skeleton26ReplaceName : public BaseProject {
 		// data file instead of scene.json or here.
 		colliderSet.init(&SC, "assets/scenes/colliders.json");
 		allColliders = colliderSet.list();
+
+		// Surface parameters for the BRDF, one per model.
+		materials.init(&SC, "assets/scenes/materials.json");
 
 		// initializes the textual output
 		txt.init(this, windowWidth, windowHeight);
@@ -409,7 +426,15 @@ class Skeleton26ReplaceName : public BaseProject {
 		GlobalUniformBufferObject gubo{};
 
 		gubo.lightDir = lightDir;
-		gubo.lightColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f)*5.0f;
+		// Radiance of the sun. Was multiplied by 5 to compensate for the old
+		// ad-hoc formula; with a BRDF that returns values in [0,1] as L09 slide
+		// 42 describes, a white light source is just (1,1,1) and the HDR tone
+		// map at the end of the fragment shader handles the range.
+		// Consequence, and it is the honest one: with a single direct light and
+		// a 0.015 constant standing in for indirect light, everything facing
+		// away from the sun is nearly black. That is what the hemispheric
+		// ambient term (E07) exists to fix.
+		gubo.lightColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
 		gubo.eyePos = glm::vec3(glm::inverse(View)[3]);
 
 		DSglobal.map(currentImage, &gubo, 0);
@@ -423,6 +448,12 @@ class Skeleton26ReplaceName : public BaseProject {
 			ubo.mMat = SC.TI[0].I[instanceId].Wm;
 			ubo.mvpMat = ViewPrj * ubo.mMat;
 			ubo.nMat = glm::inverse(glm::transpose(ubo.mMat));
+
+			// Material of this instance's model. Looked up by Mid (the model
+			// index) rather than by name, so no string hashing per frame.
+			const Material &m = materials.forModel(SC.TI[0].I[instanceId].Mid);
+			ubo.mS = m.specularColor;
+			ubo.gamma = m.specularPower;
 			
 			// DS[1] = Pchar pass (main render): set0=DSLglobal, set1=DSLlocal
 			SC.TI[0].I[instanceId].DS[0][0]->map(currentImage, &gubo, 0); // global (light/camera)

@@ -1,0 +1,43 @@
+// Per-model BRDF parameters. See include/custom/SceneMaterials.hpp for what
+// they mean and why they live here instead of in scene.json.
+//
+//   specularColor (mS)    color of the highlight. Grey/white for dielectrics
+//                         (stone, wood, cloth): the highlight takes the color
+//                         of the lamp. Tinted towards the diffuse color for
+//                         metals, which is what makes brass read as brass.
+//   specularPower (gamma) tightness of the highlight. High = small and sharp,
+//                         a polished surface. Low = wide and soft, a rough one.
+//
+// Anything not listed here gets "default".
+{
+	"default": { "specularColor": [0.05, 0.05, 0.05], "specularPower": 32.0 },
+
+	"models": {
+		// Ground. Almost matte: dry dirt and cobbles scatter nearly everything.
+		"floor": { "specularColor": [0.03, 0.03, 0.03], "specularPower": 16.0 },
+		"road":  { "specularColor": [0.03, 0.03, 0.03], "specularPower": 16.0 },
+
+		// Castle stone. A weak, broad sheen, enough to pick out the curvature of
+		// the towers and the edges of the merlons without ever looking wet.
+		"castleWall01": { "specularColor": [0.08, 0.08, 0.08], "specularPower": 24.0 },
+		"castleWall02": { "specularColor": [0.08, 0.08, 0.08], "specularPower": 24.0 },
+		"castleTower":  { "specularColor": [0.08, 0.08, 0.08], "specularPower": 24.0 },
+		"castleGate":   { "specularColor": [0.08, 0.08, 0.08], "specularPower": 24.0 },
+		"castleKeep":   { "specularColor": [0.08, 0.08, 0.08], "specularPower": 24.0 },
+		"castleSteps":  { "specularColor": [0.08, 0.08, 0.08], "specularPower": 24.0 },
+
+		// Wood, slightly warm and slightly shinier than stone (old varnish).
+		"barrel": { "specularColor": [0.10, 0.09, 0.07], "specularPower": 32.0 },
+		"box01":  { "specularColor": [0.10, 0.09, 0.07], "specularPower": 32.0 },
+		"box02":  { "specularColor": [0.10, 0.09, 0.07], "specularPower": 32.0 },
+		"box03":  { "specularColor": [0.10, 0.09, 0.07], "specularPower": 32.0 },
+
+		// Cloth. The one surface with essentially no specular at all.
+		"flag": { "specularColor": [0.02, 0.02, 0.02], "specularPower": 8.0 },
+
+		// The gate lanterns: metal, so mS is strong and tinted like the diffuse
+		// color rather than grey (L09 slide 69). This is the model that shows
+		// what mS is actually for.
+		"light": { "specularColor": [0.55, 0.45, 0.25], "specularPower": 120.0 }
+	}
+}

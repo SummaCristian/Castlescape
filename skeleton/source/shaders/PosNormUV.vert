@@ -1,10 +1,14 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
 
+// mS and gamma are unused here, but the block must be declared identically in
+// both stages: it is one buffer at one binding, shared by the two.
 layout(binding = 0, set = 1) uniform UniformBufferObject {
 	mat4 mvpMat;
 	mat4 mMat;
 	mat4 nMat;
+	vec3 mS;
+	float gamma;
 } ubo;
 
 layout(location = 0) in vec3 inPosition;

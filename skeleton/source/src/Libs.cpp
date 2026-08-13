@@ -23,3 +23,6 @@
 
 #define SCENECOLLIDERS_IMPLEMENTATION
 #include "custom/SceneColliders.hpp"
+
+#define SCENEMATERIALS_IMPLEMENTATION
+#include "custom/SceneMaterials.hpp"
