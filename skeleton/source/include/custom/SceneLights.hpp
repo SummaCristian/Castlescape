@@ -38,7 +38,7 @@
 #include <vector>
 
 // MAX_LIGHTS and the LIGHT_* type tags. The very same file is included by
-// Blinn.frag, so there is one definition rather than two that have to be kept
+// CookTorrance.frag, so there is one definition rather than two that have to be kept
 // in agreement by hand.
 #include "custom/LightConstants.glsl"
 

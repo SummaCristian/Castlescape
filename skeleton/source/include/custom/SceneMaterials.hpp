@@ -3,7 +3,7 @@
 // Per-model surface parameters for the BRDF: the numbers that make stone look
 // like stone and the lantern's brass look like metal, under the same light.
 //
-// The BRDF (see shaders/Blinn.frag) is the sum of a diffuse and a specular
+// The BRDF (see shaders/CookTorrance.frag) is the sum of a diffuse and a specular
 // term, and each needs a material parameter:
 //   mD, the diffuse color, is the "main color of the surface" (L09 slide 59).
 //       It already exists: it's the albedo texture, per fragment, so it isn't

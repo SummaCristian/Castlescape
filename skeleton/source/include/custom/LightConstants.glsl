@@ -1,7 +1,7 @@
 // ***** CUSTOM *****
 
 // The one definition of the light constants, shared by the C++ side and the
-// shaders. `SceneLights.hpp` and `Blinn.frag` both #include this exact path.
+// shaders. `SceneLights.hpp` and `CookTorrance.frag` both #include this exact path.
 //
 // They used to be written twice, once per language, with a comment asking the
 // reader to keep them in sync. A comment is not a mechanism: change MAX_LIGHTS

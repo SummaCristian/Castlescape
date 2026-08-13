@@ -24,15 +24,13 @@ struct UniformBufferObject {
 	// surface (this scene has one: the road instance is scaled [1,4,1]). Passed in
 	// as a mat4 for the std140 alignment rules, used as its upper-left mat3.
 	alignas(16) glm::mat4 nMat;
-	// Material parameters for the BRDF, per instance. mD (the diffuse color) is
-	// not here: it comes from the albedo texture, per fragment.
-	// The two pack into one 16-byte slot exactly as GLSL's std140 lays out a
-	// vec3 followed by a float, so no explicit padding is needed between them.
-	// Cook-Torrance material parameters. Short names on purpose: mS is what the
-	// slides call the specular color, and this struct has to match the GLSL
-	// block field for field.
-	// std140 puts the vec3 at a 16-byte boundary with a 12-byte size, so the
-	// three floats after it fill offsets 12, 16 and 20 with no padding of ours.
+	// Cook-Torrance material parameters, per instance. mD (the diffuse color) is
+	// not among them: it comes from the albedo texture, per fragment.
+	// Short names on purpose: mS is what the slides call the specular color, and
+	// this struct has to match the GLSL block field for field.
+	// No padding of ours is needed here. std140 gives the vec3 a 16-byte
+	// alignment and a 12-byte size, so the three floats after it land at offsets
+	// 12, 16 and 20, exactly as GLSL lays the same declarations out.
 	alignas(16) glm::vec3 mS;	// specular color
 	float roughness;			// rho: width of the microfacet distribution
 	float F0;					// reflectance seen head-on
@@ -128,7 +126,7 @@ class Skeleton26ReplaceName : public BaseProject {
 	// and merges it with the colliders scene.json built.
 	SceneColliders colliderSet;
 
-	// Per-model BRDF parameters (specular color and exponent), loaded from
+	// Per-model BRDF parameters (specular color, roughness, F0, k), loaded from
 	// assets/scenes/materials.json. See SceneMaterials.hpp.
 	SceneMaterials materials;
 
