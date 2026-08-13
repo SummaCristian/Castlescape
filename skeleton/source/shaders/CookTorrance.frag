@@ -45,6 +45,7 @@ layout(binding = 0, set = 1) uniform UniformBufferObject {
     float roughness;  // rho on the slides. 0 = mirror, 1 = matte
     float F0;         // reflectance head-on
     float k;          // diffuse share, specular gets (1 - k)
+    int flatNormals;  // 1: ignore the vertex normal, use the face's own
 } ubo;
 
 layout(binding = 1, set = 1) uniform sampler2D albedoMap;
@@ -168,8 +169,25 @@ void main() {
     // Interpolation shortens the normal wherever the corner normals diverge.
     vec3 N = normalize(fragNorm);
 
-    // sRGB to linear. Undone at the bottom.
-    vec3 mD = pow(texture(albedoMap, fragUV).rgb, vec3(2.2));
+    // The MGCG models average their vertex normals across hard edges, so a flat
+    // face comes out with a gradient across it instead of one constant value
+    // (E06 s.3-16: a hard-edged solid needs its vertices duplicated per face,
+    // and these are not). For those models the face's own normal is derived
+    // here instead: the derivatives of the world position across the triangle
+    // are two vectors lying in its plane, so their cross product is exactly
+    // perpendicular to it.
+    //
+    // The sign of that cross product depends on winding, so it is oriented
+    // against the vertex normal, which is unreliable in magnitude but perfectly
+    // good at saying which side is out.
+    if(ubo.flatNormals == 1) {
+        vec3 faceN = normalize(cross(dFdx(fragPos), dFdy(fragPos)));
+        N = dot(faceN, N) < 0.0 ? -faceN : faceN;
+    }
+
+    // No sRGB conversion here: the texture's image view is VK_FORMAT_R8G8B8A8_SRGB
+    // (Starter.hpp's default), so the sampler already returns linear values.
+    vec3 mD = texture(albedoMap, fragUV).rgb;
 
     vec3 V = normalize(gubo.eyePos - fragPos);
 
@@ -181,6 +199,7 @@ void main() {
             * BRDF(N, L, V, mD, ubo.mS, ubo.roughness, ubo.F0, ubo.k);
     }
 
-    vec3 color = toneMap(Lo + hemisphericAmbient(N, mD));
-    outColor = vec4(pow(color, vec3(1.0 / 2.2)), 1.0);
+    // Written linear, not gamma-encoded: the swapchain is B8G8R8A8_SRGB, so the
+    // hardware does the linear-to-sRGB encode on write.
+    outColor = vec4(toneMap(Lo + hemisphericAmbient(N, mD)), 1.0);
 }

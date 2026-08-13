@@ -48,6 +48,11 @@ struct Material {
 	float roughness = 0.6f;						// rho, width of the GGX lobe
 	float F0 = 0.04f;							// reflectance head-on
 	float k = 0.9f;								// diffuse share
+	// The MGCG meshes average their normals across hard edges, which smears the
+	// shading of anything that should be crisp. Set this for those models and
+	// the shader derives the face normal itself. Leave it off for genuinely
+	// curved surfaces (the towers), which the averaged normals suit.
+	int flatNormals = 0;
 };
 
 class SceneMaterials {
@@ -89,6 +94,7 @@ void SceneMaterials::readInto(const nlohmann::json &js, Material &m) {
 	if(js.contains("roughness")) m.roughness = js["roughness"].get<float>();
 	if(js.contains("F0"))        m.F0 = js["F0"].get<float>();
 	if(js.contains("k"))         m.k = js["k"].get<float>();
+	if(js.contains("flatNormals")) m.flatNormals = js["flatNormals"].get<bool>() ? 1 : 0;
 
 	// roughness 0 divides by zero in GGX. Caught here rather than guarded per
 	// fragment: it's a data error.

@@ -32,7 +32,13 @@
 		"castleTower":  { "roughness": 0.78, "F0": 0.04, "k": 0.93 },
 		"castleGate":   { "roughness": 0.78, "F0": 0.04, "k": 0.93 },
 		"castleKeep":   { "roughness": 0.78, "F0": 0.04, "k": 0.93 },
-		"castleSteps":  { "roughness": 0.78, "F0": 0.04, "k": 0.93 },
+		// flatNormals: this mesh averages its vertex normals across the hard
+		// edges of every tread and riser, so each face shades with a gradient
+		// across it instead of one value, and the whole flight looks smeared.
+		// With the flag on, the shader derives the face's own normal. Only set
+		// where the geometry really is hard-edged: the towers are cylinders and
+		// want the averaged normals they came with.
+		"castleSteps":  { "roughness": 0.78, "F0": 0.04, "k": 0.93, "flatNormals": true },
 
 		// Wood. Old varnish, so smoother than stone and a touch more reflective.
 		"barrel": { "roughness": 0.55, "F0": 0.05, "k": 0.90 },

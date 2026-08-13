@@ -52,6 +52,7 @@ struct UniformBufferObject {
 	float roughness;			// rho: width of the microfacet distribution
 	float F0;					// reflectance seen head-on
 	float k;					// diffuse share of the BRDF
+	int flatNormals;			// 1: derive the face normal in the shader
 };
 
 // Everything that's the same for every object drawn this frame. Split from the
@@ -486,6 +487,7 @@ class Skeleton26ReplaceName : public BaseProject {
 			ubo.roughness = m.roughness;
 			ubo.F0 = m.F0;
 			ubo.k = m.k;
+			ubo.flatNormals = m.flatNormals;
 			
 			// DS[1] = Pchar pass (main render): set0=DSLglobal, set1=DSLlocal
 			SC.TI[0].I[instanceId].DS[0][0]->map(currentImage, &gubo, 0); // global (light/camera)
@@ -697,6 +699,7 @@ class Skeleton26ReplaceName : public BaseProject {
 						}
 					}
 				}
+
 			}
 
 			// Jump: spacebar (wired to "fire" in Starter.hpp) gives the camera an upward
