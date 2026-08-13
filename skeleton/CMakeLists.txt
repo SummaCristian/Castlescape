@@ -64,6 +64,15 @@ file(GLOB_RECURSE SHADERS CONFIGURE_DEPENDS
         "${SHADER_SRC_DIR}/*.frag"
         "${SHADER_SRC_DIR}/*.comp"
 )
+# Headers shared between C++ and GLSL (see include/custom/LightConstants.glsl).
+# glslc is given the same include directory the C++ compiler gets, so the two
+# languages spell the #include identically. They are also listed as a dependency
+# of every shader: editing one has to recompile the shaders that include it, and
+# glslc reports no dependency information of its own for CMake to use.
+set(SHADER_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/${INCLUDE_DIR}")
+file(GLOB_RECURSE SHADER_SHARED_HEADERS CONFIGURE_DEPENDS
+        "${SHADER_INCLUDE_DIR}/custom/*.glsl"
+)
 set(SPIRV_OUTPUTS "")
 set(SPIRV_COPIED_STAMPS "")
 foreach(SHADER IN LISTS SHADERS)
@@ -76,8 +85,8 @@ foreach(SHADER IN LISTS SHADERS)
   add_custom_command(
           OUTPUT "${SPIRV}"
           COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADER_BUILD_DIR}/${SHADER_REL_DIR}"
-          COMMAND "${Vulkan_GLSLC_EXECUTABLE}" -o "${SPIRV}" "${SHADER}"
-          DEPENDS "${SHADER}"
+          COMMAND "${Vulkan_GLSLC_EXECUTABLE}" -I "${SHADER_INCLUDE_DIR}" -o "${SPIRV}" "${SHADER}"
+          DEPENDS "${SHADER}" ${SHADER_SHARED_HEADERS}
           COMMENT "Compilo shader: ${SHADER_REL_PATH}"
           VERBATIM
   )

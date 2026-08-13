@@ -26,3 +26,6 @@
 
 #define SCENEMATERIALS_IMPLEMENTATION
 #include "custom/SceneMaterials.hpp"
+
+#define SCENELIGHTS_IMPLEMENTATION
+#include "custom/SceneLights.hpp"

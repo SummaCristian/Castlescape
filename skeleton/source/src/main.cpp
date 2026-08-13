@@ -13,6 +13,7 @@
 #include "custom/CheatHud.hpp"
 #include "custom/SceneColliders.hpp"
 #include "custom/SceneMaterials.hpp"
+#include "custom/SceneLights.hpp"
 
 // The uniform buffer object used in this example
 struct UniformBufferObject {
@@ -35,10 +36,17 @@ struct UniformBufferObject {
 	float specPower;			// specular exponent
 };
 
+// One block for everything that is the same for every object being drawn: the
+// camera position and the scene's light sources.
+//
+// The lights are a fixed-size array with a live count rather than a
+// variable-length one: a uniform block has to have a size known when the
+// pipeline is built, so the buffer is always MAX_LIGHTS long and lightCount
+// says how much of it the shader should read.
 struct GlobalUniformBufferObject {
-	alignas(16) glm::vec3 lightDir;
-	alignas(16) glm::vec4 lightColor;
 	alignas(16) glm::vec3 eyePos;
+	int lightCount;
+	LightData lights[MAX_LIGHTS];
 };
 
 // Vertex format "VDposNormUV": position, normal, UV.
@@ -115,6 +123,10 @@ class Skeleton26ReplaceName : public BaseProject {
 	// Per-model BRDF parameters (specular color and exponent), loaded from
 	// assets/scenes/materials.json. See SceneMaterials.hpp.
 	SceneMaterials materials;
+
+	// The scene's light sources (direct, point and spot), loaded from
+	// assets/scenes/lights.json. See SceneLights.hpp.
+	SceneLights sceneLights;
 
 	// Flat list of every collider gameplay collides against, taken from colliderSet
 	// once the scene has loaded. Kept as its own member so the per-frame collision
@@ -310,6 +322,10 @@ class Skeleton26ReplaceName : public BaseProject {
 		// Surface parameters for the BRDF, one per model.
 		materials.init(&SC, "assets/scenes/materials.json");
 
+		// Light sources. After Scene::init, because a light can be anchored to a
+		// scene.json instance and needs that instance's world matrix.
+		sceneLights.init(&SC, "assets/scenes/lights.json");
+
 		// initializes the textual output
 		txt.init(this, windowWidth, windowHeight);
 		// initializes the flat-quad background/highlight layer for the cheat HUD
@@ -420,25 +436,24 @@ class Skeleton26ReplaceName : public BaseProject {
 		float deltaT = GameLogic();
 		
 		// defines the global parameters for the uniform
-		static float lightRotationAngle = 0.0f; // Static variable to keep track of rotation
-		lightRotationAngle += -0.5f * deltaT; // Increment rotation angle based on time
-
-		const glm::mat4 lightView = glm::rotate(glm::mat4(1), glm::radians(lightRotationAngle), glm::vec3(0.0f, 1.0f, 0.0f)) * 
-									glm::rotate(glm::mat4(1), glm::radians(-45.0f), glm::vec3(1.0f, 0.0f, 0.0f));
-		const glm::vec3 lightDir =  glm::vec3(lightView * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f));
-
 		GlobalUniformBufferObject gubo{};
 
-		gubo.lightDir = lightDir;
-		// Radiance of the sun. Was multiplied by 5 to compensate for the old
-		// ad-hoc formula; with a BRDF that returns values in [0,1] as L09 slide
-		// 42 describes, a white light source is just (1,1,1) and the HDR tone
-		// map at the end of the fragment shader handles the range.
-		// Consequence, and it is the honest one: with a single direct light and
-		// a 0.015 constant standing in for indirect light, everything facing
-		// away from the sun is nearly black. That is what the hemispheric
-		// ambient term (E07) exists to fix.
-		gubo.lightColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+		// The lights all come from lights.json now, including the sun and its
+		// sweep across the sky (which used to be this rotation, hardcoded here).
+		// update() advances whatever is animated and hands back the list.
+		//
+		// Note none of them is scaled up by an intensity factor any more. The
+		// old code multiplied the sun by 5 to compensate for an ad-hoc formula;
+		// with a BRDF that returns values in [0,1] (L09 slide 42) a white source
+		// is just (1,1,1), and the HDR tone map handles the range. A point
+		// light's strength is expressed instead by its g and beta, which is
+		// where it belongs.
+		const std::vector<LightData> &lights = sceneLights.update(deltaT);
+		gubo.lightCount = (int)lights.size();
+		for(int i = 0; i < gubo.lightCount; i++) {
+			gubo.lights[i] = lights[i];
+		}
+
 		gubo.eyePos = glm::vec3(glm::inverse(View)[3]);
 
 		DSglobal.map(currentImage, &gubo, 0);

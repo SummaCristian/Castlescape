@@ -1,5 +1,11 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
+// glslc's #include support. Not part of core GLSL, which has no include at all.
+#extension GL_GOOGLE_include_directive : require
+
+// MAX_LIGHTS and the LIGHT_* type tags, the same file SceneLights.hpp includes.
+// Found through the -I that CMake passes to glslc.
+#include "custom/LightConstants.glsl"
 
 layout(location = 0) in vec3 fragPos;
 layout(location = 1) in vec3 fragNorm;
@@ -27,11 +33,64 @@ layout(binding = 0, set = 1) uniform UniformBufferObject {
 
 layout(binding = 1, set = 1) uniform sampler2D albedoMap;
 
+struct Light {
+    vec3 pos;       // point/spot only
+    float g;        // distance at which the light is exactly `color`
+    vec3 dir;       // direct: travel direction. spot: aim direction
+    float beta;     // decay exponent: 0 constant, 1 linear, 2 quadratic
+    vec3 color;     // l, the emitted color
+    float cosIn;    // spot: cosine of the half inner angle
+    float cosOut;   // spot: cosine of the half outer angle
+    int type;
+};
+
 layout(binding = 0, set = 0) uniform GlobalUniformBufferObject {
-    vec3 lightDir;
-    vec4 lightColor;
     vec3 eyePos;
+    int lightCount;
+    Light lights[MAX_LIGHTS];
 } gubo;
+
+// Direction from the shaded point TOWARDS the light, `lx` in L09's notation.
+// For a direct light it is a constant: the source is infinitely far away, so
+// every point in the scene sees it from the same angle. For point and spot it
+// aims at the lamp and therefore changes across the surface, which is the whole
+// reason a point light wraps around an object and a direct one does not.
+vec3 lightDirection(Light lt, vec3 pos) {
+    if(lt.type == LIGHT_DIRECT) {
+        return -lt.dir;
+    }
+    return normalize(lt.pos - pos);
+}
+
+// The color that actually arrives, after distance decay and, for a spot, the
+// cone. L09 slides 23 and 33.
+vec3 lightRadiance(Light lt, vec3 pos) {
+    if(lt.type == LIGHT_DIRECT) {
+        return lt.color;
+    }
+
+    // (g / |p - x|)^beta. Brighter than `color` closer than g, dimmer past it.
+    // beta is authored rather than fixed at the physically correct 2, because
+    // with no indirect lighting an inverse-square falloff reads as far too dark
+    // (L09 slides 20-21).
+    float dist = length(lt.pos - pos);
+    vec3 radiance = lt.color * pow(lt.g / max(dist, 0.0001), lt.beta);
+
+    if(lt.type == LIGHT_SPOT) {
+        // A spot is a point light confined to a cone: same radiance, times a
+        // dimming factor that is 1 inside the inner cone, 0 outside the outer
+        // one, and linear in between.
+        //
+        // `dir` is authored as the direction the lamp POINTS, so a lamp aimed at
+        // the floor is [0,-1,0], which is the intuitive way to write it. The
+        // vector towards the shaded point is therefore -lightDirection(), and
+        // the dot product between the two is 1 dead centre in the beam.
+        float cosAngle = dot(-lightDirection(lt, pos), lt.dir);
+        radiance *= clamp((cosAngle - lt.cosOut) / (lt.cosIn - lt.cosOut), 0.0, 1.0);
+    }
+
+    return radiance;
+}
 
 // The BRDF, as the sum of a diffuse and a specular term (L09 slide 38).
 //
@@ -79,13 +138,17 @@ void main() {
     vec3 mD = pow(texture(albedoMap, fragUV).rgb, vec3(2.2));
 
     vec3 V = normalize(gubo.eyePos - fragPos);
-    vec3 L = normalize(-gubo.lightDir);
 
-    // Rendering equation reduced to a single direct light (L09 slide 60):
-    // the light's radiance times the BRDF. No distance term, a direct light is
-    // infinitely far away so its direction and intensity are the same
-    // everywhere in the scene.
-    vec3 Lo = gubo.lightColor.rgb * BRDF(N, L, V, mD, ubo.mS, ubo.specPower);
+    // The rendering equation for scanline rendering: a sum over the light
+    // sources of each one's radiance times the BRDF. Every term is positive
+    // (the BRDF clamps both of its own), so a light can only ever add light,
+    // never remove what another one put there.
+    vec3 Lo = vec3(0.0);
+    for(int i = 0; i < gubo.lightCount; i++) {
+        vec3 L = lightDirection(gubo.lights[i], fragPos);
+        Lo += lightRadiance(gubo.lights[i], fragPos)
+            * BRDF(N, L, V, mD, ubo.mS, ubo.specPower);
+    }
 
     // Crude stand-in for indirect light: a constant times the base color. It is
     // the simplest possible approximation of ambient lighting and it is meant to
