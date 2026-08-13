@@ -15,52 +15,61 @@
 #include "custom/SceneMaterials.hpp"
 #include "custom/SceneLights.hpp"
 
+// Our own files, and where to start reading.
+//
+//   custom/SceneColliders.hpp   the boxes and ramps the player walks into
+//   custom/SceneMaterials.hpp   what each surface is made of
+//   custom/SceneLights.hpp      the scene's lights
+//   custom/UiQuad.hpp           coloured rectangles for the HUD
+//   custom/CheatHud.hpp         the cheat menu, opened with L
+//
+// Each of the first three reads its own data file from assets/scenes/ at
+// startup, so the scene can be changed without touching C++:
+//
+//   scene.json      which models exist and where they are placed
+//   colliders.json  hand-authored collision shapes for models an auto-fitted
+//                   box gets wrong, like the gate's archway
+//   materials.json  surface parameters, one entry per model
+//   lights.json     the light sources and the ambient light
+//
+// The shaders are in source/shaders/. PosNormUV.vert and CookTorrance.frag are
+// the pair that draws the scene; the other two draw the HUD.
+//
+// notes.md at the repo root explains the reasoning behind all of it.
+
 // The uniform buffer object used in this example
 struct UniformBufferObject {
 	alignas(16) glm::mat4 mvpMat;
 	alignas(16) glm::mat4 mMat;
-	// Normal matrix: inverse-transpose of mMat. Normals can't be transformed by the
-	// world matrix like positions are, or any non-uniform scale tilts them off the
-	// surface (this scene has one: the road instance is scaled [1,4,1]). Passed in
-	// as a mat4 for the std140 alignment rules, used as its upper-left mat3.
+	// inverse-transpose of mMat. Normals can't ride the world matrix or a
+	// non-uniform scale tilts them off the surface (the road is scaled [1,4,1]).
+	// A mat4 rather than a mat3 to avoid std140's column-padding rules.
 	alignas(16) glm::mat4 nMat;
-	// Cook-Torrance material parameters, per instance. mD (the diffuse color) is
-	// not among them: it comes from the albedo texture, per fragment.
-	// Short names on purpose: mS is what the slides call the specular color, and
-	// this struct has to match the GLSL block field for field.
-	// No padding of ours is needed here. std140 gives the vec3 a 16-byte
-	// alignment and a 12-byte size, so the three floats after it land at offsets
-	// 12, 16 and 20, exactly as GLSL lays the same declarations out.
+	// Cook-Torrance material. mD isn't here, it's the albedo texture.
+	// Must match the GLSL block field for field; the floats after the vec3 fill
+	// std140's padding, so no explicit padding of ours is needed.
 	alignas(16) glm::vec3 mS;	// specular color
 	float roughness;			// rho: width of the microfacet distribution
 	float F0;					// reflectance seen head-on
 	float k;					// diffuse share of the BRDF
 };
 
-// One block for everything that is the same for every object being drawn: the
-// camera position and the scene's light sources.
-//
-// The lights are a fixed-size array with a live count rather than a
-// variable-length one: a uniform block has to have a size known when the
-// pipeline is built, so the buffer is always MAX_LIGHTS long and lightCount
-// says how much of it the shader should read.
+// Everything that's the same for every object drawn this frame. Split from the
+// per-instance UBO by change frequency: this is written once, that one 23 times.
+// Fixed-size light array plus a live count, since a uniform block needs a
+// compile-time size.
 struct GlobalUniformBufferObject {
 	alignas(16) glm::vec3 eyePos;
 	int lightCount;
-	// Hemispheric ambient: the scene's indirect lighting. Two colors and the
-	// axis they blend along. See AmbientLight in SceneLights.hpp.
+	// Hemispheric ambient. See AmbientLight in SceneLights.hpp.
 	alignas(16) glm::vec3 ambientUpper;
 	alignas(16) glm::vec3 ambientLower;
 	alignas(16) glm::vec3 ambientDir;
 	LightData lights[MAX_LIGHTS];
 };
 
-// Vertex format "VDposNormUV": position, normal, UV.
-// The normal is what the skeleton's starting format lacked: without it the fragment
-// shader had to rebuild one per-fragment out of the position derivatives
-// (cross(dFdx, dFdy)), which is a *face* normal, so every mesh rendered faceted no
-// matter how it was authored. The MGCG/glTF files already carry per-vertex normals;
-// Starter.hpp copies them in automatically as soon as the layout below declares one.
+// Vertex format "VDposNormUV". Starter.hpp fills the normal from the glTF/MGCG
+// file automatically once the layout declares one.
 struct Vertex {
 	glm::vec3 pos;
 	glm::vec3 norm;
@@ -247,9 +256,8 @@ class Skeleton26ReplaceName : public BaseProject {
 					// first  element : the binding number
 					// second element : the type of element (buffer or texture)
 					// third  element : the pipeline stage where it will be used
-					// ALL_GRAPHICS, not VERTEX_BIT: this buffer used to hold only
-					// matrices, but it now also carries the instance's material,
-					// which the fragment shader reads.
+					// ALL_GRAPHICS, not VERTEX_BIT: this buffer carries the
+					// material too, which the fragment shader reads.
 					{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_ALL_GRAPHICS, sizeof(UniformBufferObject), 1},
 					{1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 1}
 				  });
@@ -328,8 +336,8 @@ class Skeleton26ReplaceName : public BaseProject {
 		// Surface parameters for the BRDF, one per model.
 		materials.init(&SC, "assets/scenes/materials.json");
 
-		// Light sources. After Scene::init, because a light can be anchored to a
-		// scene.json instance and needs that instance's world matrix.
+		// After Scene::init: a light can be anchored to an instance and needs
+		// that instance's world matrix.
 		sceneLights.init(&SC, "assets/scenes/lights.json");
 
 		// initializes the textual output
@@ -444,16 +452,9 @@ class Skeleton26ReplaceName : public BaseProject {
 		// defines the global parameters for the uniform
 		GlobalUniformBufferObject gubo{};
 
-		// The lights all come from lights.json now, including the sun and its
-		// sweep across the sky (which used to be this rotation, hardcoded here).
-		// update() advances whatever is animated and hands back the list.
-		//
-		// Note none of them is scaled up by an intensity factor any more. The
-		// old code multiplied the sun by 5 to compensate for an ad-hoc formula;
-		// with a BRDF that returns values in [0,1] (L09 slide 42) a white source
-		// is just (1,1,1), and the HDR tone map handles the range. A point
-		// light's strength is expressed instead by its g and beta, which is
-		// where it belongs.
+		// Every light comes from lights.json, sun included. No intensity factor:
+		// with a BRDF returning [0,1] (L09 s.42) a white source is (1,1,1) and
+		// the tone map handles the range. Strength is g and beta instead.
 		const std::vector<LightData> &lights = sceneLights.update(deltaT);
 		gubo.lightCount = (int)lights.size();
 		for(int i = 0; i < gubo.lightCount; i++) {
@@ -479,8 +480,7 @@ class Skeleton26ReplaceName : public BaseProject {
 			ubo.mvpMat = ViewPrj * ubo.mMat;
 			ubo.nMat = glm::inverse(glm::transpose(ubo.mMat));
 
-			// Material of this instance's model. Looked up by Mid (the model
-			// index) rather than by name, so no string hashing per frame.
+			// By Mid rather than by name, so no string hashing per frame.
 			const Material &m = materials.forModel(SC.TI[0].I[instanceId].Mid);
 			ubo.mS = m.specularColor;
 			ubo.roughness = m.roughness;

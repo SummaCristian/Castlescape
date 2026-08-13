@@ -1,54 +1,43 @@
 // ***** CUSTOM *****
 
-// The scene's light sources, loaded from assets/scenes/lights.json.
+// Owns the scene's light sources.
 //
-// L09 presents three types, and this file carries all three:
+// How it fits in:
+//   at startup   main.cpp calls init(), which reads assets/scenes/lights.json
+//                and turns each entry into a LightData
+//   every frame  main.cpp calls update(), gets the list back, copies it into
+//                the global uniform buffer, and the GPU sends it to the shader
 //
-//   direct  A source infinitely far away: one direction, one color, the same
-//           everywhere in the scene. The sun or the moon. No position, no decay.
-//   point   Emits from a position in all directions: lamps, bulbs, candles.
-//           Its direction varies from point to point (it always aims at the
-//           lamp), and its color falls off with distance.
-//   spot    A point light confined to a cone. Same position, same decay, plus
-//           an aim direction and two angles.
+// The shader never reads a file, and never sees this class. This is the only
+// path from lights.json to the screen.
 //
-// Decay, for point and spot (L09 slides 19-23). Physically the intensity falls
-// with the inverse square of the distance, which in a rendered image usually
-// comes out too dark, so the model exposes it as two authored numbers instead:
-//   g     the distance at which the light is exactly its stated color. Closer
-//         than g it is brighter, further it dims.
-//   beta  the falloff exponent: 0 constant, 1 inverse-linear, 2 the physically
-//         correct inverse-square.
-// The shader computes (g / |p - x|)^beta.
+// The three light types, all from L09:
+//   direct  infinitely far away, so one direction for the whole scene, and no
+//           fading with distance. The sun.
+//   point   sits at a position and shines in all directions, fading with
+//           distance. A lamp or a candle.
+//   spot    a point light restricted to a cone. Has an aim and two angles.
 //
-// A light's position can be given two ways: "position" for explicit world
-// coordinates, or "instance" plus "offset" to hang it off a scene.json instance,
-// which is what the two gate lanterns use. The second form is the one that
-// survives moving the lantern in scene.json: same idea as the authored collision
-// boxes, which follow their instance's world matrix rather than repeating its
-// coordinates.
+// The formulas are in notes.md.
 //
-// Same header-only "module" pattern as the rest of custom/, implementation
-// gated behind SCENELIGHTS_IMPLEMENTATION (defined once in Libs.cpp). Assumes
-// "modules/Starter.hpp" and "modules/Scene.hpp" are already included.
+// A light's position is either explicit world coordinates or "instance" plus
+// "offset", which hangs it off a scene.json instance so it survives moving that
+// instance. Same idea as the authored collision boxes.
+//
+// Header-only module like the rest of custom/, implementation gated behind
+// SCENELIGHTS_IMPLEMENTATION (defined once in Libs.cpp). Assumes
+// modules/Starter.hpp and modules/Scene.hpp are already included.
 
 #include <cmath>
 #include <fstream>
 #include <string>
 #include <vector>
 
-// MAX_LIGHTS and the LIGHT_* type tags. The very same file is included by
-// CookTorrance.frag, so there is one definition rather than two that have to be kept
-// in agreement by hand.
+// MAX_LIGHTS and LIGHT_*, the same file CookTorrance.frag includes.
 #include "custom/LightConstants.glsl"
 
-// One light, laid out to match the GLSL struct field for field.
-//
-// The vec3-then-float pairing is deliberate and is the same std140 idiom
-// already used for the material: a vec3 has 16-byte alignment and 12-byte size,
-// so a float placed right after it lands in the 4 bytes that would otherwise be
-// padding. Three pairs plus two trailing scalars come to 56 bytes, rounded up
-// to 64 by the struct's own 16-byte alignment, in GLSL and in C++ alike.
+// Matches the GLSL struct field for field. Each float after a vec3 fills the 4
+// bytes std140 would otherwise pad, so the struct is 64 bytes in both languages.
 struct LightData {
 	alignas(16) glm::vec3 pos;		// point/spot only
 	float g;						// decay reference distance
@@ -60,15 +49,8 @@ struct LightData {
 	int type;						// LIGHT_DIRECT / LIGHT_POINT / LIGHT_SPOT
 };
 
-// Hemispheric ambient light: the scene's indirect lighting (E07 slides 47-54).
-//
-// A constant ambient term says "some light arrives from everywhere, equally".
-// That is never true outdoors: a surface facing up sees the sky, one facing down
-// sees the ground, and those are different colors. This model is the cheapest
-// thing that captures it, two colors blended by the surface's orientation.
-//
-// It is what replaces the 0.015 constant the shader used to add. The project
-// rules require indirect lighting and say a constant term barely qualifies.
+// Hemispheric ambient, E07 s.47-54: the scene's indirect lighting, two colors
+// blended by which way a surface faces.
 struct AmbientLight {
 	glm::vec3 upper = glm::vec3(0.1f);				// sky color
 	glm::vec3 lower = glm::vec3(0.05f);				// ground color
@@ -77,31 +59,25 @@ struct AmbientLight {
 
 class SceneLights {
 	public:
-	// Reads `file` and resolves every light against the scene (an "instance"
-	// reference needs the instance's world matrix, so this must run after
-	// Scene::init).
+	// Must run after Scene::init: an "instance" reference needs its world matrix.
 	void init(Scene *SC, const std::string &file);
 
-	// Advances the animated lights by `deltaT` seconds and returns the list to
-	// upload. Only the orbit of a direct light is animated for now; everything
-	// else passes straight through.
+	// Advances the animated lights and returns the list to upload.
 	const std::vector<LightData> &update(float deltaT);
 
 	int count() const { return (int)lights.size(); }
 
-	// The scene's indirect lighting. Static, so it is read once rather than
-	// going through update().
+	// Not animated, so it skips update().
 	const AmbientLight &ambient() const { return ambientLight; }
 
 	private:
 	std::vector<LightData> lights;
 	AmbientLight ambientLight;
 
-	// Per-light animation state, index-matched with `lights`.
-	// Zero for everything that doesn't move, which is nearly everything.
+	// Animation state, index-matched with `lights`. Zero for anything static.
 	std::vector<float> orbitSpeed;	// degrees per second around world Y
 	std::vector<glm::vec3> baseDir;	// direction before any rotation
-	float orbitAngle = 0.0f;		// accumulated, shared by all orbiting lights
+	float orbitAngle = 0.0f;
 
 	static glm::vec3 readVec3(const nlohmann::json &js, const glm::vec3 &fallback);
 };
@@ -114,9 +90,8 @@ glm::vec3 SceneLights::readVec3(const nlohmann::json &js, const glm::vec3 &fallb
 				  << ", using the default\n";
 		return fallback;
 	}
-	// get<float>() rather than an implicit conversion, for the same reason as
-	// SceneColliders and SceneMaterials: glm::vec3 has several 3-argument
-	// constructors and the conversion can pick the wrong one.
+	// Explicit get<float>(), as in SceneMaterials: glm::vec3 has several 3-arg
+	// constructors and the implicit json conversion can pick the wrong one.
 	return glm::vec3(js[0].get<float>(), js[1].get<float>(), js[2].get<float>());
 }
 
@@ -171,9 +146,7 @@ void SceneLights::init(Scene *SC, const std::string &file) {
 		if(l.contains("g"))         L.g     = l["g"].get<float>();
 		if(l.contains("beta"))      L.beta  = l["beta"].get<float>();
 
-		// Position: either explicit world coordinates, or an instance to hang
-		// off. The instance form keeps the light attached to the model it comes
-		// out of, so moving the lantern in scene.json moves its flame with it.
+		// Explicit world coordinates, or an instance to hang off.
 		if(l.contains("position")) {
 			L.pos = readVec3(l["position"], L.pos);
 		} else if(l.contains("instance")) {
@@ -184,12 +157,9 @@ void SceneLights::init(Scene *SC, const std::string &file) {
 						  << "', light skipped\n";
 				continue;
 			}
-			// The instance's world matrix gives its origin; the offset is added
-			// in world units, not model-local ones. These models are Z-up and
-			// rotated 90 degrees on X by the scene, so a local offset would need
-			// the reader to keep that in mind for every number. World units are
-			// what the Show Coordinates HUD reads out, which is how these get
-			// tuned in the first place.
+			// Offset is in WORLD units, not model-local: these models are Z-up
+			// and rotated by the scene, and world units are what the Show
+			// Coordinates overlay reads out, which is how these get tuned.
 			glm::vec3 origin = glm::vec3(SC->I[it->second]->Wm[3]);
 			glm::vec3 offset = l.contains("offset") ? readVec3(l["offset"], glm::vec3(0.0f))
 													: glm::vec3(0.0f);
@@ -200,10 +170,9 @@ void SceneLights::init(Scene *SC, const std::string &file) {
 			continue;
 		}
 
-		// Cone angles are authored in degrees, as full angles, because that is
-		// how a lamp's beam width is normally described. The shader wants the
-		// cosine of the HALF angle (L09 slide 29), so the conversion happens
-		// here, once at load, rather than per fragment.
+		// Authored as FULL angles in degrees, the way a beam width is normally
+		// described. The shader wants the cosine of the half angle (L09 s.29),
+		// converted here once instead of per fragment.
 		if(L.type == LIGHT_SPOT) {
 			float innerDeg = l.value("innerAngle", 30.0f);
 			float outerDeg = l.value("outerAngle", 45.0f);
@@ -228,9 +197,8 @@ const std::vector<LightData> &SceneLights::update(float deltaT) {
 
 	for(size_t i = 0; i < lights.size(); i++) {
 		if(orbitSpeed[i] == 0.0f) continue;
-		// Turns the authored direction around the world up axis. This is what
-		// makes the sun cross the sky: the tilt is baked into the authored
-		// direction, the rotation only sweeps it around.
+		// The tilt is baked into the authored direction, this only sweeps it
+		// around world up. That's the sun crossing the sky.
 		glm::mat4 R = glm::rotate(glm::mat4(1.0f),
 								  glm::radians(orbitSpeed[i] * orbitAngle),
 								  glm::vec3(0.0f, 1.0f, 0.0f));
