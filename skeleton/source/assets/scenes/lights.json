@@ -26,16 +26,27 @@
 	},
 
 	"lights": [
-		// The sun. Direction is the way the light TRAVELS, so pointing down and
-		// towards -Z means it comes from the south-east and above. The vector is
-		// a 45-degree tilt, which orbitSpeed then sweeps around the world up
-		// axis at half a degree per second: a full day every 12 minutes.
+		// The sun. "direction" is the way the light TRAVELS, so this one comes
+		// from above and from the +Z side, which is what puts light on the face
+		// of the keep you see when you spawn.
+		//
+		// Parked high and still. It used to orbit (orbitSpeed -0.5, a full day
+		// every 12 minutes), but with no shadow mapping the sun keeps shining
+		// once it passes below the horizon, lighting everything from underneath.
+		// Setting orbitSpeed to 0 sidesteps that until either shadows exist or
+		// the scene is re-lit for evening.
+		//
+		// Roughly 55 degrees above the horizon rather than straight down: a sun
+		// at [0,-1,0] would leave every vertical wall in the castle with no
+		// direct light at all, since dot(N, L) would be 0 on all of them.
+		// The small X tilts it slightly off the scene's axis of symmetry, so the
+		// east and west towers aren't lit identically.
 		{
 			"id": "sun",
 			"type": "direct",
-			"direction": [0.0, -0.7071, -0.7071],
+			"direction": [0.25, -0.82, -0.52],
 			"color": [1.0, 0.98, 0.92],
-			"orbitSpeed": -0.5
+			"orbitSpeed": 0.0
 		},
 
 		// The two lanterns flanking the gate. The lantern mesh is 3.80 units
