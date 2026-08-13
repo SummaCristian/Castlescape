@@ -46,6 +46,11 @@ struct UniformBufferObject {
 struct GlobalUniformBufferObject {
 	alignas(16) glm::vec3 eyePos;
 	int lightCount;
+	// Hemispheric ambient: the scene's indirect lighting. Two colors and the
+	// axis they blend along. See AmbientLight in SceneLights.hpp.
+	alignas(16) glm::vec3 ambientUpper;
+	alignas(16) glm::vec3 ambientLower;
+	alignas(16) glm::vec3 ambientDir;
 	LightData lights[MAX_LIGHTS];
 };
 
@@ -453,6 +458,11 @@ class Skeleton26ReplaceName : public BaseProject {
 		for(int i = 0; i < gubo.lightCount; i++) {
 			gubo.lights[i] = lights[i];
 		}
+
+		const AmbientLight &amb = sceneLights.ambient();
+		gubo.ambientUpper = amb.upper;
+		gubo.ambientLower = amb.lower;
+		gubo.ambientDir = amb.dir;
 
 		gubo.eyePos = glm::vec3(glm::inverse(View)[3]);
 

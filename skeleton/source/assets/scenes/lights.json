@@ -11,6 +11,20 @@
 // Positions are world coordinates, and "instance" + "offset" hangs a light off a
 // scene.json instance instead of repeating its coordinates.
 {
+	// Indirect lighting, hemispheric (E07 slides 47-54): two colors blended by
+	// which way a surface faces. "upper" is what a surface pointing at the sky
+	// receives, "lower" what one pointing at the ground receives, "direction" is
+	// the axis they blend along, i.e. world up.
+	//
+	// Cool and dim above, warm and darker below: skylight is blue, bounce off a
+	// dirt courtyard is brown. Getting these two the same color would throw away
+	// the entire point of the model and leave a constant ambient term.
+	"ambient": {
+		"upper": [0.10, 0.13, 0.20],
+		"lower": [0.07, 0.055, 0.04],
+		"direction": [0.0, 1.0, 0.0]
+	},
+
 	"lights": [
 		// The sun. Direction is the way the light TRAVELS, so pointing down and
 		// towards -Z means it comes from the south-east and above. The vector is

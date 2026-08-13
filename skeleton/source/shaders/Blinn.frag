@@ -47,8 +47,35 @@ struct Light {
 layout(binding = 0, set = 0) uniform GlobalUniformBufferObject {
     vec3 eyePos;
     int lightCount;
+    vec3 ambientUpper;   // indirect light arriving from the sky
+    vec3 ambientLower;   // indirect light bounced off the ground
+    vec3 ambientDir;     // the axis the two blend along, i.e. world up
     Light lights[MAX_LIGHTS];
 } gubo;
+
+// Hemispheric ambient light, E07 slides 47-54. This is the scene's indirect
+// lighting: everything that reaches a surface without coming straight from a
+// source, which in a real room is most of it.
+//
+// A constant ambient term claims light arrives equally from every direction.
+// Outdoors that is plainly false: a surface facing up sees sky, one facing down
+// sees dirt, and the two are different colors. So the term is made to depend on
+// the normal, blending the two by the cosine of the angle with `ambientDir`.
+// Aligned with it gives pure sky, opposite gives pure ground, perpendicular
+// gives half of each.
+//
+// It costs one dot product and one mix over a constant, and it is what stops
+// surfaces facing away from every light from being flat black.
+vec3 hemisphericAmbient(vec3 N, vec3 mD) {
+    // dot() runs from -1 to 1, the weight has to run from 0 to 1.
+    float w = (dot(N, gubo.ambientDir) + 1.0) / 2.0;
+    vec3 lA = mix(gubo.ambientLower, gubo.ambientUpper, w);
+
+    // The ambient BRDF term is a constant, and for a diffuse surface that
+    // constant is its base color: indirect light is reflected the same way
+    // direct light is.
+    return lA * mD;
+}
 
 // Direction from the shaded point TOWARDS the light, `lx` in L09's notation.
 // For a direct light it is a constant: the source is infinitely far away, so
@@ -150,11 +177,6 @@ void main() {
             * BRDF(N, L, V, mD, ubo.mS, ubo.specPower);
     }
 
-    // Crude stand-in for indirect light: a constant times the base color. It is
-    // the simplest possible approximation of ambient lighting and it is meant to
-    // be replaced by the hemispheric term (E07) rather than kept.
-    vec3 ambient = 0.015 * mD;
-
-    vec3 color = toneMap(Lo + ambient);
+    vec3 color = toneMap(Lo + hemisphericAmbient(N, mD));
     outColor = vec4(pow(color, vec3(1.0 / 2.2)), 1.0);
 }

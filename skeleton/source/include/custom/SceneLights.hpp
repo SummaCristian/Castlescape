@@ -60,6 +60,21 @@ struct LightData {
 	int type;						// LIGHT_DIRECT / LIGHT_POINT / LIGHT_SPOT
 };
 
+// Hemispheric ambient light: the scene's indirect lighting (E07 slides 47-54).
+//
+// A constant ambient term says "some light arrives from everywhere, equally".
+// That is never true outdoors: a surface facing up sees the sky, one facing down
+// sees the ground, and those are different colors. This model is the cheapest
+// thing that captures it, two colors blended by the surface's orientation.
+//
+// It is what replaces the 0.015 constant the shader used to add. The project
+// rules require indirect lighting and say a constant term barely qualifies.
+struct AmbientLight {
+	glm::vec3 upper = glm::vec3(0.1f);				// sky color
+	glm::vec3 lower = glm::vec3(0.05f);				// ground color
+	glm::vec3 dir = glm::vec3(0.0f, 1.0f, 0.0f);	// which way "up" blends
+};
+
 class SceneLights {
 	public:
 	// Reads `file` and resolves every light against the scene (an "instance"
@@ -74,8 +89,13 @@ class SceneLights {
 
 	int count() const { return (int)lights.size(); }
 
+	// The scene's indirect lighting. Static, so it is read once rather than
+	// going through update().
+	const AmbientLight &ambient() const { return ambientLight; }
+
 	private:
 	std::vector<LightData> lights;
+	AmbientLight ambientLight;
 
 	// Per-light animation state, index-matched with `lights`.
 	// Zero for everything that doesn't move, which is nearly everything.
@@ -109,6 +129,13 @@ void SceneLights::init(Scene *SC, const std::string &file) {
 
 	// ignore_comments, like materials.json: these numbers need their notes.
 	nlohmann::json js = nlohmann::json::parse(ifs, nullptr, true, true);
+	if(js.contains("ambient")) {
+		const nlohmann::json &a = js["ambient"];
+		if(a.contains("upper"))     ambientLight.upper = readVec3(a["upper"], ambientLight.upper);
+		if(a.contains("lower"))     ambientLight.lower = readVec3(a["lower"], ambientLight.lower);
+		if(a.contains("direction")) ambientLight.dir = glm::normalize(readVec3(a["direction"], ambientLight.dir));
+	}
+
 	if(!js.contains("lights")) {
 		std::cout << "SceneLights: '" << file << "' has no \"lights\" array\n";
 		return;
