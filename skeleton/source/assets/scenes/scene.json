@@ -1,28 +1,28 @@
 {
 	"models": [
-		{"id": "floor", "VD": "VDposUV", "model": "assets/models/Plane.gltf",  "format":"GLTF", "collider": "AABB"},
+		{"id": "floor", "VD": "VDposNormUV", "model": "assets/models/Plane.gltf",  "format":"GLTF", "collider": "AABB"},
 
-		{"id": "castleWall01", "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Castle_Wall_01.mgcg", "format":"MGCG", "collider": "AABB"},
-		{"id": "castleWall02", "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Castle_Wall_02.mgcg", "format":"MGCG", "collider": "AABB"},
-		{"id": "castleTower",  "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Castle_Tower.mgcg",  "format":"MGCG", "collider": "AABB"},
-		{"id": "castleGate",   "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Castle_02.mgcg",     "format":"MGCG"},
-		{"id": "castleKeep",   "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Castle_01.mgcg",     "format":"MGCG", "collider": "AABB"},
-		{"id": "castleSteps",  "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Castle_Steps.mgcg",  "format":"MGCG"},
+		{"id": "castleWall01", "VD": "VDposNormUV", "model": "assets/models/Castle/SPW_Medieval_Castle_Wall_01.mgcg", "format":"MGCG", "collider": "AABB"},
+		{"id": "castleWall02", "VD": "VDposNormUV", "model": "assets/models/Castle/SPW_Medieval_Castle_Wall_02.mgcg", "format":"MGCG", "collider": "AABB"},
+		{"id": "castleTower",  "VD": "VDposNormUV", "model": "assets/models/Castle/SPW_Medieval_Castle_Tower.mgcg",  "format":"MGCG", "collider": "AABB"},
+		{"id": "castleGate",   "VD": "VDposNormUV", "model": "assets/models/Castle/SPW_Medieval_Castle_02.mgcg",     "format":"MGCG"},
+		{"id": "castleKeep",   "VD": "VDposNormUV", "model": "assets/models/Castle/SPW_Medieval_Castle_01.mgcg",     "format":"MGCG", "collider": "AABB"},
+		{"id": "castleSteps",  "VD": "VDposNormUV", "model": "assets/models/Castle/SPW_Medieval_Castle_Steps.mgcg",  "format":"MGCG"},
 
-		{"id": "road",   "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Road_01.mgcg", "format":"MGCG"},
-		{"id": "flag",   "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Flag.mgcg",    "format":"MGCG"},
-		{"id": "light",  "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Light.mgcg",   "format":"MGCG"},
-		{"id": "barrel", "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Barrel.mgcg",  "format":"MGCG"},
-		{"id": "box01",  "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Box_01.mgcg",  "format":"MGCG"},
-		{"id": "box02",  "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Box_02.mgcg",  "format":"MGCG"},
-		{"id": "box03",  "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Box_03.mgcg",  "format":"MGCG"}
+		{"id": "road",   "VD": "VDposNormUV", "model": "assets/models/Castle/SPW_Medieval_Road_01.mgcg", "format":"MGCG"},
+		{"id": "flag",   "VD": "VDposNormUV", "model": "assets/models/Castle/SPW_Medieval_Flag.mgcg",    "format":"MGCG"},
+		{"id": "light",  "VD": "VDposNormUV", "model": "assets/models/Castle/SPW_Medieval_Light.mgcg",   "format":"MGCG"},
+		{"id": "barrel", "VD": "VDposNormUV", "model": "assets/models/Castle/SPW_Medieval_Barrel.mgcg",  "format":"MGCG"},
+		{"id": "box01",  "VD": "VDposNormUV", "model": "assets/models/Castle/SPW_Medieval_Box_01.mgcg",  "format":"MGCG"},
+		{"id": "box02",  "VD": "VDposNormUV", "model": "assets/models/Castle/SPW_Medieval_Box_02.mgcg",  "format":"MGCG"},
+		{"id": "box03",  "VD": "VDposNormUV", "model": "assets/models/Castle/SPW_Medieval_Box_03.mgcg",  "format":"MGCG"}
 	],
 	"textures": [
 		{"id": "tex",          "texture": "assets/textures/toChange.jpg",         "format": "C"},
 		{"id": "medievalTex",  "texture": "assets/textures/Castle/SPW_Medieval.png", "format": "C"}
 	],
 	"instances": [
-		{"technique": "BlinnPos", "elements": [
+		{"technique": "Blinn", "elements": [
 			{"id": "floor", "model": "floor", "texture": ["tex"], "scale": [100.0, 100.0, 100.0]},
 
 			{"id": "towerNW", "model": "castleTower", "texture": ["medievalTex"], "translate": [-21.0, 0.0, -16.0], "eulerAngles": [90.0, 0.0, 0.0]},

@@ -17,6 +17,11 @@
 struct UniformBufferObject {
 	alignas(16) glm::mat4 mvpMat;
 	alignas(16) glm::mat4 mMat;
+	// Normal matrix: inverse-transpose of mMat. Normals can't be transformed by the
+	// world matrix like positions are, or any non-uniform scale tilts them off the
+	// surface (this scene has one: the road instance is scaled [1,4,1]). Passed in
+	// as a mat4 for the std140 alignment rules, used as its upper-left mat3.
+	alignas(16) glm::mat4 nMat;
 };
 
 struct GlobalUniformBufferObject {
@@ -25,8 +30,15 @@ struct GlobalUniformBufferObject {
 	alignas(16) glm::vec3 eyePos;
 };
 
+// Vertex format "VDposNormUV": position, normal, UV.
+// The normal is what the skeleton's starting format lacked: without it the fragment
+// shader had to rebuild one per-fragment out of the position derivatives
+// (cross(dFdx, dFdy)), which is a *face* normal, so every mesh rendered faceted no
+// matter how it was authored. The MGCG/glTF files already carry per-vertex normals;
+// Starter.hpp copies them in automatically as soon as the layout below declares one.
 struct Vertex {
 	glm::vec3 pos;
+	glm::vec3 norm;
 	glm::vec2 UV;
 };
 
@@ -217,7 +229,9 @@ class Skeleton26ReplaceName : public BaseProject {
 				}, {
 				  {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, pos),
 				         sizeof(glm::vec3), POSITION},
-				  {0, 1, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, UV),
+				  {0, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, norm),
+				         sizeof(glm::vec3), NORMAL},
+				  {0, 2, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, UV),
 				         sizeof(glm::vec2), UV}
 				});
 
@@ -230,8 +244,8 @@ class Skeleton26ReplaceName : public BaseProject {
 		// The last array, is a vector of pointer to the layouts of the sets that will
 		// be used in this pipeline. The first element will be set 0, and so on..
 		
-		P.init(this, &VD, "shaders/toChangeSimplePos.vert.spv",
-						  "shaders/toChangeBlinnFromPos.frag.spv",
+		P.init(this, &VD, "shaders/PosNormUV.vert.spv",
+						  "shaders/Blinn.frag.spv",
 						  {&DSLglobal, &DSLlocal});
 
 
@@ -242,10 +256,10 @@ class Skeleton26ReplaceName : public BaseProject {
 
 		// to support scene
 		VDRs.resize(1);
-		VDRs[0].init("VDposUV",  &VD);
+		VDRs[0].init("VDposNormUV",  &VD);
 
 		PRs.resize(1);
-		PRs[0].init("BlinnPos", {
+		PRs[0].init("Blinn", {
 							{&P, {//Pipeline and DSL for the main pass
 							 /*DSLglobal*/{},
 							 /*DSLlocal*/{
@@ -408,6 +422,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		for(instanceId = 0; instanceId < SC.TI[0].InstanceCount; instanceId++) {
 			ubo.mMat = SC.TI[0].I[instanceId].Wm;
 			ubo.mvpMat = ViewPrj * ubo.mMat;
+			ubo.nMat = glm::inverse(glm::transpose(ubo.mMat));
 			
 			// DS[1] = Pchar pass (main render): set0=DSLglobal, set1=DSLlocal
 			SC.TI[0].I[instanceId].DS[0][0]->map(currentImage, &gubo, 0); // global (light/camera)
