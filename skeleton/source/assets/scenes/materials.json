@@ -1,0 +1,58 @@
+// Per-model BRDF parameters, for the Cook-Torrance model (E06 slides 38-47).
+// See include/custom/SceneMaterials.hpp for how they reach the shader.
+//
+//   specularColor (mS)  color of the highlight. White for every dielectric:
+//                       the highlight takes the color of the lamp, not of the
+//                       object. Tinted only for metals (E06/L09 slide 69).
+//   roughness (rho)     width of the microfacet distribution. 0 is a mirror,
+//                       1 is completely matte. This is the knob you actually
+//                       tune, and unlike the old specular exponent it has a
+//                       scale you can reason about by looking at the object.
+//   F0                  fraction reflected when looking straight down at the
+//                       surface. It is ~0.04 for essentially EVERY dielectric,
+//                       so it is copied, not chosen. Metals are far higher.
+//   k                   diffuse share of the BRDF, specular gets (1 - k).
+//                       High for dielectrics, low for metals, which have almost
+//                       no diffuse component at all.
+//
+// Anything not listed here gets "default".
+{
+	"default": { "specularColor": [1.0, 1.0, 1.0], "roughness": 0.6, "F0": 0.04, "k": 0.9 },
+
+	"models": {
+		// Ground. Dry dirt and cobbles: about as rough as a surface gets, and
+		// almost purely diffuse.
+		"floor": { "roughness": 0.92, "F0": 0.04, "k": 0.96 },
+		"road":  { "roughness": 0.92, "F0": 0.04, "k": 0.96 },
+
+		// Castle stone. Rough, but not as much as bare earth: enough of a sheen
+		// left to pick out the curvature of the towers.
+		"castleWall01": { "roughness": 0.78, "F0": 0.04, "k": 0.93 },
+		"castleWall02": { "roughness": 0.78, "F0": 0.04, "k": 0.93 },
+		"castleTower":  { "roughness": 0.78, "F0": 0.04, "k": 0.93 },
+		"castleGate":   { "roughness": 0.78, "F0": 0.04, "k": 0.93 },
+		"castleKeep":   { "roughness": 0.78, "F0": 0.04, "k": 0.93 },
+		// flatNormals: this mesh averages its vertex normals across the hard
+		// edges of every tread and riser, so each face shades with a gradient
+		// across it instead of one value, and the whole flight looks smeared.
+		// With the flag on, the shader derives the face's own normal. Only set
+		// where the geometry really is hard-edged: the towers are cylinders and
+		// want the averaged normals they came with.
+		"castleSteps":  { "roughness": 0.78, "F0": 0.04, "k": 0.93, "flatNormals": true },
+
+		// Wood. Old varnish, so smoother than stone and a touch more reflective.
+		"barrel": { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
+		"box01":  { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
+		"box02":  { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
+		"box03":  { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
+
+		// Cloth. Very rough and essentially all diffuse.
+		"flag": { "roughness": 0.95, "F0": 0.03, "k": 0.97 },
+
+		// The gate lanterns, in brass. This is the entry that shows what these
+		// parameters are for: a metal has no meaningful diffuse component (low
+		// k), reflects strongly even head-on (high F0), and tints its highlight
+		// with its own color instead of the lamp's (mS is not white).
+		"light": { "specularColor": [0.95, 0.78, 0.42], "roughness": 0.32, "F0": 0.65, "k": 0.15 }
+	}
+}

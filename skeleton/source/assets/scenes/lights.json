@@ -1,0 +1,100 @@
+// The scene's light sources. See include/custom/SceneLights.hpp for the three
+// types and what every field means.
+//
+//   direct   direction + color. No position, no decay.
+//   point    position + color + decay (g, beta).
+//   spot     a point light plus an aim direction and two cone angles.
+//
+//   g        distance at which the light is exactly its stated color
+//   beta     falloff exponent: 0 constant, 1 inverse-linear, 2 inverse-square
+//
+// Positions are world coordinates, and "instance" + "offset" hangs a light off a
+// scene.json instance instead of repeating its coordinates.
+{
+	// Indirect lighting, hemispheric (E07 slides 47-54): two colors blended by
+	// which way a surface faces. "upper" is what a surface pointing at the sky
+	// receives, "lower" what one pointing at the ground receives, "direction" is
+	// the axis they blend along, i.e. world up.
+	//
+	// Cool and dim above, warm and darker below: skylight is blue, bounce off a
+	// dirt courtyard is brown. Getting these two the same color would throw away
+	// the entire point of the model and leave a constant ambient term.
+	"ambient": {
+		"upper": [0.10, 0.13, 0.20],
+		"lower": [0.07, 0.055, 0.04],
+		"direction": [0.0, 1.0, 0.0]
+	},
+
+	"lights": [
+		// The sun. "direction" is the way the light TRAVELS, so this one comes
+		// from above and from the +Z side, which is what puts light on the face
+		// of the keep you see when you spawn.
+		//
+		// Parked high and still. It used to orbit (orbitSpeed -0.5, a full day
+		// every 12 minutes), but with no shadow mapping the sun keeps shining
+		// once it passes below the horizon, lighting everything from underneath.
+		// Setting orbitSpeed to 0 sidesteps that until either shadows exist or
+		// the scene is re-lit for evening.
+		//
+		// Roughly 55 degrees above the horizon rather than straight down: a sun
+		// at [0,-1,0] would leave every vertical wall in the castle with no
+		// direct light at all, since dot(N, L) would be 0 on all of them.
+		// The small X tilts it slightly off the scene's axis of symmetry, so the
+		// east and west towers aren't lit identically.
+		{
+			"id": "sun",
+			"type": "direct",
+			"direction": [0.25, -0.82, -0.52],
+			"color": [1.0, 0.98, 0.92],
+			"orbitSpeed": 0.0
+		},
+
+		// The two lanterns flanking the gate. The lantern mesh is 3.80 units
+		// tall (measured off its auto-fit box), so 3.5 puts the light in the
+		// lamp head rather than at the foot of the post. Offsets are in world
+		// units and the instances sit at y = 0, so this reads directly.
+		//
+		// Warm colour, because a flame is not white. g = 5 means the light is at
+		// full strength 5 units out and dims past that; beta = 1.4 sits between
+		// inverse-linear and inverse-square, the usual compromise from L09 slide
+		// 21 (the physically correct 2 goes too dark with no indirect light).
+		{
+			"id": "lanternGateL",
+			"type": "point",
+			"instance": "lightGateL",
+			"offset": [0.0, 3.5, 0.0],
+			"color": [1.0, 0.72, 0.36],
+			"g": 5.0,
+			"beta": 1.4
+		},
+		{
+			"id": "lanternGateR",
+			"type": "point",
+			"instance": "lightGateR",
+			"offset": [0.0, 3.5, 0.0],
+			"color": [1.0, 0.72, 0.36],
+			"g": 5.0,
+			"beta": 1.4
+		},
+
+		// A spotlight on the keep's facade, mounted high on the north wall and
+		// aimed down into the courtyard. Its job here is to exercise the third
+		// light type: it is the only source in the scene with a visible edge to
+		// its pool of light, which is what makes a spot recognisable at a glance.
+		// Move it or drop it freely, nothing else depends on it.
+		//
+		// The cone angles are full angles in degrees: light is at full strength
+		// inside 34 degrees and fades to nothing by 60.
+		{
+			"id": "courtyardSpot",
+			"type": "spot",
+			"position": [0.0, 13.0, 4.0],
+			"direction": [0.0, -1.0, 0.35],
+			"color": [0.85, 0.88, 1.0],
+			"g": 12.0,
+			"beta": 1.2,
+			"innerAngle": 34.0,
+			"outerAngle": 60.0
+		}
+	]
+}

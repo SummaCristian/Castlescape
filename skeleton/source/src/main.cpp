@@ -12,21 +12,68 @@
 #include "custom/UiQuad.hpp"
 #include "custom/CheatHud.hpp"
 #include "custom/SceneColliders.hpp"
+#include "custom/SceneMaterials.hpp"
+#include "custom/SceneLights.hpp"
+
+// Our own files, and where to start reading.
+//
+//   custom/SceneColliders.hpp   the boxes and ramps the player walks into
+//   custom/SceneMaterials.hpp   what each surface is made of
+//   custom/SceneLights.hpp      the scene's lights
+//   custom/UiQuad.hpp           coloured rectangles for the HUD
+//   custom/CheatHud.hpp         the cheat menu, opened with L
+//
+// Each of the first three reads its own data file from assets/scenes/ at
+// startup, so the scene can be changed without touching C++:
+//
+//   scene.json      which models exist and where they are placed
+//   colliders.json  hand-authored collision shapes for models an auto-fitted
+//                   box gets wrong, like the gate's archway
+//   materials.json  surface parameters, one entry per model
+//   lights.json     the light sources and the ambient light
+//
+// The shaders are in source/shaders/. PosNormUV.vert and CookTorrance.frag are
+// the pair that draws the scene; the other two draw the HUD.
+//
+// notes.md at the repo root explains the reasoning behind all of it.
 
 // The uniform buffer object used in this example
 struct UniformBufferObject {
 	alignas(16) glm::mat4 mvpMat;
 	alignas(16) glm::mat4 mMat;
+	// inverse-transpose of mMat. Normals can't ride the world matrix or a
+	// non-uniform scale tilts them off the surface (the road is scaled [1,4,1]).
+	// A mat4 rather than a mat3 to avoid std140's column-padding rules.
+	alignas(16) glm::mat4 nMat;
+	// Cook-Torrance material. mD isn't here, it's the albedo texture.
+	// Must match the GLSL block field for field; the floats after the vec3 fill
+	// std140's padding, so no explicit padding of ours is needed.
+	alignas(16) glm::vec3 mS;	// specular color
+	float roughness;			// rho: width of the microfacet distribution
+	float F0;					// reflectance seen head-on
+	float k;					// diffuse share of the BRDF
+	int flatNormals;			// 1: derive the face normal in the shader
 };
 
+// Everything that's the same for every object drawn this frame. Split from the
+// per-instance UBO by change frequency: this is written once, that one 23 times.
+// Fixed-size light array plus a live count, since a uniform block needs a
+// compile-time size.
 struct GlobalUniformBufferObject {
-	alignas(16) glm::vec3 lightDir;
-	alignas(16) glm::vec4 lightColor;
 	alignas(16) glm::vec3 eyePos;
+	int lightCount;
+	// Hemispheric ambient. See AmbientLight in SceneLights.hpp.
+	alignas(16) glm::vec3 ambientUpper;
+	alignas(16) glm::vec3 ambientLower;
+	alignas(16) glm::vec3 ambientDir;
+	LightData lights[MAX_LIGHTS];
 };
 
+// Vertex format "VDposNormUV". Starter.hpp fills the normal from the glTF/MGCG
+// file automatically once the layout declares one.
 struct Vertex {
 	glm::vec3 pos;
+	glm::vec3 norm;
 	glm::vec2 UV;
 };
 
@@ -88,6 +135,14 @@ class Skeleton26ReplaceName : public BaseProject {
 	// Owns the hand-authored collision geometry loaded from assets/scenes/colliders.json
 	// and merges it with the colliders scene.json built.
 	SceneColliders colliderSet;
+
+	// Per-model BRDF parameters (specular color, roughness, F0, k), loaded from
+	// assets/scenes/materials.json. See SceneMaterials.hpp.
+	SceneMaterials materials;
+
+	// The scene's light sources (direct, point and spot), loaded from
+	// assets/scenes/lights.json. See SceneLights.hpp.
+	SceneLights sceneLights;
 
 	// Flat list of every collider gameplay collides against, taken from colliderSet
 	// once the scene has loaded. Kept as its own member so the per-frame collision
@@ -202,7 +257,9 @@ class Skeleton26ReplaceName : public BaseProject {
 					// first  element : the binding number
 					// second element : the type of element (buffer or texture)
 					// third  element : the pipeline stage where it will be used
-					{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, sizeof(UniformBufferObject), 1},
+					// ALL_GRAPHICS, not VERTEX_BIT: this buffer carries the
+					// material too, which the fragment shader reads.
+					{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_ALL_GRAPHICS, sizeof(UniformBufferObject), 1},
 					{1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 1}
 				  });
 		DSLglobal.init(this, {
@@ -217,7 +274,9 @@ class Skeleton26ReplaceName : public BaseProject {
 				}, {
 				  {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, pos),
 				         sizeof(glm::vec3), POSITION},
-				  {0, 1, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, UV),
+				  {0, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, norm),
+				         sizeof(glm::vec3), NORMAL},
+				  {0, 2, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, UV),
 				         sizeof(glm::vec2), UV}
 				});
 
@@ -230,8 +289,8 @@ class Skeleton26ReplaceName : public BaseProject {
 		// The last array, is a vector of pointer to the layouts of the sets that will
 		// be used in this pipeline. The first element will be set 0, and so on..
 		
-		P.init(this, &VD, "shaders/toChangeSimplePos.vert.spv",
-						  "shaders/toChangeBlinnFromPos.frag.spv",
+		P.init(this, &VD, "shaders/PosNormUV.vert.spv",
+						  "shaders/CookTorrance.frag.spv",
 						  {&DSLglobal, &DSLlocal});
 
 
@@ -242,10 +301,10 @@ class Skeleton26ReplaceName : public BaseProject {
 
 		// to support scene
 		VDRs.resize(1);
-		VDRs[0].init("VDposUV",  &VD);
+		VDRs[0].init("VDposNormUV",  &VD);
 
 		PRs.resize(1);
-		PRs[0].init("BlinnPos", {
+		PRs[0].init("CookTorrance", {
 							{&P, {//Pipeline and DSL for the main pass
 							 /*DSLglobal*/{},
 							 /*DSLlocal*/{
@@ -274,6 +333,13 @@ class Skeleton26ReplaceName : public BaseProject {
 		// data file instead of scene.json or here.
 		colliderSet.init(&SC, "assets/scenes/colliders.json");
 		allColliders = colliderSet.list();
+
+		// Surface parameters for the BRDF, one per model.
+		materials.init(&SC, "assets/scenes/materials.json");
+
+		// After Scene::init: a light can be anchored to an instance and needs
+		// that instance's world matrix.
+		sceneLights.init(&SC, "assets/scenes/lights.json");
 
 		// initializes the textual output
 		txt.init(this, windowWidth, windowHeight);
@@ -385,17 +451,22 @@ class Skeleton26ReplaceName : public BaseProject {
 		float deltaT = GameLogic();
 		
 		// defines the global parameters for the uniform
-		static float lightRotationAngle = 0.0f; // Static variable to keep track of rotation
-		lightRotationAngle += -0.5f * deltaT; // Increment rotation angle based on time
-
-		const glm::mat4 lightView = glm::rotate(glm::mat4(1), glm::radians(lightRotationAngle), glm::vec3(0.0f, 1.0f, 0.0f)) * 
-									glm::rotate(glm::mat4(1), glm::radians(-45.0f), glm::vec3(1.0f, 0.0f, 0.0f));
-		const glm::vec3 lightDir =  glm::vec3(lightView * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f));
-
 		GlobalUniformBufferObject gubo{};
 
-		gubo.lightDir = lightDir;
-		gubo.lightColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f)*5.0f;
+		// Every light comes from lights.json, sun included. No intensity factor:
+		// with a BRDF returning [0,1] (L09 s.42) a white source is (1,1,1) and
+		// the tone map handles the range. Strength is g and beta instead.
+		const std::vector<LightData> &lights = sceneLights.update(deltaT);
+		gubo.lightCount = (int)lights.size();
+		for(int i = 0; i < gubo.lightCount; i++) {
+			gubo.lights[i] = lights[i];
+		}
+
+		const AmbientLight &amb = sceneLights.ambient();
+		gubo.ambientUpper = amb.upper;
+		gubo.ambientLower = amb.lower;
+		gubo.ambientDir = amb.dir;
+
 		gubo.eyePos = glm::vec3(glm::inverse(View)[3]);
 
 		DSglobal.map(currentImage, &gubo, 0);
@@ -408,6 +479,15 @@ class Skeleton26ReplaceName : public BaseProject {
 		for(instanceId = 0; instanceId < SC.TI[0].InstanceCount; instanceId++) {
 			ubo.mMat = SC.TI[0].I[instanceId].Wm;
 			ubo.mvpMat = ViewPrj * ubo.mMat;
+			ubo.nMat = glm::inverse(glm::transpose(ubo.mMat));
+
+			// By Mid rather than by name, so no string hashing per frame.
+			const Material &m = materials.forModel(SC.TI[0].I[instanceId].Mid);
+			ubo.mS = m.specularColor;
+			ubo.roughness = m.roughness;
+			ubo.F0 = m.F0;
+			ubo.k = m.k;
+			ubo.flatNormals = m.flatNormals;
 			
 			// DS[1] = Pchar pass (main render): set0=DSLglobal, set1=DSLlocal
 			SC.TI[0].I[instanceId].DS[0][0]->map(currentImage, &gubo, 0); // global (light/camera)
@@ -619,6 +699,7 @@ class Skeleton26ReplaceName : public BaseProject {
 						}
 					}
 				}
+
 			}
 
 			// Jump: spacebar (wired to "fire" in Starter.hpp) gives the camera an upward
