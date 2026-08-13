@@ -86,25 +86,39 @@ struct CheatHud {
 	static constexpr float LINE_GAP = 8.0f;
 	// Text scale (TextMaker::print's sx/sy). Kept close to the font's native
 	// size (1.0), small and tight rather than the panel dominating the screen.
+	// These are the sizes ASKED for; what actually gets drawn is titleScale/
+	// rowScale below, which may be smaller. See computeLayout().
 	static constexpr float TITLE_SCALE = 1.0f;
 	static constexpr float ROW_SCALE = 0.85f;
+	// Floor for that shrinking. Past this the font stops being readable, so
+	// the panel is allowed to run off the bottom instead: a menu you can't
+	// read is no better than one you can't see all of.
+	static constexpr float MIN_FIT_SCALE = 0.4f;
 
 	// Text-block ids handed to TextMaker::print/removeText. Start well past
 	// the FPS counter's id (1) so the two can never collide.
 	static constexpr int TITLE_TEXT_ID = 100;
 	static constexpr int FIRST_ROW_TEXT_ID = 101;
 
-	// Panel width and per-row heights, in pixels. Computed once from the
-	// actual rendered text size (via TextMaker::measureText) instead of
-	// guessed constants, so the panel always fits its content exactly, even
-	// after changing the font scale or a label. Populated lazily by
-	// computeLayout() on first render.
+	// Panel width, per-row heights and the text scales actually used, all in
+	// pixels. Computed from the real rendered text size (via
+	// TextMaker::measureText) instead of guessed constants, so the panel fits
+	// its content exactly even after changing the font scale or a label.
+	// Populated lazily by computeLayout(), and invalidated on a resize, since
+	// how much room there is to fit into is part of what it computes.
 	bool layoutComputed = false;
 	float panelWidth = 0.0f;
 	float titleRowHeight = 0.0f;
 	float rowHeight = 0.0f;
+	float titleScale = TITLE_SCALE;
+	float rowScale = ROW_SCALE;
 
-	void computeLayout();
+	// screenH: the panel shrinks itself to fit inside it. The row list grows
+	// every time a cheat is added and the window is only 600px tall by
+	// default, so at some point a fixed row size runs off the bottom, taking
+	// the rows with it (there is no scrolling, and a row you can't see is a
+	// row you can't click).
+	void computeLayout(int screenH);
 	// Width/height, in pixels, of "s" as TextMaker would render it at the
 	// given fontId/scale. fontId must match the same (FontFace, Bold,
 	// Italic, Small) combination passed to the corresponding print() call.
@@ -151,6 +165,9 @@ void CheatHud::update(GLFWwindow *window, int screenW, int screenH) {
 	if(screenW != lastScreenW || screenH != lastScreenH) {
 		lastScreenW = screenW;
 		lastScreenH = screenH;
+		// The cached layout is only valid for the height it was fitted to
+		// (see computeLayout), so a resize throws it away as well.
+		layoutComputed = false;
 		dirty = true;
 	}
 
@@ -244,7 +261,7 @@ float CheatHud::measureTextHeight(int fontId, float scale) const {
 	return (float)h * scale;
 }
 
-void CheatHud::computeLayout() {
+void CheatHud::computeLayout(int screenH) {
 	if(layoutComputed) {
 		return;
 	}
@@ -258,23 +275,42 @@ void CheatHud::computeLayout() {
 	const int rowFontId = 8 + 2;
 	const int stateFontId = 8;
 
-	float maxContentWidth = measureTextWidth("CHEATS (L to close)", titleFontId, TITLE_SCALE);
-	float stateWidth = std::max(measureTextWidth("[ON]", stateFontId, ROW_SCALE),
-								 measureTextWidth("[OFF]", stateFontId, ROW_SCALE));
+	// Heights at the asked-for scales first, since whether they fit is exactly
+	// the question. The panel is anchored at PANEL_Y and given the same margin
+	// at the bottom, so that is twice PANEL_Y gone before any content.
+	float titleH = measureTextHeight(titleFontId, TITLE_SCALE) + LINE_GAP;
+	float rowH = measureTextHeight(rowFontId, ROW_SCALE) + LINE_GAP;
+	float contentH = titleH + rowH * (float)options.size();
+	float availableH = (float)screenH - PANEL_Y * 2.0f - PADDING * 2.0f;
+
+	// One factor for text and row heights alike, so the panel shrinks as a
+	// whole and keeps its proportions instead of squeezing the rows onto text
+	// that stayed big. PADDING is left alone, it's a margin, not content.
+	float fit = 1.0f;
+	if(contentH > availableH && contentH > 0.0f) {
+		fit = std::max(availableH / contentH, MIN_FIT_SCALE);
+	}
+	titleScale = TITLE_SCALE * fit;
+	rowScale = ROW_SCALE * fit;
+	titleRowHeight = titleH * fit;
+	rowHeight = rowH * fit;
+
+	// Width is measured at the fitted scales, so a shrunk panel is narrower
+	// too rather than a short list of tiny text in a full-width box.
+	float maxContentWidth = measureTextWidth("CHEATS (L to close)", titleFontId, titleScale);
+	float stateWidth = std::max(measureTextWidth("[ON]", stateFontId, rowScale),
+								 measureTextWidth("[OFF]", stateFontId, rowScale));
 	for(const auto &opt : options) {
-		float rowWidth = measureTextWidth(opt.label, rowFontId, ROW_SCALE) + LABEL_STATE_GAP + stateWidth;
+		float rowWidth = measureTextWidth(opt.label, rowFontId, rowScale) + LABEL_STATE_GAP + stateWidth;
 		maxContentWidth = std::max(maxContentWidth, rowWidth);
 	}
 	panelWidth = maxContentWidth + PADDING * 2.0f;
-
-	titleRowHeight = measureTextHeight(titleFontId, TITLE_SCALE) + LINE_GAP;
-	rowHeight = measureTextHeight(rowFontId, ROW_SCALE) + LINE_GAP;
 
 	layoutComputed = true;
 }
 
 void CheatHud::renderRows(int screenW, int screenH) {
-	computeLayout();
+	computeLayout(screenH);
 
 	float ax, ay;
 
@@ -295,7 +331,7 @@ void CheatHud::renderRows(int screenW, int screenH) {
 	txt->print(ax, ay, "CHEATS (L to close)", TITLE_TEXT_ID, "SS", false, true, false,
 			   TAL_LEFT, TRH_LEFT, TRV_TOP,
 			   {1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 0.0f},
-			   TITLE_SCALE, TITLE_SCALE);
+			   titleScale, titleScale);
 
 	for(int i = 0; i < (int)options.size(); i++) {
 		bool selected = (i == selectedIndex);
@@ -308,7 +344,7 @@ void CheatHud::renderRows(int screenW, int screenH) {
 										 : glm::vec4(0.85f, 0.85f, 0.85f, 1.0f);
 		txt->print(ax, ay, options[i].label, FIRST_ROW_TEXT_ID + i, "SS", false, selected, false,
 				   TAL_LEFT, TRH_LEFT, TRV_TOP, labelColor,
-				   {0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, ROW_SCALE, ROW_SCALE);
+				   {0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, rowScale, rowScale);
 
 		// ON/OFF state, right-aligned to the panel's (padded) right edge.
 		pixelToAnchor(PANEL_X + panelWidth - PADDING, top, screenW, screenH, ax, ay);
@@ -316,7 +352,7 @@ void CheatHud::renderRows(int screenW, int screenH) {
 		txt->print(ax, ay, enabled ? "[ON]" : "[OFF]", FIRST_ROW_TEXT_ID + (int)options.size() + i,
 				   "SS", false, false, false,
 				   TAL_RIGHT, TRH_RIGHT, TRV_TOP, stateColor,
-				   {0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, ROW_SCALE, ROW_SCALE);
+				   {0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, rowScale, rowScale);
 	}
 }
 

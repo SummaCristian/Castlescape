@@ -62,22 +62,64 @@ class SceneLights {
 	// Must run after Scene::init: an "instance" reference needs its world matrix.
 	void init(Scene *SC, const std::string &file);
 
-	// Advances the animated lights and returns the list to upload.
+	// Advances the animated lights and returns the list to upload. Only the
+	// lights whose type is enabled below come back, so lights.json stays the
+	// single source of truth and the switches never edit it.
 	const std::vector<LightData> &update(float deltaT);
 
-	int count() const { return (int)lights.size(); }
+	// How many lights the last update() handed over, i.e. after the type
+	// switches dropped what they drop. The authored total is what init()
+	// prints at startup.
+	int count() const { return (int)activeLights.size(); }
 
-	// Not animated, so it skips update().
-	const AmbientLight &ambient() const { return ambientLight; }
+	// Not animated, so it skips update(). By value rather than by reference
+	// because with ambientEnabled off there is no stored object to point at:
+	// the black one is built here on the spot.
+	AmbientLight ambient() const;
+
+	// Debug switches, wired to the cheat menu in main.cpp, which flips these
+	// bools in place. Public because that is the whole interface: the HUD holds
+	// a bool* and there is nothing to recompute when one changes.
+	//
+	// One per light TYPE rather than per light: the point is answering "is this
+	// the sun or a lantern doing that?", and the scene has one sun, two matched
+	// lanterns and one spot, so per-light switches would only add rows.
+	bool directEnabled = true;	// the sun
+	bool pointEnabled = true;	// the gate lanterns
+	bool spotEnabled = true;	// the courtyard spot
+	// The hemispheric ambient. Off means the only light in the scene is what
+	// the sources above put there, which is how you tell an unlit surface from
+	// one that is merely dim.
+	bool ambientEnabled = true;
+
+	// Forces an orbit onto the directional lights that were authored static
+	// (orbitSpeed 0, which is every one of them right now, see lights.json).
+	// Sweeping the sun around is the fastest way to see how the whole scene
+	// reacts to an incidence angle, so it is worth a switch even though the
+	// authored scene deliberately parks the sun. Lights WITH an authored
+	// orbitSpeed ignore this and keep running at their own speed either way.
+	bool orbitOverride = false;
 
 	private:
 	std::vector<LightData> lights;
+	// Filtered copy of `lights` handed to the caller, rebuilt every update().
+	// A member rather than a local so update() can keep returning a reference.
+	std::vector<LightData> activeLights;
 	AmbientLight ambientLight;
 
 	// Animation state, index-matched with `lights`. Zero for anything static.
 	std::vector<float> orbitSpeed;	// degrees per second around world Y
 	std::vector<glm::vec3> baseDir;	// direction before any rotation
 	float orbitAngle = 0.0f;
+
+	// Degrees per second used by orbitOverride. Far faster than a plausible
+	// day/night cycle (a full turn every 24s): this is meant for looking at the
+	// scene from every sun angle in a few seconds, not for looking natural.
+	static constexpr float DEBUG_ORBIT_SPEED = -15.0f;
+	// Angle for the override only, so switching it on starts the sweep from the
+	// authored direction instead of jumping to wherever a shared clock had got
+	// to, and switching it off puts the sun back where lights.json wants it.
+	float debugOrbitAngle = 0.0f;
 
 	static glm::vec3 readVec3(const nlohmann::json &js, const glm::vec3 &fallback);
 };
@@ -192,20 +234,60 @@ void SceneLights::init(Scene *SC, const std::string &file) {
 	std::cout << "SceneLights: " << lights.size() << " lights loaded\n";
 }
 
+AmbientLight SceneLights::ambient() const {
+	if(!ambientEnabled) {
+		// Both colors black leaves the blend between them black too, whatever
+		// way a surface faces, so the shader needs no switch of its own. dir is
+		// carried over anyway rather than zeroed: a null blend axis would be a
+		// degenerate value to hand a shader that normalizes nothing.
+		return AmbientLight{glm::vec3(0.0f), glm::vec3(0.0f), ambientLight.dir};
+	}
+	return ambientLight;
+}
+
 const std::vector<LightData> &SceneLights::update(float deltaT) {
 	orbitAngle += deltaT;
+	// Only ticks while the override is on, and rewinds when it goes off.
+	debugOrbitAngle = orbitOverride ? debugOrbitAngle + deltaT : 0.0f;
 
 	for(size_t i = 0; i < lights.size(); i++) {
-		if(orbitSpeed[i] == 0.0f) continue;
+		float speed = orbitSpeed[i];
+		float angle = orbitAngle;
+		if(speed == 0.0f) {
+			// Static as authored, unless the override claims it. Restricted to
+			// directional lights: a point light ignores dir entirely, and
+			// swinging the spot's aim around world up is a different effect
+			// from the one this switch advertises.
+			if(!orbitOverride || lights[i].type != LIGHT_DIRECT) {
+				// Not a no-op after the override goes off: puts the light back
+				// on its authored direction.
+				lights[i].dir = baseDir[i];
+				continue;
+			}
+			speed = DEBUG_ORBIT_SPEED;
+			angle = debugOrbitAngle;
+		}
 		// The tilt is baked into the authored direction, this only sweeps it
 		// around world up. That's the sun crossing the sky.
 		glm::mat4 R = glm::rotate(glm::mat4(1.0f),
-								  glm::radians(orbitSpeed[i] * orbitAngle),
+								  glm::radians(speed * angle),
 								  glm::vec3(0.0f, 1.0f, 0.0f));
 		lights[i].dir = glm::vec3(R * glm::vec4(baseDir[i], 0.0f));
 	}
 
-	return lights;
+	// Rebuilt from scratch every frame: a switch can flip between two of them,
+	// and at 4 lights the copy costs nothing worth tracking dirty state for.
+	activeLights.clear();
+	for(const LightData &L : lights) {
+		bool enabled = (L.type == LIGHT_DIRECT) ? directEnabled
+					 : (L.type == LIGHT_POINT)  ? pointEnabled
+												: spotEnabled;
+		if(enabled) {
+			activeLights.push_back(L);
+		}
+	}
+
+	return activeLights;
 }
 
 #endif

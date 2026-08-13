@@ -67,8 +67,16 @@ layout(binding = 0, set = 0) uniform GlobalUniformBufferObject {
     vec3 ambientUpper;   // indirect light from the sky
     vec3 ambientLower;   // indirect light bounced off the ground
     vec3 ambientDir;     // axis the two blend along, i.e. world up
+    int debugFlags;      // LIGHT_DEBUG_* bits, set by the cheat menu
     Light lights[MAX_LIGHTS];
 } gubo;
+
+// Whether one of the debug views from LightConstants.glsl is on. All of them
+// are off in a normal frame, so this is a uniform branch: every pixel of every
+// draw takes the same side of it, which is the cheap kind on a GPU.
+bool debugOn(int flag) {
+    return (gubo.debugFlags & flag) != 0;
+}
 
 const float PI = 3.14159265359;
 
@@ -189,17 +197,50 @@ void main() {
     // (Starter.hpp's default), so the sampler already returns linear values.
     vec3 mD = texture(albedoMap, fragUV).rgb;
 
+    // Debug view: the shading normal, remapped from [-1,1] to [0,1], so +X is
+    // red, +Y green, +Z blue. Placed after the flatNormals block above so what
+    // it shows is the normal the lighting actually used, faceted faces
+    // included, which is the point of looking at it. Not a color in any real
+    // sense, so the sRGB encode the swapchain applies to it is meaningless
+    // here; the directions are still perfectly readable.
+    if(debugOn(LIGHT_DEBUG_NORMALS)) {
+        outColor = vec4(N * 0.5 + 0.5, 1.0);
+        return;
+    }
+
+    // Debug view: the texture alone, no lighting and no ambient. Tells a black
+    // pixel that no light reached apart from a black pixel in the texture.
+    if(debugOn(LIGHT_DEBUG_UNLIT)) {
+        outColor = vec4(mD, 1.0);
+        return;
+    }
+
     vec3 V = normalize(gubo.eyePos - fragPos);
+
+    // k is the diffuse share, so forcing it to 1 leaves the specular term
+    // multiplied by 0: the highlights go, everything else stays exactly as it
+    // was. Done here rather than inside BRDF so that function keeps taking all
+    // its inputs as arguments.
+    float k = debugOn(LIGHT_DEBUG_NO_SPECULAR) ? 1.0 : ubo.k;
 
     // Rendering equation: sum over the sources of radiance times BRDF.
     vec3 Lo = vec3(0.0);
     for(int i = 0; i < gubo.lightCount; i++) {
         vec3 L = lightDirection(gubo.lights[i], fragPos);
         Lo += lightRadiance(gubo.lights[i], fragPos)
-            * BRDF(N, L, V, mD, ubo.mS, ubo.roughness, ubo.F0, ubo.k);
+            * BRDF(N, L, V, mD, ubo.mS, ubo.roughness, ubo.F0, k);
+    }
+
+    vec3 color = Lo + hemisphericAmbient(N, mD);
+
+    // Debug view: no tone map, so anything above 1 is clipped by the hardware
+    // instead of being compressed back into range. Flat white areas are where
+    // the tone map was doing the work.
+    if(!debugOn(LIGHT_DEBUG_NO_TONEMAP)) {
+        color = toneMap(color);
     }
 
     // Written linear, not gamma-encoded: the swapchain is B8G8R8A8_SRGB, so the
     // hardware does the linear-to-sRGB encode on write.
-    outColor = vec4(toneMap(Lo + hemisphericAmbient(N, mD)), 1.0);
+    outColor = vec4(color, 1.0);
 }

@@ -66,6 +66,10 @@ struct GlobalUniformBufferObject {
 	alignas(16) glm::vec3 ambientUpper;
 	alignas(16) glm::vec3 ambientLower;
 	alignas(16) glm::vec3 ambientDir;
+	// LIGHT_DEBUG_* bits from LightConstants.glsl, built from the lighting
+	// cheats below. Sits in the 4 bytes std140 pads ambientDir with, exactly
+	// like lightCount after eyePos, so the light array still starts at 64.
+	int debugFlags;
 	LightData lights[MAX_LIGHTS];
 };
 
@@ -167,6 +171,28 @@ class Skeleton26ReplaceName : public BaseProject {
 		// gameplay behavior to preserve here, so it defaults to off (hidden)
 		// instead.
 		bool showCoordinates = false;
+
+		// Lighting debug views, all resolved into gubo.debugFlags in
+		// updateUniformBuffer() and read by CookTorrance.frag. Same convention
+		// as showCoordinates: these have no "legit" state to preserve, so each
+		// one defaults to whatever leaves the picture as authored.
+		//
+		// The switches for the light SOURCES (sun, lanterns, spot, ambient,
+		// sun orbit) aren't here: they live in SceneLights, next to the lights
+		// they drop, and the HUD points straight at them.
+
+		// Albedo only, nothing lit. Separates "this texture is dark" from
+		// "no light is reaching this".
+		bool unlit = false;
+		// The shading normal as a color. The one view that shows normals
+		// directly, which is what the flatNormals material flag exists for.
+		bool showNormals = false;
+		// Off kills the specular term (BRDF's k forced to 1), leaving pure
+		// diffuse: tells a highlight apart from a genuinely bright surface.
+		bool specularEnabled = true;
+		// Off skips the tone map, so anything the tone map was pulling back
+		// into range clips to flat white instead.
+		bool toneMapEnabled = true;
 	} cheats;
 
 	// Numeric tuning for the movement cheats above, isolated the same way but
@@ -360,6 +386,20 @@ class Skeleton26ReplaceName : public BaseProject {
 		hud.addToggle("Jump", &cheats.jumpEnabled);
 		hud.addToggle("Sprint", &cheats.sprintEnabled);
 		hud.addToggle("Show Coordinates", &cheats.showCoordinates);
+
+		// Lighting rows. Listed after the movement ones and in the order you'd
+		// use them: first which sources are on, then how they're being shaded.
+		// The first five point straight into sceneLights, which owns them (see
+		// SceneLights.hpp); the rest into cheats, which become gubo.debugFlags.
+		hud.addToggle("Sun", &sceneLights.directEnabled);
+		hud.addToggle("Lanterns", &sceneLights.pointEnabled);
+		hud.addToggle("Spotlight", &sceneLights.spotEnabled);
+		hud.addToggle("Ambient Light", &sceneLights.ambientEnabled);
+		hud.addToggle("Sun Orbit", &sceneLights.orbitOverride);
+		hud.addToggle("Specular", &cheats.specularEnabled);
+		hud.addToggle("Tone Mapping", &cheats.toneMapEnabled);
+		hud.addToggle("Fullbright", &cheats.unlit);
+		hud.addToggle("Show Normals", &cheats.showNormals);
 	}
 	
 	// Here you create your pipelines and Descriptor Sets!
@@ -462,10 +502,21 @@ class Skeleton26ReplaceName : public BaseProject {
 			gubo.lights[i] = lights[i];
 		}
 
-		const AmbientLight &amb = sceneLights.ambient();
+		// By value: with the Ambient Light cheat off there is no stored ambient
+		// to hand back a reference to. See SceneLights::ambient().
+		const AmbientLight amb = sceneLights.ambient();
 		gubo.ambientUpper = amb.upper;
 		gubo.ambientLower = amb.lower;
 		gubo.ambientDir = amb.dir;
+
+		// The lighting debug cheats, packed into the one int the shader reads.
+		// Note the two inversions: the cheat says what the frame should still
+		// have, the flag says what the shader should drop.
+		gubo.debugFlags = 0;
+		if(cheats.unlit)            gubo.debugFlags |= LIGHT_DEBUG_UNLIT;
+		if(cheats.showNormals)      gubo.debugFlags |= LIGHT_DEBUG_NORMALS;
+		if(!cheats.specularEnabled) gubo.debugFlags |= LIGHT_DEBUG_NO_SPECULAR;
+		if(!cheats.toneMapEnabled)  gubo.debugFlags |= LIGHT_DEBUG_NO_TONEMAP;
 
 		gubo.eyePos = glm::vec3(glm::inverse(View)[3]);
 
