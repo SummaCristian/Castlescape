@@ -456,7 +456,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		// is just (1,1,1), and the HDR tone map handles the range. A point
 		// light's strength is expressed instead by its g and beta, which is
 		// where it belongs.
-		const std::vector<LightData> &lights = sceneLights.update(deltaT
+		const std::vector<LightData> &lights = sceneLights.update(deltaT);
 		gubo.lightCount = (int)lights.size();
 		for(int i = 0; i < gubo.lightCount; i++) {
 			gubo.lights[i] = lights[i];
