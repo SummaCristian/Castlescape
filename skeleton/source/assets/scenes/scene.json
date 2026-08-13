@@ -7,7 +7,7 @@
 		{"id": "castleTower",  "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Castle_Tower.mgcg",  "format":"MGCG", "collider": "AABB"},
 		{"id": "castleGate",   "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Castle_02.mgcg",     "format":"MGCG"},
 		{"id": "castleKeep",   "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Castle_01.mgcg",     "format":"MGCG", "collider": "AABB"},
-		{"id": "castleSteps",  "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Castle_Steps.mgcg",  "format":"MGCG", "collider": "AABB"},
+		{"id": "castleSteps",  "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Castle_Steps.mgcg",  "format":"MGCG"},
 
 		{"id": "road",   "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Road_01.mgcg", "format":"MGCG"},
 		{"id": "flag",   "VD": "VDposUV", "model": "assets/models/Castle/SPW_Medieval_Flag.mgcg",    "format":"MGCG"},
@@ -41,7 +41,7 @@
 			{"id": "wallW1", "model": "castleWall02", "texture": ["medievalTex"], "translate": [-21.0, 0.0, 0.0], "eulerAngles": [90.0, 90.0, 0.0]},
 
 			{"id": "keep",  "model": "castleKeep",  "texture": ["medievalTex"], "translate": [0.0, 0.0, -2.0], "eulerAngles": [90.0, 0.0, 0.0]},
-			{"id": "steps", "model": "castleSteps", "texture": ["medievalTex"], "translate": [0.0, 0.0, 6.0], "eulerAngles": [90.0, 180.0, 0.0]},
+			{"id": "steps", "model": "castleSteps", "texture": ["medievalTex"], "translate": [-17.8, 0.0, 0.0], "eulerAngles": [90.0, 90.0, 0.0]},
 			{"id": "road",  "model": "road",        "texture": ["medievalTex"], "translate": [0.0, 0.02, 36.0], "scale": [1.0, 4.0, 1.0], "eulerAngles": [90.0, 0.0, 0.0]},
 
 			{"id": "flagSW", "model": "flag", "texture": ["medievalTex"], "translate": [-21.0, 16.2, 16.0], "eulerAngles": [90.0, 0.0, 0.0]},

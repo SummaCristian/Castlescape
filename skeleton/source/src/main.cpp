@@ -9,8 +9,9 @@
 #include "modules/Starter.hpp"
 #include "modules/TextMaker.hpp"
 #include "modules/Scene.hpp"
-#include "modules/UiQuad.hpp"
-#include "modules/CheatHud.hpp"
+#include "custom/UiQuad.hpp"
+#include "custom/CheatHud.hpp"
+#include "custom/SceneColliders.hpp"
 
 // The uniform buffer object used in this example
 struct UniformBufferObject {
@@ -84,9 +85,13 @@ class Skeleton26ReplaceName : public BaseProject {
 	// walls, so falling under the map is never possible even with collisions off.
 	float worldFloorY = 0.0f;
 
-	// All colliders used for gameplay collision: a copy of SC.GlobalColliders plus a
-	// few hand-authored boxes (see localInit) for shapes the auto-fit AABB can't
-	// represent, such as the gate's archway opening. Built once after the scene loads.
+	// Owns the hand-authored collision geometry loaded from assets/scenes/colliders.json
+	// and merges it with the colliders scene.json built.
+	SceneColliders colliderSet;
+
+	// Flat list of every collider gameplay collides against, taken from colliderSet
+	// once the scene has loaded. Kept as its own member so the per-frame collision
+	// loops below read a plain vector instead of going through the accessor.
 	std::vector<Collider *> allColliders;
 
 	// Debug/cheat toggles, isolated in a utility struct.
@@ -123,6 +128,26 @@ class Skeleton26ReplaceName : public BaseProject {
 		float gravity = -9.81f;
 	} movement;
 
+	// Tallest surface the player can walk straight onto without jumping, measured
+	// from the feet. Deliberately a single shared constant rather than a local in
+	// each collision block: the two collision passes in GameLogic() must agree on
+	// it or they contradict each other. The wall pass skips anything at or below
+	// this height (it's a step, not a wall), the ground pass accepts exactly those
+	// same colliders as standable ground. Two independent copies of this value is
+	// what silently turned every low collider into an unclimbable wall before.
+	static constexpr float MAX_STEP_HEIGHT = 0.5f;
+
+	// Vertical view smoothing. The ground clamp moves the camera up instantly the
+	// moment the player steps onto something; this offset absorbs that jump and
+	// decays back to zero, so the *view* eases up over a fraction of a second
+	// while the physics position stays exact. Sloped ground (see the ramps in
+	// SceneColliders) is already smooth and barely feeds this; it's what keeps
+	// crates, ledges and landings from snapping.
+	float eyeStepOffset = 0.0f;
+	// Time constant of that decay, and the largest single snap it will absorb:
+	// past this the view would trail so far below the eyes it reads as sinking.
+	static constexpr float EYE_SMOOTH_TAU = 0.06f;
+	static constexpr float MAX_EYE_STEP_OFFSET = 0.6f;
 
 	// Edge-detection for the jump key, so holding it down doesn't re-trigger
 	// the jump every frame while airborne/grounded.
@@ -243,31 +268,12 @@ class Skeleton26ReplaceName : public BaseProject {
 			worldFloorY = SC.I[floorIt->second]->C->getExtents().yMax;
 		}
 
-		// Gameplay collision list: start from every collider scene.json authored, then
-		// add a few hand-built ones for shapes an auto-fit AABB can't represent.
-		allColliders = SC.GlobalColliders;
-
-		// The "gate" model has no collider of its own (see scene.json): a single
-		// auto-fit AABB would cover its archway opening too, blocking the passage.
-		// Instead, author the solid parts by hand as three boxes (left pier, right
-		// pier, lintel above the opening), reusing the "gate" instance's own already
-		// -computed world matrix so they line up with the rendered mesh automatically.
-		auto gateIt = SC.InstanceIds.find("gate");
-		if(gateIt != SC.InstanceIds.end()) {
-			glm::mat4 gateWm = SC.I[gateIt->second]->Wm;
-			auto addGateBox = [&](float x1, float y1, float z1, float x2, float y2, float z2) {
-				Collider *c = new Collider();
-				c->initAABB(x1, y1, z1, x2, y2, z2);
-				c->setWorldMatrix(gateWm);
-				allColliders.push_back(c);
-			};
-			// Coordinates are in the gate mesh's local space (found by inspecting its
-			// geometry): X spans the pier gap, Z spans floor-to-roof (becomes world Y
-			// after the instance's rotation), underside of the lintel at local Z=-5.463.
-			addGateBox(-7.4445f, -6.0476f, -15.0065f, -2.40f, 7.2854f, 0.0012f);    // left pier
-			addGateBox(2.40f, -6.0476f, -15.0065f, 7.4383f, 7.2854f, 0.0012f);      // right pier
-			addGateBox(-7.4445f, -6.0476f, -15.0065f, 7.4383f, 7.2854f, -5.463f);   // lintel
-		}
+		// Gameplay collision list: scene.json's auto-fit boxes, plus the hand-authored
+		// geometry for the models an auto-fit box gets wrong (the gate's archway, the
+		// staircase's profile). See SceneColliders.hpp for why those live in their own
+		// data file instead of scene.json or here.
+		colliderSet.init(&SC, "assets/scenes/colliders.json");
+		allColliders = colliderSet.list();
 
 		// initializes the textual output
 		txt.init(this, windowWidth, windowHeight);
@@ -331,6 +337,12 @@ class Skeleton26ReplaceName : public BaseProject {
 		P.destroy();
 
 		RP.destroy();
+
+		// Before SC.localCleanup(): that frees the colliders scene.json created, which
+		// colliderSet also points at. It only deletes the ones it allocated itself, but
+		// dropping the shared list first keeps the two ownership halves from overlapping.
+		colliderSet.cleanup();
+		allColliders.clear();
 
 		SC.localCleanup();
 		txt.localCleanup();
@@ -545,25 +557,38 @@ class Skeleton26ReplaceName : public BaseProject {
 			glm::vec3 frontFlat = glm::normalize(glm::vec3(front.x, 0.0f, front.z));
 			camPos += (right * m.x - frontFlat * m.z + worldUp * m.y) * moveSpeed * deltaT;
 
-			// (Wall) Collision resolution: push the camera back out of any collider whose
-			// vertical span the player's body is actually inside (not just resting on top
-			// of, which is what the floor check above already handles), so walking into a
-			// wall/pillar/gate frame stops you horizontally instead of clipping through.
+			// (Wall) Collision resolution: push the camera back out of any collider that
+			// counts as a wall, so walking into a wall/pillar/gate pier stops you
+			// horizontally instead of clipping through.
+			// A collider is a wall only if it's both too tall to step onto and low enough
+			// for our body to reach it. Everything else is left to the ground pass further
+			// down, which lifts us on top of it: that split is what makes low obstacles
+			// (steps, crates) walkable instead of solid.
 			if(cheats.collisionEnabled) {
 				const float EYE_HEIGHT = 1.0f;
 				const float PLAYER_HEIGHT = 1.8f;
 				const float PLAYER_RADIUS = 0.3f;
-				// Small vertical margin so a collider we're merely standing on top of
-				// (feet level with its yMax) isn't treated as something we're "inside".
+				// Small vertical margin so a collider whose underside we're passing
+				// right below (the gate's lintel) isn't treated as something we're
+				// "inside" the moment our head grazes its lower bound.
 				const float VERTICAL_MARGIN = 0.1f;
 				float feetY = camPos.y - EYE_HEIGHT;
 				float headY = feetY + PLAYER_HEIGHT;
 				for(Collider *C : allColliders) {
 					AABBextents E = C->getExtents();
-					// Only resolve against colliders the player's body actually overlaps
-					// vertically (walls/pillars), not ones we're standing on (floors).
-					bool verticallyInside = feetY < E.yMax - VERTICAL_MARGIN && headY > E.yMin + VERTICAL_MARGIN;
-					if(!verticallyInside) continue;
+
+					// Low enough to step onto: not a wall, so don't push away from it.
+					// The ground pass further down uses the same MAX_STEP_HEIGHT to lift
+					// the player on top of it instead. This also covers everything at or
+					// below foot level (floors, and anything we're falling past above).
+					if(E.yMax <= feetY + MAX_STEP_HEIGHT) continue;
+
+					// Too tall to step onto, so it's a wall, but only for the part of it
+					// our body actually reaches: the gate's lintel spans the archway, yet
+					// its underside is above head height, so we walk through underneath.
+					// (No feet-side test is needed here: getting past the check above
+					// already means yMax is well over our feet.)
+					if(headY <= E.yMin + VERTICAL_MARGIN) continue;
 
 					// Closest point on the collider's XZ footprint to the camera
 					float closestX = glm::clamp(camPos.x, E.xMin, E.xMax);
@@ -605,6 +630,10 @@ class Skeleton26ReplaceName : public BaseProject {
 			if(cheats.jumpEnabled) {
 				if(fire && !jumpKeyWasPressed && grounded) {
 					camVerticalVelocity = movement.jumpSpeed;
+					// Drop any leftover step smoothing: jumping right after
+					// stepping up would otherwise start the jump from a view
+					// still trailing below the real eye height.
+					eyeStepOffset = 0.0f;
 				}
 			}
 			jumpKeyWasPressed = fire;
@@ -631,7 +660,6 @@ class Skeleton26ReplaceName : public BaseProject {
 			// gates, doors and other hole-shaped models allow the player to pass through.
 			if(cheats.collisionEnabled) {
 				const float EYE_HEIGHT = 1.0f;
-				const float MAX_STEP_HEIGHT = 0.5f;
 				// Compute feet height from the (camera) eye height
 				float feetY = camPos.y - EYE_HEIGHT;
 				float groundY = -std::numeric_limits<float>::infinity();
@@ -646,6 +674,18 @@ class Skeleton26ReplaceName : public BaseProject {
 					// Update with the highest (max) surface found so far
 					if(insideXZ && nearFeet && E.yMax > groundY) {
 						groundY = E.yMax;
+					}
+				}
+
+				// Sloped surfaces (the staircase). Same MAX_STEP_HEIGHT rule as the
+				// boxes above, so a ramp still can't be entered from underneath, but
+				// the height it reports varies continuously along the slope instead
+				// of jumping a riser at a time.
+				float rampY;
+				for(const GroundVolume &G : colliderSet.ramps()) {
+					if(G.groundAt(camPos, rampY) &&
+					   rampY <= feetY + MAX_STEP_HEIGHT && rampY > groundY) {
+						groundY = rampY;
 					}
 				}
 				// Clamp height if clipping through the highest surface found
@@ -663,7 +703,16 @@ class Skeleton26ReplaceName : public BaseProject {
 				const float GROUND_EPSILON = 0.05f;
 				grounded = feetY <= groundY + GROUND_EPSILON;
 				// Set camera position to the new one + player height
+				float preClampY = camPos.y;
 				camPos.y = feetY + EYE_HEIGHT;
+
+				// Whatever the clamp just pushed us up by is a snap: hand it to the
+				// view smoothing below. Only upward, so landings and falls stay as
+				// sharp as gravity made them.
+				float lifted = camPos.y - preClampY;
+				if(lifted > 0.0f) {
+					eyeStepOffset = std::min(eyeStepOffset + lifted, MAX_EYE_STEP_OFFSET);
+				}
 			} else {
 				// No-clip: walls/objects are ignored entirely (handled by the blocks
 				// above being skipped), but the world floor still acts as a hard
@@ -680,8 +729,17 @@ class Skeleton26ReplaceName : public BaseProject {
 			}
 		}
 
-		// View
-		View = glm::lookAt(camPos, camPos + front, up);
+		// Decay the vertical view smoothing. Exponential rather than linear: it
+		// never overshoots, and it needs no "am I still stepping" state, since a
+		// continuous climb (walking up a ramp) just settles at a small constant
+		// lag instead of oscillating.
+		eyeStepOffset *= std::exp(-deltaT / EYE_SMOOTH_TAU);
+
+		// View: rendered from the smoothed eye height. camPos itself is left
+		// untouched, so collisions, gravity and ground contact all keep working
+		// on the exact position; only what the player sees is eased.
+		glm::vec3 eyePos = camPos - glm::vec3(0.0f, eyeStepOffset, 0.0f);
+		View = glm::lookAt(eyePos, eyePos + front, up);
 
 		// View-Projection
 		ViewPrj = Prj * View;

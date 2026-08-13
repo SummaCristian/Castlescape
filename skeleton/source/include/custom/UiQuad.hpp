@@ -114,7 +114,7 @@ void UiQuad::createPipeline() {
 	// No descriptor set layouts: this pipeline uses no textures/uniforms,
 	// only a push-constant color per quad. Pipeline::create builds
 	// pSetLayouts from D.size(), so an empty vector here is safe (0 layouts).
-	P.init(BP, &VD, "shaders/framework/UiQuad.vert.spv", "shaders/framework/UiQuad.frag.spv", {},
+	P.init(BP, &VD, "shaders/UiQuad.vert.spv", "shaders/UiQuad.frag.spv", {},
 		{{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(UiQuadColorPushConstant)}});
 	P.setCullMode(VK_CULL_MODE_NONE);
 	P.setTransparency(true);
