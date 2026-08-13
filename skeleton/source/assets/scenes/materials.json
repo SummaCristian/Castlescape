@@ -1,43 +1,52 @@
-// Per-model BRDF parameters. See include/custom/SceneMaterials.hpp for what
-// they mean and why they live here instead of in scene.json.
+// Per-model BRDF parameters, for the Cook-Torrance model (E06 slides 38-47).
+// See include/custom/SceneMaterials.hpp for how they reach the shader.
 //
-//   specularColor (mS)    color of the highlight. Grey/white for dielectrics
-//                         (stone, wood, cloth): the highlight takes the color
-//                         of the lamp. Tinted towards the diffuse color for
-//                         metals, which is what makes brass read as brass.
-//   specularPower (gamma) tightness of the highlight. High = small and sharp,
-//                         a polished surface. Low = wide and soft, a rough one.
+//   specularColor (mS)  color of the highlight. White for every dielectric:
+//                       the highlight takes the color of the lamp, not of the
+//                       object. Tinted only for metals (E06/L09 slide 69).
+//   roughness (rho)     width of the microfacet distribution. 0 is a mirror,
+//                       1 is completely matte. This is the knob you actually
+//                       tune, and unlike the old specular exponent it has a
+//                       scale you can reason about by looking at the object.
+//   F0                  fraction reflected when looking straight down at the
+//                       surface. It is ~0.04 for essentially EVERY dielectric,
+//                       so it is copied, not chosen. Metals are far higher.
+//   k                   diffuse share of the BRDF, specular gets (1 - k).
+//                       High for dielectrics, low for metals, which have almost
+//                       no diffuse component at all.
 //
 // Anything not listed here gets "default".
 {
-	"default": { "specularColor": [0.05, 0.05, 0.05], "specularPower": 32.0 },
+	"default": { "specularColor": [1.0, 1.0, 1.0], "roughness": 0.6, "F0": 0.04, "k": 0.9 },
 
 	"models": {
-		// Ground. Almost matte: dry dirt and cobbles scatter nearly everything.
-		"floor": { "specularColor": [0.03, 0.03, 0.03], "specularPower": 16.0 },
-		"road":  { "specularColor": [0.03, 0.03, 0.03], "specularPower": 16.0 },
+		// Ground. Dry dirt and cobbles: about as rough as a surface gets, and
+		// almost purely diffuse.
+		"floor": { "roughness": 0.92, "F0": 0.04, "k": 0.96 },
+		"road":  { "roughness": 0.92, "F0": 0.04, "k": 0.96 },
 
-		// Castle stone. A weak, broad sheen, enough to pick out the curvature of
-		// the towers and the edges of the merlons without ever looking wet.
-		"castleWall01": { "specularColor": [0.08, 0.08, 0.08], "specularPower": 24.0 },
-		"castleWall02": { "specularColor": [0.08, 0.08, 0.08], "specularPower": 24.0 },
-		"castleTower":  { "specularColor": [0.08, 0.08, 0.08], "specularPower": 24.0 },
-		"castleGate":   { "specularColor": [0.08, 0.08, 0.08], "specularPower": 24.0 },
-		"castleKeep":   { "specularColor": [0.08, 0.08, 0.08], "specularPower": 24.0 },
-		"castleSteps":  { "specularColor": [0.08, 0.08, 0.08], "specularPower": 24.0 },
+		// Castle stone. Rough, but not as much as bare earth: enough of a sheen
+		// left to pick out the curvature of the towers.
+		"castleWall01": { "roughness": 0.78, "F0": 0.04, "k": 0.93 },
+		"castleWall02": { "roughness": 0.78, "F0": 0.04, "k": 0.93 },
+		"castleTower":  { "roughness": 0.78, "F0": 0.04, "k": 0.93 },
+		"castleGate":   { "roughness": 0.78, "F0": 0.04, "k": 0.93 },
+		"castleKeep":   { "roughness": 0.78, "F0": 0.04, "k": 0.93 },
+		"castleSteps":  { "roughness": 0.78, "F0": 0.04, "k": 0.93 },
 
-		// Wood, slightly warm and slightly shinier than stone (old varnish).
-		"barrel": { "specularColor": [0.10, 0.09, 0.07], "specularPower": 32.0 },
-		"box01":  { "specularColor": [0.10, 0.09, 0.07], "specularPower": 32.0 },
-		"box02":  { "specularColor": [0.10, 0.09, 0.07], "specularPower": 32.0 },
-		"box03":  { "specularColor": [0.10, 0.09, 0.07], "specularPower": 32.0 },
+		// Wood. Old varnish, so smoother than stone and a touch more reflective.
+		"barrel": { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
+		"box01":  { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
+		"box02":  { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
+		"box03":  { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
 
-		// Cloth. The one surface with essentially no specular at all.
-		"flag": { "specularColor": [0.02, 0.02, 0.02], "specularPower": 8.0 },
+		// Cloth. Very rough and essentially all diffuse.
+		"flag": { "roughness": 0.95, "F0": 0.03, "k": 0.97 },
 
-		// The gate lanterns: metal, so mS is strong and tinted like the diffuse
-		// color rather than grey (L09 slide 69). This is the model that shows
-		// what mS is actually for.
-		"light": { "specularColor": [0.55, 0.45, 0.25], "specularPower": 120.0 }
+		// The gate lanterns, in brass. This is the entry that shows what these
+		// parameters are for: a metal has no meaningful diffuse component (low
+		// k), reflects strongly even head-on (high F0), and tints its highlight
+		// with its own color instead of the lamp's (mS is not white).
+		"light": { "specularColor": [0.95, 0.78, 0.42], "roughness": 0.32, "F0": 0.65, "k": 0.15 }
 	}
 }

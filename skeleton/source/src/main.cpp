@@ -28,12 +28,15 @@ struct UniformBufferObject {
 	// not here: it comes from the albedo texture, per fragment.
 	// The two pack into one 16-byte slot exactly as GLSL's std140 lays out a
 	// vec3 followed by a float, so no explicit padding is needed between them.
-	// Short names on purpose: mS is what L09 calls the specular color, and this
-	// struct has to match the GLSL block field for field. The exponent the
-	// slides call gamma is specPower here, because "gamma" already means the
-	// display gamma inside the fragment shader.
+	// Cook-Torrance material parameters. Short names on purpose: mS is what the
+	// slides call the specular color, and this struct has to match the GLSL
+	// block field for field.
+	// std140 puts the vec3 at a 16-byte boundary with a 12-byte size, so the
+	// three floats after it fill offsets 12, 16 and 20 with no padding of ours.
 	alignas(16) glm::vec3 mS;	// specular color
-	float specPower;			// specular exponent
+	float roughness;			// rho: width of the microfacet distribution
+	float F0;					// reflectance seen head-on
+	float k;					// diffuse share of the BRDF
 };
 
 // One block for everything that is the same for every object being drawn: the
@@ -280,7 +283,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		// be used in this pipeline. The first element will be set 0, and so on..
 		
 		P.init(this, &VD, "shaders/PosNormUV.vert.spv",
-						  "shaders/Blinn.frag.spv",
+						  "shaders/CookTorrance.frag.spv",
 						  {&DSLglobal, &DSLlocal});
 
 
@@ -294,7 +297,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		VDRs[0].init("VDposNormUV",  &VD);
 
 		PRs.resize(1);
-		PRs[0].init("Blinn", {
+		PRs[0].init("CookTorrance", {
 							{&P, {//Pipeline and DSL for the main pass
 							 /*DSLglobal*/{},
 							 /*DSLlocal*/{
@@ -453,7 +456,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		// is just (1,1,1), and the HDR tone map handles the range. A point
 		// light's strength is expressed instead by its g and beta, which is
 		// where it belongs.
-		const std::vector<LightData> &lights = sceneLights.update(deltaT);
+		const std::vector<LightData> &lights = sceneLights.update(deltaT
 		gubo.lightCount = (int)lights.size();
 		for(int i = 0; i < gubo.lightCount; i++) {
 			gubo.lights[i] = lights[i];
@@ -482,7 +485,9 @@ class Skeleton26ReplaceName : public BaseProject {
 			// index) rather than by name, so no string hashing per frame.
 			const Material &m = materials.forModel(SC.TI[0].I[instanceId].Mid);
 			ubo.mS = m.specularColor;
-			ubo.specPower = m.specularPower;
+			ubo.roughness = m.roughness;
+			ubo.F0 = m.F0;
+			ubo.k = m.k;
 			
 			// DS[1] = Pchar pass (main render): set0=DSLglobal, set1=DSLlocal
 			SC.TI[0].I[instanceId].DS[0][0]->map(currentImage, &gubo, 0); // global (light/camera)

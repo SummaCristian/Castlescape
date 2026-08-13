@@ -9,14 +9,19 @@
 //       It already exists: it's the albedo texture, per fragment, so it isn't
 //       here.
 //   mS, the specular color, says how the highlight reflects the light's RGB.
-//       Most materials have mS white or grey (the highlight is the color of the
-//       lamp), metals have mS close to their own diffuse color (L09 slide 69).
-//   the specular exponent (gamma on the slides, specularPower here and
-//       specPower in the shaders, since "gamma" already means display gamma
-//       there) is the roughness knob: high means a small tight highlight and a
-//       surface that behaves more like a mirror, low a wide soft one
-//       (L09 slide 76).
-// Those last two are per-material constants, which is what this file holds.
+//       Most materials have mS white (the highlight is the color of the lamp),
+//       metals have mS close to their own diffuse color (L09 slide 69).
+//   roughness (rho on the slides) is the width of the microfacet distribution:
+//       0 is a mirror, 1 is completely matte. It replaced the old specular
+//       exponent, which said the same thing with a number that had no physical
+//       scale to anchor it to.
+//   F0 is the fraction of light reflected when looking straight at the surface.
+//       Around 0.04 for every dielectric there is, much higher for metals. The
+//       Fresnel term grows from F0 towards 1 as the view gets grazing.
+//   k balances the diffuse and specular halves of the BRDF (E06 slide 38):
+//       the model interpolates between them rather than adding both at full
+//       strength, which is part of what makes it closer to energy-conserving.
+// Those four are per-material constants, which is what this file holds.
 //
 // Why a data file and not constants in main.cpp: same reason the authored
 // collision boxes live in colliders.json. These are numbers an artist tweaks by
@@ -43,8 +48,10 @@
 // Defaults describe a neutral, slightly shiny dielectric, so a model missing
 // from the data file still renders sensibly instead of turning black.
 struct Material {
-	glm::vec3 specularColor = glm::vec3(0.05f);	// mS
-	float specularPower = 32.0f;				// gamma
+	glm::vec3 specularColor = glm::vec3(1.0f);	// mS
+	float roughness = 0.6f;						// rho, width of the GGX lobe
+	float F0 = 0.04f;							// reflectance seen head-on
+	float k = 0.9f;								// diffuse share of the BRDF
 };
 
 class SceneMaterials {
@@ -87,9 +94,15 @@ void SceneMaterials::readInto(const nlohmann::json &js, Material &m) {
 					  << c.size() << ", kept previous\n";
 		}
 	}
-	if(js.contains("specularPower")) {
-		m.specularPower = js["specularPower"].get<float>();
-	}
+	if(js.contains("roughness")) m.roughness = js["roughness"].get<float>();
+	if(js.contains("F0"))        m.F0 = js["F0"].get<float>();
+	if(js.contains("k"))         m.k = js["k"].get<float>();
+
+	// A roughness of exactly 0 makes the GGX distribution divide by zero (a
+	// perfect mirror has all its microfacets in one direction, so the lobe has
+	// no width at all). Clamped here rather than in the shader: it is a data
+	// error, and catching it once at load beats guarding every fragment.
+	m.roughness = glm::clamp(m.roughness, 0.03f, 1.0f);
 }
 
 void SceneMaterials::init(Scene *SC, const std::string &file) {

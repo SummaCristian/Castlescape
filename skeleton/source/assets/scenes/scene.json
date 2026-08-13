@@ -22,7 +22,7 @@
 		{"id": "medievalTex",  "texture": "assets/textures/Castle/SPW_Medieval.png", "format": "C"}
 	],
 	"instances": [
-		{"technique": "Blinn", "elements": [
+		{"technique": "CookTorrance", "elements": [
 			{"id": "floor", "model": "floor", "texture": ["tex"], "scale": [100.0, 100.0, 100.0]},
 
 			{"id": "towerNW", "model": "castleTower", "texture": ["medievalTex"], "translate": [-21.0, 0.0, -16.0], "eulerAngles": [90.0, 0.0, 0.0]},
