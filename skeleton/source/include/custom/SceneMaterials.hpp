@@ -11,9 +11,11 @@
 //   mS, the specular color, says how the highlight reflects the light's RGB.
 //       Most materials have mS white or grey (the highlight is the color of the
 //       lamp), metals have mS close to their own diffuse color (L09 slide 69).
-//   gamma, the specular exponent, is the roughness knob: high gamma means a
-//       small tight highlight and a surface that behaves more like a mirror,
-//       low gamma a wide soft one (L09 slide 76).
+//   the specular exponent (gamma on the slides, specularPower here and
+//       specPower in the shaders, since "gamma" already means display gamma
+//       there) is the roughness knob: high means a small tight highlight and a
+//       surface that behaves more like a mirror, low a wide soft one
+//       (L09 slide 76).
 // Those last two are per-material constants, which is what this file holds.
 //
 // Why a data file and not constants in main.cpp: same reason the authored

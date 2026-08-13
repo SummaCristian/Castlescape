@@ -27,8 +27,12 @@ struct UniformBufferObject {
 	// not here: it comes from the albedo texture, per fragment.
 	// The two pack into one 16-byte slot exactly as GLSL's std140 lays out a
 	// vec3 followed by a float, so no explicit padding is needed between them.
+	// Short names on purpose: mS is what L09 calls the specular color, and this
+	// struct has to match the GLSL block field for field. The exponent the
+	// slides call gamma is specPower here, because "gamma" already means the
+	// display gamma inside the fragment shader.
 	alignas(16) glm::vec3 mS;	// specular color
-	float gamma;				// specular exponent
+	float specPower;			// specular exponent
 };
 
 struct GlobalUniformBufferObject {
@@ -453,7 +457,7 @@ class Skeleton26ReplaceName : public BaseProject {
 			// index) rather than by name, so no string hashing per frame.
 			const Material &m = materials.forModel(SC.TI[0].I[instanceId].Mid);
 			ubo.mS = m.specularColor;
-			ubo.gamma = m.specularPower;
+			ubo.specPower = m.specularPower;
 			
 			// DS[1] = Pchar pass (main render): set0=DSLglobal, set1=DSLlocal
 			SC.TI[0].I[instanceId].DS[0][0]->map(currentImage, &gubo, 0); // global (light/camera)
