@@ -110,12 +110,24 @@ add_dependencies(${PROJECT_NAME} shaders)
 # --------------------
 # Copy assets
 # --------------------
+# A POST_BUILD command only fires when the target actually relinks: editing an
+# asset without touching any .cpp leaves the exe "up to date" in ninja's eyes,
+# so the copy silently never runs and stale assets ship. A stamp file that
+# depends on the asset glob (same pattern as the shader copy above) makes the
+# asset copy its own build step, so it reruns whenever an asset changes.
 set(ASSET_SRC_DIR "${CMAKE_SOURCE_DIR}/source/assets")
 set(ASSET_DST_DIR "$<TARGET_FILE_DIR:${PROJECT_NAME}>/assets")
+set(ASSET_COPY_STAMP "${CMAKE_CURRENT_BINARY_DIR}/asset_copy.stamp")
 
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_directory
-    "${ASSET_SRC_DIR}"
-    "${ASSET_DST_DIR}"
+file(GLOB_RECURSE ASSET_FILES CONFIGURE_DEPENDS "${ASSET_SRC_DIR}/*")
+
+add_custom_command(
+  OUTPUT "${ASSET_COPY_STAMP}"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory "${ASSET_SRC_DIR}" "${ASSET_DST_DIR}"
+  COMMAND ${CMAKE_COMMAND} -E touch "${ASSET_COPY_STAMP}"
+  DEPENDS ${ASSET_FILES}
   COMMENT "Copio asset in: ${ASSET_DST_DIR}"
+  VERBATIM
 )
+add_custom_target(assets ALL DEPENDS "${ASSET_COPY_STAMP}")
+add_dependencies(${PROJECT_NAME} assets)
