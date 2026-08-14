@@ -1,0 +1,108 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "convert_assets.py"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "SM_Candle_01",
+   "mesh": 0
+  }
+ ],
+ "meshes": [
+  {
+   "name": "SM_Candle_01",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "mode": 4
+    }
+   ]
+  }
+ ],
+ "buffers": [
+  {
+   "uri": "SM_Candle_01.bin",
+   "byteLength": 43680
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 9648,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 9648,
+   "byteLength": 9648,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 19296,
+   "byteLength": 6432,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 25728,
+   "byteLength": 17952,
+   "target": 34963
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 804,
+   "type": "VEC3",
+   "min": [
+    -0.14767661690711975,
+    1.841136665348131e-08,
+    -0.14587880671024323
+   ],
+   "max": [
+    0.14486099779605865,
+    0.7343263030052185,
+    0.14486101269721985
+   ]
+  },
+  {
+   "bufferView": 1,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 804,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 804,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 3,
+   "byteOffset": 0,
+   "componentType": 5125,
+   "count": 4488,
+   "type": "SCALAR"
+  }
+ ]
+}

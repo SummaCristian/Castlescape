@@ -1,0 +1,108 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "convert_assets.py"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "SM_Carpet_01",
+   "mesh": 0
+  }
+ ],
+ "meshes": [
+  {
+   "name": "SM_Carpet_01",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "mode": 4
+    }
+   ]
+  }
+ ],
+ "buffers": [
+  {
+   "uri": "SM_Carpet_01.bin",
+   "byteLength": 104960
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 23304,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 23304,
+   "byteLength": 23304,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 46608,
+   "byteLength": 15536,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 62144,
+   "byteLength": 42816,
+   "target": 34963
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 1942,
+   "type": "VEC3",
+   "min": [
+    -4.984437942504883,
+    -0.027702130377292633,
+    -1.3748435974121094
+   ],
+   "max": [
+    5.028539180755615,
+    0.22685793042182922,
+    1.328190565109253
+   ]
+  },
+  {
+   "bufferView": 1,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 1942,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 1942,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 3,
+   "byteOffset": 0,
+   "componentType": 5125,
+   "count": 10704,
+   "type": "SCALAR"
+  }
+ ]
+}

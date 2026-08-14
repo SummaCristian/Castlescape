@@ -1,0 +1,108 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "convert_assets.py"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "SM_WallCorner_01",
+   "mesh": 0
+  }
+ ],
+ "meshes": [
+  {
+   "name": "SM_WallCorner_01",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "mode": 4
+    }
+   ]
+  }
+ ],
+ "buffers": [
+  {
+   "uri": "SM_WallCorner_01.bin",
+   "byteLength": 200988
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 53748,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 53748,
+   "byteLength": 53748,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 107496,
+   "byteLength": 35832,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 143328,
+   "byteLength": 57660,
+   "target": 34963
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 4479,
+   "type": "VEC3",
+   "min": [
+    -7.200000286102295,
+    -3.6887847443267674e-08,
+    -7.199999809265137
+   ],
+   "max": [
+    3.6423642768568243e-07,
+    6.1929521560668945,
+    3.1700167824055825e-07
+   ]
+  },
+  {
+   "bufferView": 1,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 4479,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 4479,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 3,
+   "byteOffset": 0,
+   "componentType": 5125,
+   "count": 14415,
+   "type": "SCALAR"
+  }
+ ]
+}

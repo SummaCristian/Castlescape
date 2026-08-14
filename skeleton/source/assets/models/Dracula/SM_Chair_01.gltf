@@ -1,0 +1,108 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "convert_assets.py"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "SM_Chair_01",
+   "mesh": 0
+  }
+ ],
+ "meshes": [
+  {
+   "name": "SM_Chair_01",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "mode": 4
+    }
+   ]
+  }
+ ],
+ "buffers": [
+  {
+   "uri": "SM_Chair_01.bin",
+   "byteLength": 82208
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 21216,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 21216,
+   "byteLength": 21216,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 42432,
+   "byteLength": 14144,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 56576,
+   "byteLength": 25632,
+   "target": 34963
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 1768,
+   "type": "VEC3",
+   "min": [
+    -0.6107204556465149,
+    -4.9547420388762475e-08,
+    -0.6647151708602905
+   ],
+   "max": [
+    0.6102346181869507,
+    2.2102115154266357,
+    0.6647151708602905
+   ]
+  },
+  {
+   "bufferView": 1,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 1768,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 1768,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 3,
+   "byteOffset": 0,
+   "componentType": 5125,
+   "count": 6408,
+   "type": "SCALAR"
+  }
+ ]
+}

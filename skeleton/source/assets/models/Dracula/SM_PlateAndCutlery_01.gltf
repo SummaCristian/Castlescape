@@ -1,0 +1,108 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "convert_assets.py"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "SM_PlateAndCutlery_01",
+   "mesh": 0
+  }
+ ],
+ "meshes": [
+  {
+   "name": "SM_PlateAndCutlery_01",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "mode": 4
+    }
+   ]
+  }
+ ],
+ "buffers": [
+  {
+   "uri": "SM_PlateAndCutlery_01.bin",
+   "byteLength": 84264
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 19188,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 19188,
+   "byteLength": 19188,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 38376,
+   "byteLength": 12792,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 51168,
+   "byteLength": 33096,
+   "target": 34963
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 1599,
+   "type": "VEC3",
+   "min": [
+    -0.3956383764743805,
+    -0.004481813870370388,
+    -0.6139819622039795
+   ],
+   "max": [
+    0.4951288402080536,
+    0.0855686143040657,
+    0.5670486092567444
+   ]
+  },
+  {
+   "bufferView": 1,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 1599,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 1599,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 3,
+   "byteOffset": 0,
+   "componentType": 5125,
+   "count": 8274,
+   "type": "SCALAR"
+  }
+ ]
+}

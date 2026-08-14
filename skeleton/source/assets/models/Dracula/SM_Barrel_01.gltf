@@ -1,0 +1,108 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "convert_assets.py"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "SM_Barrel_01",
+   "mesh": 0
+  }
+ ],
+ "meshes": [
+  {
+   "name": "SM_Barrel_01",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "mode": 4
+    }
+   ]
+  }
+ ],
+ "buffers": [
+  {
+   "uri": "SM_Barrel_01.bin",
+   "byteLength": 156960
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 38016,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 38016,
+   "byteLength": 38016,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 76032,
+   "byteLength": 25344,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 101376,
+   "byteLength": 55584,
+   "target": 34963
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 3168,
+   "type": "VEC3",
+   "min": [
+    -0.9324504137039185,
+    0.0,
+    -0.9324504137039185
+   ],
+   "max": [
+    0.9324504137039185,
+    2.2495546340942383,
+    0.9324504137039185
+   ]
+  },
+  {
+   "bufferView": 1,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 3168,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 3168,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 3,
+   "byteOffset": 0,
+   "componentType": 5125,
+   "count": 13896,
+   "type": "SCALAR"
+  }
+ ]
+}

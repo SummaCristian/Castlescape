@@ -1,0 +1,108 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "convert_assets.py"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "SM_Skull_01",
+   "mesh": 0
+  }
+ ],
+ "meshes": [
+  {
+   "name": "SM_Skull_01",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "mode": 4
+    }
+   ]
+  }
+ ],
+ "buffers": [
+  {
+   "uri": "SM_Skull_01.bin",
+   "byteLength": 132160
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 28824,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 28824,
+   "byteLength": 28824,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 57648,
+   "byteLength": 19216,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 76864,
+   "byteLength": 55296,
+   "target": 34963
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 2402,
+   "type": "VEC3",
+   "min": [
+    -0.7371264696121216,
+    0.0005251169204711914,
+    -0.5501455664634705
+   ],
+   "max": [
+    0.46803492307662964,
+    0.9374014139175415,
+    0.5501455664634705
+   ]
+  },
+  {
+   "bufferView": 1,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 2402,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 2402,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 3,
+   "byteOffset": 0,
+   "componentType": 5125,
+   "count": 13824,
+   "type": "SCALAR"
+  }
+ ]
+}
