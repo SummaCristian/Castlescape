@@ -63,7 +63,11 @@
 		"dungeonFloor":   { "roughness": 0.85, "F0": 0.04, "k": 0.93 },
 		"dungeonWall":    { "roughness": 0.80, "F0": 0.04, "k": 0.93 },
 		"dungeonCorner":  { "roughness": 0.80, "F0": 0.04, "k": 0.93 },
-		"dungeonDoor":    { "roughness": 0.80, "F0": 0.04, "k": 0.93 },
+		// Split door (see scene.json): stone wall half keeps the same values
+		// as the other dungeon stone; the wood-and-iron leaf gets the same
+		// touch of sheen as the other wood pieces above.
+		"dungeonDoorWall":  { "roughness": 0.80, "F0": 0.04, "k": 0.93 },
+		"dungeonDoorPanel": { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
 		"dungeonBarrel":  { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
 		"dungeonTable":   { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
 		"dungeonChair":   { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
