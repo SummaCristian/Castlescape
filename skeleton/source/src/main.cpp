@@ -119,7 +119,7 @@ class Skeleton26ReplaceName : public BaseProject {
 	glm::mat4 View;
 
 	// Free-look camera state (position + orientation), persisted across frames
-	glm::vec3 camPos = glm::vec3(0.0f, 1.0f, 5.0f);
+	glm::vec3 camPos = glm::vec3(0.0f, 1.8f, 5.0f);
 	// Yaw: rotation around world up axis, in degrees.
 	// yaw=0 faces +X; increasing yaw turns right, decreasing turns left.
 	// Starts at -90 (faces -Z) to match the scene's original forward direction.
@@ -696,7 +696,7 @@ class Skeleton26ReplaceName : public BaseProject {
 			// down, which lifts us on top of it: that split is what makes low obstacles
 			// (steps, crates) walkable instead of solid.
 			if(cheats.collisionEnabled) {
-				const float EYE_HEIGHT = 1.0f;
+				const float EYE_HEIGHT = 1.8f;
 				const float PLAYER_HEIGHT = 1.8f;
 				const float PLAYER_RADIUS = 0.3f;
 				// Small vertical margin so a collider whose underside we're passing
@@ -791,7 +791,7 @@ class Skeleton26ReplaceName : public BaseProject {
 			// Only surfaces close to the feet (within MAX_STEP_HEIGHT) qualify as ground, so
 			// gates, doors and other hole-shaped models allow the player to pass through.
 			if(cheats.collisionEnabled) {
-				const float EYE_HEIGHT = 1.0f;
+				const float EYE_HEIGHT = 1.8f;
 				// Compute feet height from the (camera) eye height
 				float feetY = camPos.y - EYE_HEIGHT;
 				float groundY = -std::numeric_limits<float>::infinity();
@@ -850,7 +850,7 @@ class Skeleton26ReplaceName : public BaseProject {
 				// above being skipped), but the world floor still acts as a hard
 				// floor, so no-clipping lets you walk through walls without letting
 				// you fall out of the map underneath it.
-				const float EYE_HEIGHT = 1.0f;
+				const float EYE_HEIGHT = 1.8f;
 				if(camPos.y - EYE_HEIGHT < worldFloorY) {
 					camPos.y = worldFloorY + EYE_HEIGHT;
 					if(camVerticalVelocity < 0.0f) {

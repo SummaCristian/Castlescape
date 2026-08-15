@@ -53,6 +53,21 @@
 		// parameters are for: a metal has no meaningful diffuse component (low
 		// k), reflects strongly even head-on (high F0), and tints its highlight
 		// with its own color instead of the lamp's (mS is not white).
-		"light": { "specularColor": [0.95, 0.78, 0.42], "roughness": 0.32, "F0": 0.65, "k": 0.15 }
+		"light": { "specularColor": [0.95, 0.78, 0.42], "roughness": 0.32, "F0": 0.65, "k": 0.15 },
+
+		// Dungeon set (Dracula's Castle Assetpack, see README credits). Same
+		// categories as the castle above: rougher/more-diffuse for the stone
+		// pieces, a touch of sheen for the wood, near-fully-diffuse for cloth.
+		// Candle, plate, skull and torch are left on "default": too small and
+		// varied in surface (wax, bone, metal+wood) to lump into one entry.
+		"dungeonFloor":   { "roughness": 0.85, "F0": 0.04, "k": 0.93 },
+		"dungeonWall":    { "roughness": 0.80, "F0": 0.04, "k": 0.93 },
+		"dungeonCorner":  { "roughness": 0.80, "F0": 0.04, "k": 0.93 },
+		"dungeonDoor":    { "roughness": 0.80, "F0": 0.04, "k": 0.93 },
+		"dungeonBarrel":  { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
+		"dungeonTable":   { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
+		"dungeonChair":   { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
+		"dungeonCarpet":  { "roughness": 0.95, "F0": 0.03, "k": 0.97 },
+		"dungeonBanner":  { "roughness": 0.90, "F0": 0.03, "k": 0.95 }
 	}
 }
