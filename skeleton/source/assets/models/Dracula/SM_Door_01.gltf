@@ -42,14 +42,14 @@
 		{
 			"bufferView":0,
 			"componentType":5126,
-			"count":15910,
+			"count":15918,
 			"max":[
-				0.3602046072483063,
+				0.4302046000957489,
 				4.920737266540527,
 				0
 			],
 			"min":[
-				-0.10720443725585938,
+				-0.03720443695783615,
 				0.15636177361011505,
 				-2.4624738693237305
 			],
@@ -58,13 +58,13 @@
 		{
 			"bufferView":1,
 			"componentType":5126,
-			"count":15910,
+			"count":15918,
 			"type":"VEC3"
 		},
 		{
 			"bufferView":2,
 			"componentType":5126,
-			"count":15910,
+			"count":15918,
 			"type":"VEC2"
 		},
 		{
@@ -77,32 +77,32 @@
 	"bufferViews":[
 		{
 			"buffer":0,
-			"byteLength":190920,
+			"byteLength":191016,
 			"byteOffset":0,
 			"target":34962
 		},
 		{
 			"buffer":0,
-			"byteLength":190920,
-			"byteOffset":190920,
+			"byteLength":191016,
+			"byteOffset":191016,
 			"target":34962
 		},
 		{
 			"buffer":0,
-			"byteLength":127280,
-			"byteOffset":381840,
+			"byteLength":127344,
+			"byteOffset":382032,
 			"target":34962
 		},
 		{
 			"buffer":0,
 			"byteLength":161712,
-			"byteOffset":509120,
+			"byteOffset":509376,
 			"target":34963
 		}
 	],
 	"buffers":[
 		{
-			"byteLength":670832,
+			"byteLength":671088,
 			"uri":"SM_Door_01.bin"
 		}
 	]

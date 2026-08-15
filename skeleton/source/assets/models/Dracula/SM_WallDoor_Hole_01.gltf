@@ -20,7 +20,7 @@
 	],
 	"meshes":[
 		{
-			"name":"SM_WallDoor_01.2082",
+			"name":"SM_WallDoor_01.2379",
 			"primitives":[
 				{
 					"attributes":{
@@ -37,9 +37,9 @@
 		{
 			"bufferView":0,
 			"componentType":5126,
-			"count":10941,
+			"count":15066,
 			"max":[
-				0.04870122671127319,
+				0,
 				6.1929521560668945,
 				7.200000286102295
 			],
@@ -53,51 +53,51 @@
 		{
 			"bufferView":1,
 			"componentType":5126,
-			"count":10941,
+			"count":15066,
 			"type":"VEC3"
 		},
 		{
 			"bufferView":2,
 			"componentType":5126,
-			"count":10941,
+			"count":15066,
 			"type":"VEC2"
 		},
 		{
 			"bufferView":3,
 			"componentType":5123,
-			"count":33078,
+			"count":45768,
 			"type":"SCALAR"
 		}
 	],
 	"bufferViews":[
 		{
 			"buffer":0,
-			"byteLength":131292,
+			"byteLength":180792,
 			"byteOffset":0,
 			"target":34962
 		},
 		{
 			"buffer":0,
-			"byteLength":131292,
-			"byteOffset":131292,
+			"byteLength":180792,
+			"byteOffset":180792,
 			"target":34962
 		},
 		{
 			"buffer":0,
-			"byteLength":87528,
-			"byteOffset":262584,
+			"byteLength":120528,
+			"byteOffset":361584,
 			"target":34962
 		},
 		{
 			"buffer":0,
-			"byteLength":66156,
-			"byteOffset":350112,
+			"byteLength":91536,
+			"byteOffset":482112,
 			"target":34963
 		}
 	],
 	"buffers":[
 		{
-			"byteLength":416268,
+			"byteLength":573648,
 			"uri":"SM_WallDoor_Hole_01.bin"
 		}
 	]
