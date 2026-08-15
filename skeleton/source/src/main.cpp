@@ -209,6 +209,47 @@ class Skeleton26ReplaceName : public BaseProject {
 		float gravity = -9.81f;
 	} movement;
 
+	// A door leaf (its own instance, separate from the wall it's set into)
+	// that swings open around a vertical hinge when the player interacts
+	// with it nearby (E). Kept as a list rather than one hardcoded door,
+	// since the brief calls for more interactables later (candles, secret
+	// passages): adding one is one addDoor() call, no new per-object
+	// plumbing.
+	//
+	// SM_Door_01 (unlike the wall-mounted SM_WallDoor_01 tried first, which
+	// turned out to be a solid panel with no archway cut into it) is
+	// authored with its local origin AT the hinge edge: its local bbox runs
+	// Z 0.03..-2.43, i.e. the whole panel hangs to one side of Z=0. So the
+	// instance's own authored transform (translate+eulerAngles in scene.json,
+	// placing that origin at the door frame's hinge-side jamb) already IS
+	// the closed-door hinge frame, and "open" is just one extra rotation
+	// about world Y appended after it -- no separate hinge point to compute
+	// or sandwich the rotation between.
+	struct Door {
+		std::string instanceId;
+		Instance *inst = nullptr;
+		glm::mat4 baseWm{1.0f};	// authored (closed, angle=0) world matrix
+		glm::vec3 promptPos{0.0f};	// point used for the interact-range check (doorway centre, not the hinge)
+		float openAngleDeg = 100.0f;	// target angle when open; sign picks swing direction
+		bool open = false;
+		float angle = 0.0f;	// current animated angle, eases toward the target
+	};
+	std::vector<Door> doors;
+
+	// How close (world units, measured to the doorway centre) the player has
+	// to be before a door's prompt appears and E does anything.
+	static constexpr float DOOR_INTERACT_RADIUS = 3.5f;
+	// Degrees/second the door animates open/closed at.
+	static constexpr float DOOR_OPEN_SPEED = 120.0f;
+
+	// Edge-detection for the interact key, same reason as jumpKeyWasPressed:
+	// holding E shouldn't toggle the door every frame.
+	bool interactKeyWasPressed = false;
+	// Index into `doors` of whichever one is currently in range, or -1. Set
+	// each frame in GameLogic(), read by updateUniformBuffer() to show/hide
+	// the "[E] Interact" prompt.
+	int nearbyDoor = -1;
+
 	// Tallest surface the player can walk straight onto without jumping, measured
 	// from the feet. Deliberately a single shared constant rather than a local in
 	// each collision block: the two collision passes in GameLogic() must agree on
@@ -359,6 +400,33 @@ class Skeleton26ReplaceName : public BaseProject {
 		// data file instead of scene.json or here.
 		colliderSet.init(&SC, "assets/scenes/colliders.json");
 		allColliders = colliderSet.list();
+
+		// Interactable doors. Each door leaf instance's own origin sits at
+		// its hinge (see the Door struct comment above), so promptOffset is
+		// the doorway's *centre* in the leaf's local frame instead -- the
+		// point the in-range check should measure from, not the jamb it
+		// hinges on. Measured off the current SM_WallDoor_Hole_01 geometry
+		// (opening spans local Y 0.19..4.85, Z 2.47..4.71; the panel's own
+		// origin sits at the hinge-side jamb, Y 0, Z ~4.82), not eyeballed --
+		// re-measure and update this if the asset is regenerated again.
+		// openAngleDeg's sign picks which way it swings open; chosen without
+		// being able to see the render from here, so if it swings the wrong
+		// way, negate it.
+		auto addDoor = [&](const char *id, glm::vec3 promptOffset, float openAngleDeg) {
+			auto it = SC.InstanceIds.find(id);
+			if(it == SC.InstanceIds.end()) {
+				std::cout << "Door instance '" << id << "' not found, skipping\n";
+				return;
+			}
+			Door d;
+			d.instanceId = id;
+			d.inst = SC.I[it->second];
+			d.baseWm = d.inst->Wm;
+			d.promptPos = glm::vec3(d.baseWm * glm::vec4(promptOffset, 1.0f));
+			d.openAngleDeg = openAngleDeg;
+			doors.push_back(d);
+		};
+		addDoor("dhDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f);
 
 		// Surface parameters for the BRDF, one per model.
 		materials.init(&SC, "assets/scenes/materials.json");
@@ -595,6 +663,25 @@ class Skeleton26ReplaceName : public BaseProject {
 			coordsShown = false;
 		}
 
+		// "[E] Interact" prompt, shown only while a door is in range
+		// (nearbyDoor, set every frame in GameLogic()). A plain shown/hidden
+		// toggle needs no throttling like the coordinates overlay does: it's
+		// binary, so it only touches the text buffer on the frames the state
+		// actually flips.
+		static bool interactPromptShown = false;
+		bool showInteractPrompt = (nearbyDoor >= 0);
+		if(showInteractPrompt && !interactPromptShown) {
+			float sx, sy;
+			txt.pixelToScr((float)windowWidth / 2.0f, (float)windowHeight - 60.0f, sx, sy);
+			txt.print(sx, sy, "[E] Interact", 3, "CO", false, true, false,
+					  TAL_CENTER, TRH_CENTER, TRV_BOTTOM,
+					  {1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f});
+			interactPromptShown = true;
+		} else if(!showInteractPrompt && interactPromptShown) {
+			txt.removeText(3);
+			interactPromptShown = false;
+		}
+
 		txt.updateCommandBuffer();
 		uiQuad.updateCommandBuffer();
 	}
@@ -769,6 +856,45 @@ class Skeleton26ReplaceName : public BaseProject {
 				}
 			}
 			jumpKeyWasPressed = fire;
+
+			// Interaction: find the nearest door within range of its doorway
+			// centre, toggle it open/closed on E (edge-triggered, same
+			// pattern as jump), then ease every door's animated angle
+			// toward its target and push the result into both the render
+			// transform and its collider, so an open door is actually
+			// walkable and a closed one still blocks.
+			nearbyDoor = -1;
+			float bestDoorDist = DOOR_INTERACT_RADIUS;
+			for(int i = 0; i < (int)doors.size(); i++) {
+				float dx = camPos.x - doors[i].promptPos.x;
+				float dz = camPos.z - doors[i].promptPos.z;
+				float dist = std::sqrt(dx * dx + dz * dz);
+				if(dist < bestDoorDist) {
+					bestDoorDist = dist;
+					nearbyDoor = i;
+				}
+			}
+			bool interactKey = glfwGetKey(window, GLFW_KEY_E);
+			if(nearbyDoor >= 0 && interactKey && !interactKeyWasPressed) {
+				doors[nearbyDoor].open = !doors[nearbyDoor].open;
+			}
+			interactKeyWasPressed = interactKey;
+
+			for(Door &d : doors) {
+				float target = d.open ? d.openAngleDeg : 0.0f;
+				float maxStep = DOOR_OPEN_SPEED * deltaT;
+				if(d.angle < target) d.angle = std::min(d.angle + maxStep, target);
+				else if(d.angle > target) d.angle = std::max(d.angle - maxStep, target);
+
+				// The leaf's own local origin IS its hinge (see the Door
+				// struct comment), so opening it is just one more rotation
+				// tacked onto the authored closed-door transform -- no
+				// separate world-space hinge point to sandwich it between.
+				d.inst->Wm = d.baseWm * glm::rotate(glm::mat4(1.0f), glm::radians(d.angle), glm::vec3(0.0f, 1.0f, 0.0f));
+				if(d.inst->C != nullptr) {
+					d.inst->C->setWorldMatrix(d.inst->Wm);
+				}
+			}
 
 			// Gravity: constant downward acceleration, integrated into a vertical
 			// velocity each frame. Resolved against the ground below (collision
