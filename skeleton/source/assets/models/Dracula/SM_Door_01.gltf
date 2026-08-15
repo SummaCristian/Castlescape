@@ -42,15 +42,15 @@
 		{
 			"bufferView":0,
 			"componentType":5126,
-			"count":7088,
+			"count":15910,
 			"max":[
-				0.2052409052848816,
-				4.909186363220215,
+				0.3602046072483063,
+				4.920737266540527,
 				0
 			],
 			"min":[
 				-0.10720443725585938,
-				0.17076583206653595,
+				0.15636177361011505,
 				-2.4624738693237305
 			],
 			"type":"VEC3"
@@ -58,51 +58,51 @@
 		{
 			"bufferView":1,
 			"componentType":5126,
-			"count":7088,
+			"count":15910,
 			"type":"VEC3"
 		},
 		{
 			"bufferView":2,
 			"componentType":5126,
-			"count":7088,
+			"count":15910,
 			"type":"VEC2"
 		},
 		{
 			"bufferView":3,
 			"componentType":5123,
-			"count":33468,
+			"count":80856,
 			"type":"SCALAR"
 		}
 	],
 	"bufferViews":[
 		{
 			"buffer":0,
-			"byteLength":85056,
+			"byteLength":190920,
 			"byteOffset":0,
 			"target":34962
 		},
 		{
 			"buffer":0,
-			"byteLength":85056,
-			"byteOffset":85056,
+			"byteLength":190920,
+			"byteOffset":190920,
 			"target":34962
 		},
 		{
 			"buffer":0,
-			"byteLength":56704,
-			"byteOffset":170112,
+			"byteLength":127280,
+			"byteOffset":381840,
 			"target":34962
 		},
 		{
 			"buffer":0,
-			"byteLength":66936,
-			"byteOffset":226816,
+			"byteLength":161712,
+			"byteOffset":509120,
 			"target":34963
 		}
 	],
 	"buffers":[
 		{
-			"byteLength":293752,
+			"byteLength":670832,
 			"uri":"SM_Door_01.bin"
 		}
 	]
