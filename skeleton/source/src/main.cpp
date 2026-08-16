@@ -53,6 +53,13 @@ struct UniformBufferObject {
 	float F0;					// reflectance seen head-on
 	float k;					// diffuse share of the BRDF
 	int flatNormals;			// 1: derive the face normal in the shader
+	// Seconds since startup, the same value for every instance in a frame.
+	// Piggybacks the per-object UBO instead of going in
+	// GlobalUniformBufferObject, which would shift LightData[] off the offset
+	// the comment there notes. Read only by the Flame shaders, which animate
+	// the torch flames entirely on the GPU; the scene shaders declare it and
+	// ignore it, since both pipelines share DSLlocal and so this one struct.
+	float time;
 };
 
 // Everything that's the same for every object drawn this frame. Split from the
@@ -71,6 +78,18 @@ struct GlobalUniformBufferObject {
 	// like lightCount after eyePos, so the light array still starts at 64.
 	int debugFlags;
 	LightData lights[MAX_LIGHTS];
+};
+
+// Set 2: the shadow-sampling data, bound once and read by CookTorrance.frag.
+// One matrix per shadow-casting light (NUM_SHADOW_LIGHTS, LightConstants.glsl
+// -- the sun plus the five torches), each the SAME view-projection its own
+// shadow pass rendered with (see computeShadowMatrices()). Static for the
+// life of the program, since none of those lights move, but still re-mapped
+// every frame in updateUniformBuffer() rather than once at startup: map()
+// writes into a per-swapchain-image buffer slot, and mapping only slot 0
+// would leave the others holding whatever was there at allocation time.
+struct ShadowUniformBufferObject {
+	alignas(16) glm::mat4 lightSpace[NUM_SHADOW_LIGHTS];
 };
 
 // Vertex format "VDposNormUV". Starter.hpp fills the normal from the glTF/MGCG
@@ -94,6 +113,50 @@ class Skeleton26ReplaceName : public BaseProject {
 	VertexDescriptor VD;
 	RenderPass RP;
 	Pipeline P;
+	// Second pipeline, for the torch flames only. It exists because a flame
+	// needs two pipeline-level settings P cannot have without breaking every
+	// other object: alpha blending (a flame is a translucent volume, and an
+	// opaque one reads as orange plastic however it is shaded) and no
+	// back-face culling (it is seen from every side). Same vertex format and
+	// same descriptor set layouts as P -- only the shaders and these two
+	// switches differ.
+	Pipeline PFlame;
+
+	// Shadow mapping: one depth-only render pass per shadow-casting light
+	// (NUM_SHADOW_LIGHTS = the sun plus the five torches, LightConstants.glsl)
+	// and ONE pipeline shared across all of them. Reusing PShadow instead of
+	// six separate pipelines relies on Vulkan's render-pass-compatibility
+	// rule: RPShadow[i] all use the identical AT_DEPTH_ONLY attachment
+	// configuration, so a pipeline created against one of them works with any
+	// of the others. Unlike RP/P, both are created once in localInit() and
+	// never touched by a resize: an offscreen depth target doesn't depend on
+	// the window, so there's no reason to tear it down and rebuild it the way
+	// the swapchain-sized resources are.
+	//
+	// Only the CookTorrance technique is drawn into these (see
+	// populateCommandBuffer()) -- the flames aren't occluders and shouldn't
+	// occlude either, being translucent, so they're skipped rather than given
+	// their own shadow logic.
+	RenderPass RPShadow[NUM_SHADOW_LIGHTS];
+	Pipeline PShadow;
+	// set 2 for the main pass's shadow sampling: one UBO (the light-space
+	// matrices) plus six sampler bindings, one per shadow map, read by
+	// CookTorrance.frag's shadowFactor(). DSLlocal/DSLglobal stay set 1/0.
+	//
+	// No DescriptorSet member of its own: unlike DSglobal, this one goes
+	// through Scene's ordinary per-instance machinery instead (P is given
+	// this as a third layout below, so every CookTorrance instance gets its
+	// own copy, same as its DSLlocal one). That means NUM_SHADOW_LIGHTS+1
+	// redundant, identical descriptor sets per instance -- wasteful, but
+	// cheap at this instance count, and it avoids hand-rolling a THIRD way to
+	// bind a descriptor set alongside Scene's existing one.
+	DescriptorSetLayout DSLshadowSample;
+	// View-projection matrix each shadow pass rendered with, index-matched to
+	// LightData::shadowIndex. Computed once in computeShadowMatrices() (the
+	// sun and the torches are static) and reused both as the push constant
+	// Shadow.vert takes and as the UBO CookTorrance.frag samples against.
+	glm::mat4 shadowLightSpace[NUM_SHADOW_LIGHTS];
+	static constexpr int SHADOW_MAP_RES = 1024;
 
 	// Models, textures and Descriptors (values assigned to the uniforms)
 	DescriptorSet DSglobal;
@@ -250,6 +313,18 @@ class Skeleton26ReplaceName : public BaseProject {
 	// the "[E] Interact" prompt.
 	int nearbyDoor = -1;
 
+	// A skull sitting in a torch's flame that yaws in place to face the
+	// player, updated every frame in GameLogic() -- unlike the door's angle,
+	// there's no authored target to ease toward, it just always points at
+	// camPos. worldPos is captured once at init (these instances carry no
+	// rotation/scale in scene.json, just translate), so Wm each frame is
+	// nothing but that translation with a fresh yaw appended.
+	struct WatchingSkull {
+		Instance *inst = nullptr;
+		glm::vec3 worldPos{0.0f};
+	};
+	std::vector<WatchingSkull> watchingSkulls;
+
 	// Tallest surface the player can walk straight onto without jumping, measured
 	// from the feet. Deliberately a single shared constant rather than a local in
 	// each collision block: the two collision passes in GameLogic() must agree on
@@ -336,6 +411,21 @@ class Skeleton26ReplaceName : public BaseProject {
 					// third  element : the pipeline stage where it will be used
 					{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_ALL_GRAPHICS, sizeof(GlobalUniformBufferObject), 1}
 				  });
+		// Shadow sampling (set 2 of P, see CookTorrance.frag). One UBO, six
+		// separate sampler bindings -- see the member declaration above for why
+		// not one array binding. linkSize on the samplers is their own index
+		// into the flat VkDescriptorImageInfo list Scene builds per instance
+		// (see the texDefs passed to PRs[0].init below), the same role it plays
+		// for DSLlocal's single texture, just six-wide here.
+		DSLshadowSample.init(this, {
+					{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(ShadowUniformBufferObject), 1},
+					{1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 1},
+					{2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 1, 1},
+					{3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 2, 1},
+					{4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 3, 1},
+					{5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 4, 1},
+					{6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 5, 1}
+				  });
 		VD.init(this, {
 				  {0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX}
 				}, {
@@ -352,14 +442,70 @@ class Skeleton26ReplaceName : public BaseProject {
 		// sets the blue sky
 		RP.properties[0].clearValue = {0.0f,0.9f,1.0f,1.0f};
 
+		// The six shadow render passes -- the sun's and each torch's, in
+		// LightData::shadowIndex order (see SceneLights::init). AT_DEPTH_ONLY
+		// is a stock configuration built for exactly this: a D32_SFLOAT
+		// attachment usable both as a depth target and, after
+		// ATDEP_DEPTH_TRANS's barrier, as a sampled texture. initSampler=true
+		// (the last argument) is what makes attachments[0].getViewAndSampler()
+		// below valid -- without it there's no VkSampler to hand back.
+		//
+		// .create() runs right here rather than in
+		// pipelinesAndDescriptorSetsInit() (where RP/P are created) for two
+		// reasons: these don't need to survive a resize the way the
+		// swapchain-sized passes do, and PRs[0].init() below needs the actual
+		// VkImageView+sampler to exist already, to bind them into every
+		// CookTorrance instance's shadow-sampling descriptor set.
+		for(int i = 0; i < NUM_SHADOW_LIGHTS; i++) {
+			RPShadow[i].init(this, SHADOW_MAP_RES, SHADOW_MAP_RES, -1,
+							  RenderPass::getStandardAttchmentsProperties(AT_DEPTH_ONLY, this),
+							  RenderPass::getStandardDependencies(ATDEP_DEPTH_TRANS),
+							  true);
+			RPShadow[i].create();
+		}
+
 		// Pipelines [Shader couples]
 		// The last array, is a vector of pointer to the layouts of the sets that will
 		// be used in this pipeline. The first element will be set 0, and so on..
-		
+
 		P.init(this, &VD, "shaders/PosNormUV.vert.spv",
 						  "shaders/CookTorrance.frag.spv",
-						  {&DSLglobal, &DSLlocal});
+						  {&DSLglobal, &DSLlocal, &DSLshadowSample});
 
+		// The flame pipeline. setTransparency turns on the SRC_ALPHA /
+		// ONE_MINUS_SRC_ALPHA blend Starter.hpp wires up, which is what makes
+		// the alpha Flame.frag writes mean anything; cull NONE keeps the far
+		// side of the flame from vanishing when you walk round the torch.
+		// Depth WRITE stays on (Starter.hpp hard-codes it, and it is off
+		// limits), so the flames are drawn last -- see scene.json, where their
+		// technique block is the final one -- and nothing is drawn afterwards
+		// that they could wrongly occlude.
+		PFlame.init(this, &VD, "shaders/Flame.vert.spv",
+							   "shaders/Flame.frag.spv",
+							   {&DSLglobal, &DSLlocal});
+		PFlame.setTransparency(true);
+		PFlame.setCullMode(VK_CULL_MODE_NONE);
+
+		// The shadow pass's own pipeline (see the member declaration for why
+		// one, shared, instead of six). Its only set is DSLlocal -- the SAME
+		// per-instance buffer the main pass's ubo.mMat comes from, reused
+		// here at set 0 instead of set 1 to read Wm again for a different
+		// projection; see Shadow.vert's header for why that's safe. The
+		// light's own view-projection arrives separately, as a push constant,
+		// since (unlike Wm) it never changes frame to frame.
+		VkPushConstantRange shadowPushConstant{};
+		shadowPushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+		shadowPushConstant.offset = 0;
+		shadowPushConstant.size = sizeof(glm::mat4);
+		PShadow.init(this, &VD, "shaders/Shadow.vert.spv",
+								"shaders/Shadow.frag.spv",
+								{&DSLlocal}, {shadowPushConstant});
+		// Created against RPShadow[0], but usable with all six: they share the
+		// identical AT_DEPTH_ONLY attachment layout, and Vulkan only requires
+		// render-pass COMPATIBILITY (same attachment formats/samples/layouts)
+		// between the render pass a pipeline was created with and the one
+		// it's bound under at draw time, not the exact same object.
+		PShadow.create(&RPShadow[0]);
 
 		// sets the size of the Descriptor Set Pool (it MUST be done before loading the scene)
 		DPSZs.uniformBlocksInPool = 2;
@@ -370,9 +516,34 @@ class Skeleton26ReplaceName : public BaseProject {
 		VDRs.resize(1);
 		VDRs[0].init("VDposNormUV",  &VD);
 
-		PRs.resize(1);
+		PRs.resize(2);
 		PRs[0].init("CookTorrance", {
 							{&P, {//Pipeline and DSL for the main pass
+							 /*DSLglobal*/{},
+							 /*DSLlocal*/{
+									/*t0*/{true,  0, {}}
+								  },
+							 // DSLshadowSample: none of these are "fromInstance"
+							 // -- all six shadow maps are the same fixed images
+							 // for every instance, not per-instance textures
+							 // like DSLlocal's albedo map above. pos is unused
+							 // on a non-fromInstance entry.
+							 /*DSLshadowSample*/{
+									{false, 0, RPShadow[0].attachments[0].getViewAndSampler()},
+									{false, 0, RPShadow[1].attachments[0].getViewAndSampler()},
+									{false, 0, RPShadow[2].attachments[0].getViewAndSampler()},
+									{false, 0, RPShadow[3].attachments[0].getViewAndSampler()},
+									{false, 0, RPShadow[4].attachments[0].getViewAndSampler()},
+									{false, 0, RPShadow[5].attachments[0].getViewAndSampler()}
+								  }
+								 }
+								}
+						  }, /*TotalNtextures*/1, &VD);
+		// Same shape as above: the flames still declare one texture, because
+		// DSLlocal has a sampler binding either way, even though Flame.frag
+		// never samples it (its colour is generated, not painted).
+		PRs[1].init("Flame", {
+							{&PFlame, {
 							 /*DSLglobal*/{},
 							 /*DSLlocal*/{
 									/*t0*/{true,  0, {}}
@@ -428,12 +599,37 @@ class Skeleton26ReplaceName : public BaseProject {
 		};
 		addDoor("dhDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f);
 
+		// The five watching skulls, one per torch (see scene.json "torchSkull"
+		// instances). One addWatchingSkull() call per skull, same reasoning as
+		// addDoor() above: adding another is one line, not new plumbing.
+		auto addWatchingSkull = [&](const char *id) {
+			auto it = SC.InstanceIds.find(id);
+			if(it == SC.InstanceIds.end()) {
+				std::cout << "Watching skull instance '" << id << "' not found, skipping\n";
+				return;
+			}
+			WatchingSkull s;
+			s.inst = SC.I[it->second];
+			s.worldPos = glm::vec3(s.inst->Wm[3]);
+			watchingSkulls.push_back(s);
+		};
+		addWatchingSkull("dhSkullTorchW1");
+		addWatchingSkull("dhSkullTorchW2");
+		addWatchingSkull("dhSkullTorchE1");
+		addWatchingSkull("dhSkullTorchE2");
+		addWatchingSkull("dcSkullTorchE");
+
 		// Surface parameters for the BRDF, one per model.
 		materials.init(&SC, "assets/scenes/materials.json");
 
 		// After Scene::init: a light can be anchored to an instance and needs
 		// that instance's world matrix.
 		sceneLights.init(&SC, "assets/scenes/lights.json");
+
+		// After sceneLights.init(): needs the resolved world position of every
+		// shadow-casting light, which instance+offset lights only have once
+		// SceneLights has read scene.json's world matrices.
+		computeShadowMatrices();
 
 		// initializes the textual output
 		txt.init(this, windowWidth, windowHeight);
@@ -469,7 +665,81 @@ class Skeleton26ReplaceName : public BaseProject {
 		hud.addToggle("Fullbright", &cheats.unlit);
 		hud.addToggle("Show Normals", &cheats.showNormals);
 	}
-	
+
+	// Builds the view-projection matrix each of the six shadow passes renders
+	// with, in LightData::shadowIndex order. Called once, from localInit()
+	// right after sceneLights.init(): the sun and the torches never move, so
+	// there is nothing here that needs recomputing per frame.
+	//
+	// Reads sceneLights.all() rather than scene.json/InstanceIds directly: a
+	// point light's world position is instance-plus-offset (see
+	// SceneLights::init), and re-deriving that here would be a second copy of
+	// logic that already lives in exactly one place.
+	void computeShadowMatrices() {
+		// Torch aim, hand-picked per wall side rather than read from
+		// anywhere: point lights carry no direction (SceneLights.hpp), so
+		// nothing already knows which way a torch should look. Aimed
+		// horizontally INTO the room the torch is mounted on (matching the
+		// +-X sign already used for the flame/light offsets in scene.json
+		// and lights.json) with a slight downward tilt, so the shadow map
+		// actually covers the floor and the opposite wall -- the case that
+		// motivated this feature (see notes.md) was light bleeding through
+		// exactly that wall.
+		//
+		// Index-matched to the FIVE torches in the order they appear in
+		// lights.json (torchW1, torchW2, torchE1, torchE2, torchDC), i.e.
+		// shadowIndex 1..5 once the sun takes 0.
+		static const glm::vec3 TORCH_SHADOW_DIR[5] = {
+			glm::normalize(glm::vec3( 1.0f, -0.3f, 0.0f)),	// torchW1: west wall, aims +X into the room
+			glm::normalize(glm::vec3( 1.0f, -0.3f, 0.0f)),	// torchW2
+			glm::normalize(glm::vec3(-1.0f, -0.3f, 0.0f)),	// torchE1: east wall, aims -X into the room
+			glm::normalize(glm::vec3(-1.0f, -0.3f, 0.0f)),	// torchE2
+			glm::normalize(glm::vec3(-1.0f, -0.3f, 0.0f)),	// torchDC
+		};
+
+		// The sun has no position, only a travel direction (SceneLights.hpp),
+		// so its shadow camera needs a stand-in position: back away from a
+		// point roughly at the middle of the playable area, far enough that
+		// an orthographic box this big (SUN_ORTHO_HALF_EXTENT) covers both
+		// the castle courtyard and the dungeon under it. Hand-picked by
+		// looking at the instance coordinates in scene.json, the same way
+		// the collider and light offsets there were -- not derived from
+		// anything, and the first thing to revisit if the shadow clips.
+		const glm::vec3 SUN_TARGET(-8.0f, 0.0f, 15.0f);
+		const float SUN_ORTHO_HALF_EXTENT = 55.0f;
+		const float SUN_DISTANCE = 80.0f;
+
+		int torchSlot = 0;
+		for(const LightData &L : sceneLights.all()) {
+			if(L.shadowIndex < 0) {
+				continue;
+			}
+
+			glm::mat4 view, proj;
+			if(L.type == LIGHT_DIRECT) {
+				glm::vec3 pos = SUN_TARGET - L.dir * SUN_DISTANCE;
+				view = glm::lookAt(pos, SUN_TARGET, glm::vec3(0.0f, 1.0f, 0.0f));
+				proj = glm::ortho(-SUN_ORTHO_HALF_EXTENT, SUN_ORTHO_HALF_EXTENT,
+								  -SUN_ORTHO_HALF_EXTENT, SUN_ORTHO_HALF_EXTENT,
+								  1.0f, 200.0f);
+			} else {
+				glm::vec3 dir = TORCH_SHADOW_DIR[torchSlot++];
+				view = glm::lookAt(L.pos, L.pos + dir, glm::vec3(0.0f, 1.0f, 0.0f));
+				// 120 degrees: wide enough that a torch mounted flush on the
+				// wall still catches the floor near its base, which a
+				// narrower cone (closer to the point light's own reach)
+				// tends to clip.
+				proj = glm::perspective(glm::radians(120.0f), 1.0f, 0.1f, 15.0f);
+			}
+			// Same Vulkan Y-flip as the main camera's projection (see View/
+			// ViewPrj in GameLogic()); GLM assumes an OpenGL-handed NDC
+			// otherwise.
+			proj[1][1] *= -1;
+
+			shadowLightSpace[L.shadowIndex] = proj * view;
+		}
+	}
+
 	// Here you create your pipelines and Descriptor Sets!
 	void pipelinesAndDescriptorSetsInit() {
 		// creates the render passes
@@ -477,7 +747,8 @@ class Skeleton26ReplaceName : public BaseProject {
 		
 		// This creates a new pipeline (with the current surface), using its shaders for the provided render pass
 		P.create(&RP);
-		
+		PFlame.create(&RP);
+
 		DSglobal.init(this, &DSLglobal, {});
 		
 		// Here you define the data set
@@ -492,6 +763,7 @@ class Skeleton26ReplaceName : public BaseProject {
 	// Here you destroy your pipelines and Descriptor Sets!
 	void pipelinesAndDescriptorSetsCleanup() {
 		P.cleanup();
+		PFlame.cleanup();
 
 		RP.cleanup();
 		
@@ -507,8 +779,22 @@ class Skeleton26ReplaceName : public BaseProject {
 	void localCleanup() {
 		DSLlocal.cleanup();
 		DSLglobal.cleanup();
+		DSLshadowSample.cleanup();
 
 		P.destroy();
+		PFlame.destroy();
+
+		// PShadow/RPShadow never go through pipelinesAndDescriptorSetsCleanup
+		// (see the member declaration for why -- they don't depend on the
+		// swapchain, so a resize never tears them down), which is where P/RP
+		// normally get their .cleanup() half. Both halves have to happen
+		// somewhere, so both happen here instead.
+		PShadow.cleanup();
+		PShadow.destroy();
+		for(int i = 0; i < NUM_SHADOW_LIGHTS; i++) {
+			RPShadow[i].cleanup();
+			RPShadow[i].destroy();
+		}
 
 		RP.destroy();
 
@@ -534,7 +820,37 @@ class Skeleton26ReplaceName : public BaseProject {
 	}
 
 	void populateCommandBuffer(VkCommandBuffer commandBuffer, int currentImage) {
-		
+
+		// The six shadow passes, one per shadow-casting light, all before the
+		// main pass they feed: CookTorrance.frag samples these maps, so they
+		// have to be fully rendered (and, thanks to RPShadow's
+		// ATDEP_DEPTH_TRANS dependency, transitioned to a readable layout)
+		// before that draw happens. Not Scene::populateCommandBuffer -- that
+		// walks every technique including Flame, and the flames are
+		// deliberately not occluders here (see the RPShadow member comment) --
+		// so this is its own small loop straight over the CookTorrance
+		// instances (technique 0 in scene.json).
+		for(int i = 0; i < NUM_SHADOW_LIGHTS; i++) {
+			RPShadow[i].begin(commandBuffer, currentImage);
+			PShadow.bind(commandBuffer);
+			vkCmdPushConstants(commandBuffer, PShadow.pipelineLayout,
+							   VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4),
+							   &shadowLightSpace[i]);
+			for(int j = 0; j < SC.TI[0].InstanceCount; j++) {
+				Instance &inst = SC.TI[0].I[j];
+				// set 0 here is DSLlocal's per-instance buffer -- the SAME
+				// descriptor set the main pass binds at set 1 (DS[0][1]),
+				// re-mapped with this instance's current Wm every frame in
+				// updateUniformBuffer() regardless of which pipeline reads
+				// it. See Shadow.vert's header for why reusing it is safe.
+				inst.DS[0][1]->bind(commandBuffer, PShadow, 0, currentImage);
+				SC.M[inst.Mid]->bind(commandBuffer);
+				vkCmdDrawIndexed(commandBuffer,
+								 static_cast<uint32_t>(SC.M[inst.Mid]->indices.size()), 1, 0, 0, 0);
+			}
+			RPShadow[i].end(commandBuffer);
+		}
+
 		// Offscreen pass - always required
 		// begin standard pass
 		RP.begin(commandBuffer, currentImage);
@@ -557,7 +873,12 @@ class Skeleton26ReplaceName : public BaseProject {
 
 		// moves the view
 		float deltaT = GameLogic();
-		
+
+		// Free-running clock for shader-side animation (currently just the
+		// flame's UV scroll). Unlike elapsedT below this never resets.
+		static float simTime = 0.0f;
+		simTime += deltaT;
+
 		// defines the global parameters for the uniform
 		GlobalUniformBufferObject gubo{};
 
@@ -591,26 +912,53 @@ class Skeleton26ReplaceName : public BaseProject {
 		DSglobal.map(currentImage, &gubo, 0);
 
 		// defines the local parameters for the uniforms
-		UniformBufferObject ubo{};		
+		UniformBufferObject ubo{};
 
-		int instanceId;
-		// character
-		for(instanceId = 0; instanceId < SC.TI[0].InstanceCount; instanceId++) {
-			ubo.mMat = SC.TI[0].I[instanceId].Wm;
-			ubo.mvpMat = ViewPrj * ubo.mMat;
-			ubo.nMat = glm::inverse(glm::transpose(ubo.mMat));
+		// Same six matrices every CookTorrance instance's set 2 gets mapped
+		// with below -- built once here rather than inside the loop since
+		// it's identical for every one of them. Static content (see
+		// computeShadowMatrices()), but still re-mapped every frame: map()
+		// writes into a per-swapchain-image buffer slot, and mapping only the
+		// slot for image 0 would leave the others holding whatever was there
+		// at allocation time.
+		ShadowUniformBufferObject shadowUbo{};
+		for(int i = 0; i < NUM_SHADOW_LIGHTS; i++) {
+			shadowUbo.lightSpace[i] = shadowLightSpace[i];
+		}
 
-			// By Mid rather than by name, so no string hashing per frame.
-			const Material &m = materials.forModel(SC.TI[0].I[instanceId].Mid);
-			ubo.mS = m.specularColor;
-			ubo.roughness = m.roughness;
-			ubo.F0 = m.F0;
-			ubo.k = m.k;
-			ubo.flatNormals = m.flatNormals;
-			
-			// DS[1] = Pchar pass (main render): set0=DSLglobal, set1=DSLlocal
-			SC.TI[0].I[instanceId].DS[0][0]->map(currentImage, &gubo, 0); // global (light/camera)
-			SC.TI[0].I[instanceId].DS[0][1]->map(currentImage, &ubo, 0); // camera MVPs
+		// Over every technique, not just the first: the flames are their own
+		// technique (see PFlame / scene.json) and their instances need the
+		// same per-object uniforms filled in as any other. Both techniques
+		// share DSLlocal, so one struct serves both -- the Flame shaders just
+		// read a different subset of it.
+		for(int techniqueId = 0; techniqueId < SC.TechniqueInstanceCount; techniqueId++) {
+			for(int instanceId = 0; instanceId < SC.TI[techniqueId].InstanceCount; instanceId++) {
+				ubo.mMat = SC.TI[techniqueId].I[instanceId].Wm;
+				ubo.mvpMat = ViewPrj * ubo.mMat;
+				ubo.nMat = glm::inverse(glm::transpose(ubo.mMat));
+
+				// By Mid rather than by name, so no string hashing per frame.
+				const Material &m = materials.forModel(SC.TI[techniqueId].I[instanceId].Mid);
+				ubo.mS = m.specularColor;
+				ubo.roughness = m.roughness;
+				ubo.F0 = m.F0;
+				ubo.k = m.k;
+				ubo.flatNormals = m.flatNormals;
+				ubo.time = simTime;
+
+				Instance &inst = SC.TI[techniqueId].I[instanceId];
+				// DS[1] = Pchar pass (main render): set0=DSLglobal, set1=DSLlocal
+				inst.DS[0][0]->map(currentImage, &gubo, 0); // global (light/camera)
+				inst.DS[0][1]->map(currentImage, &ubo, 0); // camera MVPs
+				// set2=DSLshadowSample, only on the CookTorrance technique
+				// (PFlame's pipeline layout has no third set -- Flame.frag
+				// doesn't read shadows, see its header). NDs[0] is 3 there
+				// and 2 for Flame instances, which is what this checks
+				// instead of comparing techniqueId to a hardcoded index.
+				if(inst.NDs[0] >= 3) {
+					inst.DS[0][2]->map(currentImage, &shadowUbo, 0);
+				}
+			}
 		}
 		
 		// updates the FPS
@@ -894,6 +1242,19 @@ class Skeleton26ReplaceName : public BaseProject {
 				if(d.inst->C != nullptr) {
 					d.inst->C->setWorldMatrix(d.inst->Wm);
 				}
+			}
+
+			// Watching skulls: yaw only (they stay upright), recomputed fresh
+			// every frame from the current camera position -- there's no eased
+			// "target" the way the doors have one, it's a straight look-at.
+			// atan2(dx, dz) assumes the skull mesh's modeled front faces +Z; if
+			// it turns out to face the camera backwards, add M_PI here.
+			for(WatchingSkull &s : watchingSkulls) {
+				float dx = camPos.x - s.worldPos.x;
+				float dz = camPos.z - s.worldPos.z;
+				float yaw = std::atan2(dx, dz);
+				s.inst->Wm = glm::translate(glm::mat4(1.0f), s.worldPos)
+							* glm::rotate(glm::mat4(1.0f), yaw, glm::vec3(0.0f, 1.0f, 0.0f));
 			}
 
 			// Gravity: constant downward acceleration, integrated into a vertical

@@ -46,7 +46,8 @@
 			"type": "direct",
 			"direction": [0.25, -0.82, -0.52],
 			"color": [1.0, 0.98, 0.92],
-			"orbitSpeed": 0.0
+			"orbitSpeed": 0.0,
+			"castsShadow": true
 		},
 
 		// The two lanterns flanking the gate. The lantern mesh is 3.80 units
@@ -85,6 +86,79 @@
 		//
 		// The cone angles are full angles in degrees: light is at full strength
 		// inside 34 degrees and fades to nothing by 60.
+		// The five dungeon wall torches. Offset is the flame's position relative
+		// to its torch instance's own origin -- NOT rotated by the instance's
+		// eulerAngles (SceneLights adds it in world space), which is why the two
+		// walls need opposite-signed X: the west-wall torches are rotated 180 on
+		// Y so their cup points +X into the room, the east-wall ones are
+		// unrotated and point -X. See Flame_01/TorchSkull_01 placement in
+		// scene.json for the matching mesh offsets.
+		//
+		// flicker enables the per-frame sine-sum jitter in SceneLights::update
+		// (no data here beyond the switch -- amplitude defaults to
+		// flickerStrength below). g/beta close to the lanterns': same kind of
+		// small warm source.
+		{
+			"id": "torchW1",
+			"type": "point",
+			"instance": "dhTorchW1",
+			"offset": [0.47, 0.40, 0.0],
+			"color": [1.0, 0.55, 0.20],
+			"g": 3.0,
+			"beta": 1.4,
+			"flicker": true,
+			"flickerStrength": 0.35,
+			"castsShadow": true
+		},
+		{
+			"id": "torchW2",
+			"type": "point",
+			"instance": "dhTorchW2",
+			"offset": [0.47, 0.40, 0.0],
+			"color": [1.0, 0.55, 0.20],
+			"g": 3.0,
+			"beta": 1.4,
+			"flicker": true,
+			"flickerStrength": 0.35,
+			"castsShadow": true
+		},
+		{
+			"id": "torchE1",
+			"type": "point",
+			"instance": "dhTorchE1",
+			"offset": [-0.47, 0.40, 0.0],
+			"color": [1.0, 0.55, 0.20],
+			"g": 3.0,
+			"beta": 1.4,
+			"flicker": true,
+			"flickerStrength": 0.35,
+			"castsShadow": true
+		},
+		{
+			"id": "torchE2",
+			"type": "point",
+			"instance": "dhTorchE2",
+			"offset": [-0.47, 0.40, 0.0],
+			"color": [1.0, 0.55, 0.20],
+			"g": 3.0,
+			"beta": 1.4,
+			"flicker": true,
+			"flickerStrength": 0.35,
+			"castsShadow": true
+		},
+		{
+			"id": "torchDC",
+			"type": "point",
+			"instance": "dcTorchE",
+			"offset": [-0.47, 0.40, 0.0],
+			"color": [1.0, 0.55, 0.20],
+			"g": 3.0,
+			"beta": 1.4,
+			"flicker": true,
+			"flickerStrength": 0.35,
+			"castsShadow": true
+		},
+
 		{
 			"id": "courtyardSpot",
 			"type": "spot",

@@ -15,6 +15,12 @@
 // lightCount saying how much of it is real.
 #define MAX_LIGHTS 16
 
+// How many lights cast a shadow: the sun (1) plus the five torches (5). The
+// gate lanterns and the courtyard spot don't -- see notes.md for the scope
+// decision. Sized as an array bound (shadow map samplers, light-space
+// matrices), so it has to be a compile-time constant like MAX_LIGHTS.
+#define NUM_SHADOW_LIGHTS 6
+
 #define LIGHT_DIRECT 0
 #define LIGHT_POINT  1
 #define LIGHT_SPOT   2

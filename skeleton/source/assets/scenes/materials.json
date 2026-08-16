@@ -72,6 +72,13 @@
 		"dungeonTable":   { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
 		"dungeonChair":   { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
 		"dungeonCarpet":  { "roughness": 0.95, "F0": 0.03, "k": 0.97 },
-		"dungeonBanner":  { "roughness": 0.90, "F0": 0.03, "k": 0.95 }
+		"dungeonBanner":  { "roughness": 0.90, "F0": 0.03, "k": 0.95 },
+
+		// No "flame" entry: the flames run on their own pipeline and their own
+		// shader pair (Flame.vert/frag), which generates their colour
+		// procedurally and reads nothing from here. See scene.json.
+		//
+		// Bone: rough, fully diffuse, no visible highlight.
+		"torchSkull": { "roughness": 0.85, "F0": 0.04, "k": 0.95 }
 	}
 }

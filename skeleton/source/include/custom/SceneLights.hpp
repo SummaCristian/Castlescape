@@ -47,6 +47,16 @@ struct LightData {
 	float cosIn;					// spot: cosine of the half inner angle
 	float cosOut;					// spot: cosine of the half outer angle
 	int type;						// LIGHT_DIRECT / LIGHT_POINT / LIGHT_SPOT
+	// -1: doesn't cast a shadow. Else an index into the shadow map array and
+	// the light-space matrix array (main.cpp), assigned in declaration order
+	// by init() below from lights.json's "castsShadow" flag.
+	//
+	// Fits in the same 16-byte slot as cosOut+type without changing that
+	// slot's size: std140 pads a struct used in an array (this one, via
+	// Light lights[MAX_LIGHTS] in the shader) up to a multiple of 16 bytes
+	// regardless, so cosOut(4)+type(4) was already sharing its 16-byte slot
+	// with 8 bytes of otherwise-wasted padding. shadowIndex spends 4 of it.
+	int shadowIndex;
 };
 
 // Hemispheric ambient, E07 s.47-54: the scene's indirect lighting, two colors
@@ -71,6 +81,15 @@ class SceneLights {
 	// switches dropped what they drop. The authored total is what init()
 	// prints at startup.
 	int count() const { return (int)activeLights.size(); }
+
+	// The full authored list, unfiltered by the enable switches below and
+	// without waiting for an update() tick. main.cpp uses this once at
+	// startup to find the shadow-casting lights (shadowIndex >= 0) and their
+	// positions/directions, to build the light-space matrices shadow
+	// rendering needs -- those matrices don't change frame to frame (the sun
+	// and the torches are static), so there is no need to go through the
+	// per-frame activeLights path just to read them.
+	const std::vector<LightData> &all() const { return lights; }
 
 	// Not animated, so it skips update(). By value rather than by reference
 	// because with ambientEnabled off there is no stored object to point at:
@@ -110,6 +129,16 @@ class SceneLights {
 	// Animation state, index-matched with `lights`. Zero for anything static.
 	std::vector<float> orbitSpeed;	// degrees per second around world Y
 	std::vector<glm::vec3> baseDir;	// direction before any rotation
+
+	// Flame flicker (lights.json "flicker"), index-matched with `lights` too.
+	std::vector<glm::vec3> baseColor;	// color before flicker scales it
+	std::vector<bool> flickerEnabled;
+	std::vector<float> flickerStrength;	// how far the scale swings from 1.0
+	// Per-light stagger so authored-identical torches don't flicker in sync.
+	// The golden-angle-ish step (index * 2.399963, radians) needs no RNG and
+	// still lands the handful of lights this scene has on visibly different
+	// points of the sine sum.
+	std::vector<float> flickerPhase;
 	float orbitAngle = 0.0f;
 
 	// Degrees per second used by orbitOverride. Far faster than a plausible
@@ -122,6 +151,11 @@ class SceneLights {
 	float debugOrbitAngle = 0.0f;
 
 	static glm::vec3 readVec3(const nlohmann::json &js, const glm::vec3 &fallback);
+
+	// Next shadowIndex to hand out, incremented once per "castsShadow": true
+	// entry in declaration order. Not reset after init() -- there is only
+	// ever one pass over lights.json.
+	int nextShadowIndex = 0;
 };
 
 #ifdef SCENELIGHTS_IMPLEMENTATION
@@ -173,6 +207,7 @@ void SceneLights::init(Scene *SC, const std::string &file) {
 		L.beta = 1.0f;
 		L.cosIn = 1.0f;
 		L.cosOut = 0.0f;
+		L.shadowIndex = -1;
 
 		const std::string type = l.value("type", std::string("point"));
 		if(type == "direct")     L.type = LIGHT_DIRECT;
@@ -226,9 +261,24 @@ void SceneLights::init(Scene *SC, const std::string &file) {
 			L.cosOut = std::cos(glm::radians(outerDeg * 0.5f));
 		}
 
+		if(l.value("castsShadow", false)) {
+			L.shadowIndex = nextShadowIndex++;
+			if(L.shadowIndex >= NUM_SHADOW_LIGHTS) {
+				std::cout << "SceneLights: more than " << NUM_SHADOW_LIGHTS
+						  << " shadow-casting lights, the rest render unshadowed\n";
+				L.shadowIndex = -1;
+				nextShadowIndex--;
+			}
+		}
+
 		lights.push_back(L);
 		baseDir.push_back(L.dir);
 		orbitSpeed.push_back(l.value("orbitSpeed", 0.0f));
+
+		baseColor.push_back(L.color);
+		flickerEnabled.push_back(l.value("flicker", false));
+		flickerStrength.push_back(l.value("flickerStrength", 0.35f));
+		flickerPhase.push_back((float)(lights.size() - 1) * 2.399963f);
 	}
 
 	std::cout << "SceneLights: " << lights.size() << " lights loaded\n";
@@ -273,6 +323,20 @@ const std::vector<LightData> &SceneLights::update(float deltaT) {
 								  glm::radians(speed * angle),
 								  glm::vec3(0.0f, 1.0f, 0.0f));
 		lights[i].dir = glm::vec3(R * glm::vec4(baseDir[i], 0.0f));
+	}
+
+	// Flicker: a sum of three sine waves at incommensurate frequencies, so the
+	// result doesn't visibly repeat over the timescale anyone watches a torch.
+	// orbitAngle is elapsed seconds (accumulated above, unconditionally), so
+	// this runs whether or not orbitOverride is on. flickerPhase staggers each
+	// light's copy of the same sum so identical torches don't pulse in sync.
+	for(size_t i = 0; i < lights.size(); i++) {
+		if(!flickerEnabled[i]) continue;
+		float t = orbitAngle + flickerPhase[i];
+		float n = 0.5f * std::sin(2.1f * t)
+				+ 0.3f * std::sin(4.7f * t + 1.3f)
+				+ 0.2f * std::sin(9.3f * t + 2.6f);
+		lights[i].color = baseColor[i] * (1.0f + flickerStrength[i] * n);
 	}
 
 	// Rebuilt from scratch every frame: a switch can flip between two of them,

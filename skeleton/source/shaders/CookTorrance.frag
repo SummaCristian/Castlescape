@@ -46,6 +46,9 @@ layout(binding = 0, set = 1) uniform UniformBufferObject {
     float F0;         // reflectance head-on
     float k;          // diffuse share, specular gets (1 - k)
     int flatNormals;  // 1: ignore the vertex normal, use the face's own
+    // Unused here, declared to keep this block identical to the one Flame.vert
+    // and Flame.frag see: both pipelines share DSLlocal and one C++ struct.
+    float time;
 } ubo;
 
 layout(binding = 1, set = 1) uniform sampler2D albedoMap;
@@ -59,6 +62,10 @@ struct Light {
     float cosIn;    // spot: cosine of the half inner angle
     float cosOut;   // spot: cosine of the half outer angle
     int type;
+    // -1: unshadowed (the lanterns, the spot). Else which slot of shadowMaps
+    // / lightSpace below holds this light's shadow map. Set by SceneLights
+    // from lights.json's "castsShadow", see the struct comment there.
+    int shadowIndex;
 };
 
 layout(binding = 0, set = 0) uniform GlobalUniformBufferObject {
@@ -70,6 +77,82 @@ layout(binding = 0, set = 0) uniform GlobalUniformBufferObject {
     int debugFlags;      // LIGHT_DEBUG_* bits, set by the cheat menu
     Light lights[MAX_LIGHTS];
 } gubo;
+
+// Shadow sampling, set 2: its own descriptor set because it belongs to
+// neither "once a frame" (set 0) nor "once an object" (set 1) -- it's once
+// per SHADOW-CASTING LIGHT, six fixed slots that exist for the run of the
+// program. lightSpace is the same view-projection matrix Shadow.vert used to
+// render each map, needed again here to place fragPos in that light's space.
+//
+// Six SEPARATE sampler bindings rather than one binding declared as an array
+// of 6: Scene::init's descriptor-pool accounting (Scene.hpp, the loop that
+// does `texturesInPool += 1` per binding) counts bindings, not the
+// descriptors an array binding actually needs, and every existing binding in
+// this project has count 1. An array binding would silently under-reserve
+// the pool. Six ordinary bindings sidestep that instead of relying on a path
+// nothing else here exercises.
+layout(binding = 0, set = 2) uniform ShadowUniformBufferObject {
+    mat4 lightSpace[NUM_SHADOW_LIGHTS];
+} shadowUbo;
+
+layout(binding = 1, set = 2) uniform sampler2D shadowMap0;
+layout(binding = 2, set = 2) uniform sampler2D shadowMap1;
+layout(binding = 3, set = 2) uniform sampler2D shadowMap2;
+layout(binding = 4, set = 2) uniform sampler2D shadowMap3;
+layout(binding = 5, set = 2) uniform sampler2D shadowMap4;
+layout(binding = 6, set = 2) uniform sampler2D shadowMap5;
+
+// Stands in for shadowMaps[idx], which the six-separate-bindings choice above
+// rules out. NUM_SHADOW_LIGHTS is 6 (LightConstants.glsl); if that ever
+// changes, a case has to be added or removed here by hand.
+float sampleShadowMap(int idx, vec2 uv) {
+    if(idx == 0) return texture(shadowMap0, uv).r;
+    if(idx == 1) return texture(shadowMap1, uv).r;
+    if(idx == 2) return texture(shadowMap2, uv).r;
+    if(idx == 3) return texture(shadowMap3, uv).r;
+    if(idx == 4) return texture(shadowMap4, uv).r;
+    return texture(shadowMap5, uv).r;
+}
+
+// 1.0: fully lit. 0.0: this light's shadow map says something else is closer
+// to the light than `pos` is, i.e. `pos` is in shadow. shadowIndex < 0 skips
+// the lookup entirely (the lanterns and the spot: see the scope note in
+// notes.md on why only the sun and the torches got this).
+float shadowFactor(int shadowIndex, vec3 pos) {
+    if(shadowIndex < 0) {
+        return 1.0;
+    }
+
+    vec4 lightClip = shadowUbo.lightSpace[shadowIndex] * vec4(pos, 1.0);
+    // w is 1 for the sun's orthographic matrix and only actually divides
+    // anything for the torches' perspective ones, but doing it unconditionally
+    // costs nothing and keeps this one code path for both projection kinds.
+    vec3 lightNDC = lightClip.xyz / lightClip.w;
+
+    // GLM_FORCE_DEPTH_ZERO_TO_ONE (Starter.hpp) means lightNDC.z is already
+    // Vulkan's 0..1 depth range, same as what's stored in the shadow map; only
+    // XY need remapping from NDC's -1..1 to a texture's 0..1.
+    vec2 shadowUV = lightNDC.xy * 0.5 + 0.5;
+
+    // Outside the map (a torch's cone, or the sun's fixed ortho box, doesn't
+    // reach here): nothing to compare against, so don't shadow it. Missing
+    // this check would sample garbage at the map's clamped edge instead.
+    if(shadowUV.x < 0.0 || shadowUV.x > 1.0 ||
+       shadowUV.y < 0.0 || shadowUV.y > 1.0 ||
+       lightNDC.z < 0.0 || lightNDC.z > 1.0) {
+        return 1.0;
+    }
+
+    float closestDepth = sampleShadowMap(shadowIndex, shadowUV);
+    // Shader-side depth bias: Pipeline::create (Starter.hpp) hard-codes
+    // depthBiasEnable false, so there is no hardware slope-scaled bias
+    // available, and this is the substitute. Too small and most of the scene
+    // shadows itself in stripes ("acne"); too large and shadows visibly
+    // detach from their casters ("peter-panning"). 0.0015 is a starting point
+    // for this scene's depth ranges, not a derived value.
+    const float bias = 0.0015;
+    return (lightNDC.z - bias > closestDepth) ? 0.0 : 1.0;
+}
 
 // Whether one of the debug views from LightConstants.glsl is on. All of them
 // are off in a normal frame, so this is a uniform branch: every pixel of every
@@ -223,12 +306,19 @@ void main() {
     // its inputs as arguments.
     float k = debugOn(LIGHT_DEBUG_NO_SPECULAR) ? 1.0 : ubo.k;
 
-    // Rendering equation: sum over the sources of radiance times BRDF.
+    // Rendering equation: sum over the sources of radiance times BRDF, each
+    // term zeroed by shadowFactor() wherever that one light doesn't reach
+    // this point. Ambient below is untouched by it on purpose: shadow mapping
+    // only ever blocks a light's DIRECT contribution, never the indirect
+    // bounce hemisphericAmbient() stands in for -- otherwise a shadow would
+    // read as a hole into pure black instead of the dim, indirectly-lit area
+    // a real one is.
     vec3 Lo = vec3(0.0);
     for(int i = 0; i < gubo.lightCount; i++) {
         vec3 L = lightDirection(gubo.lights[i], fragPos);
         Lo += lightRadiance(gubo.lights[i], fragPos)
-            * BRDF(N, L, V, mD, ubo.mS, ubo.roughness, ubo.F0, k);
+            * BRDF(N, L, V, mD, ubo.mS, ubo.roughness, ubo.F0, k)
+            * shadowFactor(gubo.lights[i].shadowIndex, fragPos);
     }
 
     vec3 color = Lo + hemisphericAmbient(N, mD);
