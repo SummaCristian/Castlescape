@@ -55,12 +55,14 @@ inst = []
 edges = {}
 
 
-def add(id, key, pos, rot=None):
+def add(id, key, pos, rot=None, scale=None):
     e = {"id": id, "model": "dungeon" + key, "texture": ["dungeon" + key + "Tex"],
          "translate": [round(pos[0] + SHIFT[0], 2), round(pos[1], 2),
                        round(pos[2] + SHIFT[1], 2)]}
     if rot is not None:
         e["eulerAngles"] = [0.0, float(rot), 0.0]
+    if scale is not None:
+        e["scale"] = [float(scale)] * 3
     inst.append(e)
 
 
@@ -146,37 +148,45 @@ assert not missing, "bordi esterni scoperti: %s" % missing
 INT = {"dh": (-20.36 + SHIFT[0], -1.24 + SHIFT[0], -45.56 + SHIFT[1], -26.44 + SHIFT[1]),
        "dc": (0.0 + SHIFT[0], 13.16 + SHIFT[0], -45.56 + SHIFT[1], -33.64 + SHIFT[1])}
 
+# Il kit Dracula e' modellato a una scala molto piu' grande dell'omino
+# (EYE_HEIGHT del player e' 1.8): tavolo, sedia, barile e teschio grezzi
+# arrivano quasi o oltre l'altezza occhi. Questi fattori li riportano a
+# proporzioni umane realistiche (tavolo ~1.0m, sedia ~0.95m, barile ~0.9m,
+# teschio ~0.22m, candela ~0.3m); il resto del kit (muri, porta, torcia,
+# stendardo, tappeto, piatto) e' gia' in scala e resta a 1.0.
+SCALE = {"Table": 0.60, "Chair": 0.86, "Barrel": 0.48, "Skull": 0.46, "Candle": 0.41}
+
 PROPS = [
     # grande sala: tavolata al centro sul tappeto, torce e stendardi alle pareti
-    ("dhCarpet",  "Carpet", -10.80, Y + 0.01, -36.0, None),
-    ("dhTable",   "Table",  -10.80, Y + 0.24, -36.0, None),
-    ("dhChairW",  "Chair",  -14.60, Y,        -36.0, 90),
-    ("dhChairE",  "Chair",   -7.00, Y,        -36.0, -90),
-    ("dhPlate1",  "Plate",  -12.00, Y + 1.84, -36.0, None),
-    ("dhPlate2",  "Plate",   -9.60, Y + 1.84, -36.0, 180),
-    ("dhCandle",  "Candle", -10.80, Y + 1.84, -36.0, None),
-    ("dhBarrel1", "Barrel", -18.50, Y,        -43.5, None),
-    ("dhBarrel2", "Barrel", -18.50, Y,        -28.5, 25),
-    ("dhBarrel3", "Barrel",  -3.50, Y,        -43.5, -40),
-    ("dhSkull",   "Skull",  -17.00, Y,        -31.5, -35),
-    ("dhTorchW1", "Torch",  -20.36, 3.5,      -42.0, 180),
-    ("dhTorchW2", "Torch",  -20.36, 3.5,      -30.0, 180),
-    ("dhTorchE1", "Torch",   -1.24, 3.5,      -42.0, None),
-    ("dhTorchE2", "Torch",   -1.24, 3.5,      -30.0, None),
-    ("dhBanner1", "Banner", -20.36, Y,        -40.0, 180),
-    ("dhBanner2", "Banner", -20.36, Y,        -32.0, 180),
+    ("dhCarpet",  "Carpet", -10.80, Y + 0.01,   -36.0, None),
+    ("dhTable",   "Table",  -10.80, Y + 0.24,   -36.0, None),
+    ("dhChairW",  "Chair",  -14.60, Y,          -36.0, 90),
+    ("dhChairE",  "Chair",   -7.00, Y,          -36.0, -90),
+    ("dhPlate1",  "Plate",  -12.00, Y + 1.2009, -36.0, None),
+    ("dhPlate2",  "Plate",   -9.60, Y + 1.2009, -36.0, 180),
+    ("dhCandle",  "Candle", -10.80, Y + 1.2009, -36.0, None),
+    ("dhBarrel1", "Barrel", -18.50, Y,          -43.5, None),
+    ("dhBarrel2", "Barrel", -18.50, Y,          -28.5, 25),
+    ("dhBarrel3", "Barrel",  -3.50, Y,          -43.5, -40),
+    ("dhSkull",   "Skull",  -17.00, Y,          -31.5, -35),
+    ("dhTorchW1", "Torch",  -20.36, 3.5,        -42.0, 180),
+    ("dhTorchW2", "Torch",  -20.36, 3.5,        -30.0, 180),
+    ("dhTorchE1", "Torch",   -1.24, 3.5,        -42.0, None),
+    ("dhTorchE2", "Torch",   -1.24, 3.5,        -30.0, None),
+    ("dhBanner1", "Banner", -20.36, Y,          -40.0, 180),
+    ("dhBanner2", "Banner", -20.36, Y,          -32.0, 180),
     # anticamera: candela sopra il barile, sedia rovesciata contro la parete
-    ("dcCarpet",  "Carpet",   6.58, Y + 0.01, -39.6, None),
-    ("dcBarrel1", "Barrel",   2.00, Y,        -35.5, None),
-    ("dcCandle",  "Candle",   2.00, Y + 2.25, -35.5, None),
-    ("dcBarrel2", "Barrel",  11.50, Y,        -44.0, 15),
-    ("dcChair",   "Chair",   10.00, Y,        -36.5, 200),
-    ("dcSkull",   "Skull",    3.00, Y,        -43.5, 20),
-    ("dcTorchE",  "Torch",   13.16, 3.5,      -39.6, None),
-    ("dcBanner",  "Banner",  13.16, Y,        -43.0, None),
+    ("dcCarpet",  "Carpet",   6.58, Y + 0.01,   -39.6, None),
+    ("dcBarrel1", "Barrel",   2.00, Y,          -35.5, None),
+    ("dcCandle",  "Candle",   2.00, Y + 1.0802, -35.5, None),
+    ("dcBarrel2", "Barrel",  11.50, Y,          -44.0, 15),
+    ("dcChair",   "Chair",   10.00, Y,          -36.5, 200),
+    ("dcSkull",   "Skull",    3.00, Y,          -43.5, 20),
+    ("dcTorchE",  "Torch",   13.16, 3.5,        -39.6, None),
+    ("dcBanner",  "Banner",  13.16, Y,          -43.0, None),
 ]
 for id, key, x, y, z, rot in PROPS:
-    add(id, key, (x, y, z), rot)
+    add(id, key, (x, y, z), rot, SCALE.get(key))
 
 # controllo di contenimento: un prop che sfora finisce dentro o oltre il muro
 bbox = {}
@@ -190,6 +200,8 @@ for e in inst:
     if key in STRUCTURAL:
         continue
     mn, mx = bbox[FILE[key]]
+    sc = e.get("scale", [1.0, 1.0, 1.0])[0]
+    mn, mx = mn * sc, mx * sc
     th = np.radians(e.get("eulerAngles", [0, 0, 0])[1])
     c, s = np.cos(th), np.sin(th)
     corners = [(px * c + pz * s, -px * s + pz * c)
