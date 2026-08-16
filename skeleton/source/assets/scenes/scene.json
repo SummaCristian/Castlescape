@@ -30,6 +30,7 @@
 		{"id": "dungeonSkull", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_Skull_01.gltf", "format": "GLTF"},
 		{"id": "dungeonBarrel", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_Barrel_01.gltf", "format": "GLTF"},
 		{"id": "dungeonTorch", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_Torch_01.gltf", "format": "GLTF"},
+		{"id": "dungeonTorchHeld", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_Torch_Held_01.gltf", "format": "GLTF"},
 		{"id": "dungeonBanner", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_CastleBanners_01.gltf", "format": "GLTF"}
 	],
 	"textures": [
@@ -136,7 +137,7 @@
 			{"id": "dcTorchE", "model": "dungeonTorch", "texture": ["dungeonTorchTex"], "translate": [-2.84, 3.5, 26.4]},
 			{"id": "dcBanner", "model": "dungeonBanner", "texture": ["dungeonBannerTex"], "translate": [-2.84, 0.02, 23.0]},
 
-			{"id": "handTorch", "model": "dungeonTorch", "texture": ["dungeonTorchTex"]}
+			{"id": "handTorch", "model": "dungeonTorchHeld", "texture": ["dungeonTorchTex"]}
 		]}
 	]
 }
