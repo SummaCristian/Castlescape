@@ -134,7 +134,9 @@
 			{"id": "dcChair", "model": "dungeonChair", "texture": ["dungeonChairTex"], "translate": [-6.0, 0.02, 29.5], "eulerAngles": [0.0, 200.0, 0.0], "scale": [0.86, 0.86, 0.86]},
 			{"id": "dcSkull", "model": "dungeonSkull", "texture": ["dungeonSkullTex"], "translate": [-13.0, 0.02, 22.5], "eulerAngles": [0.0, 20.0, 0.0], "scale": [0.46, 0.46, 0.46]},
 			{"id": "dcTorchE", "model": "dungeonTorch", "texture": ["dungeonTorchTex"], "translate": [-2.84, 3.5, 26.4]},
-			{"id": "dcBanner", "model": "dungeonBanner", "texture": ["dungeonBannerTex"], "translate": [-2.84, 0.02, 23.0]}
+			{"id": "dcBanner", "model": "dungeonBanner", "texture": ["dungeonBannerTex"], "translate": [-2.84, 0.02, 23.0]},
+
+			{"id": "handTorch", "model": "dungeonTorch", "texture": ["dungeonTorchTex"]}
 		]}
 	]
 }
