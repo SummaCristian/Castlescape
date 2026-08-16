@@ -14,6 +14,7 @@
 #include "custom/SceneColliders.hpp"
 #include "custom/SceneMaterials.hpp"
 #include "custom/SceneLights.hpp"
+#include "custom/Flame.hpp"
 
 // Our own files, and where to start reading.
 //
@@ -70,6 +71,12 @@ struct GlobalUniformBufferObject {
 	// cheats below. Sits in the 4 bytes std140 pads ambientDir with, exactly
 	// like lightCount after eyePos, so the light array still starts at 64.
 	int debugFlags;
+	// Seconds since startup, for the held torch's flame (Flame.hpp): the one
+	// thing in the frame that animates on the GPU rather than being computed
+	// here and uploaded. LightData's own alignas(16) forces the compiler to
+	// pad the array start to a 16-byte boundary regardless, so this scalar
+	// just rides in front of that padding like debugFlags does above.
+	float time;
 	LightData lights[MAX_LIGHTS];
 };
 
@@ -266,6 +273,74 @@ class Skeleton26ReplaceName : public BaseProject {
 	// Uniform scale: SM_Torch_01 is sized for a wall mount, shrunk to look
 	// right at arm's length.
 	static constexpr float HAND_TORCH_SCALE = 0.35f;
+
+	// The flame at a torch's head. See custom/Flame.hpp: a low-poly mesh,
+	// entirely GPU-animated, drawn as one more object inside the main pass.
+	// One Flame instance drives every torch in the scene (Flame::spawn),
+	// held one included -- that's what the reusable design was for.
+	Flame flame;
+
+	// One entry per torch that got a flame, filled once in localInit() (see
+	// addTorchFlame there) and walked every frame in updateUniformBuffer()
+	// to update that flame's transform, its glow billboard and its point
+	// light. `anchor` is in the TORCH MODEL's own local space (i.e. before
+	// whatever instance transform places it in the world); `inst->Wm *
+	// vec4(anchor,1)` gives the flame's world POSITION, but not its
+	// orientation -- see FLAME_WORLD_SCALE below for why the flame doesn't
+	// otherwise ride the instance's Wm the way the torch mesh itself does.
+	struct TorchFlame {
+		Instance *inst;
+		int flameId;
+		glm::vec3 anchor;
+	};
+	std::vector<TorchFlame> torchFlames;
+
+	// One anchor for every torch: SM_Torch_01 (wall-mounted) and
+	// SM_Torch_Held_01 (held) turn out to be the identical mesh, confirmed
+	// by walking their POSITION accessors directly rather than trusting the
+	// two models' reported min/max (which, misleadingly, differ). X -0.544..
+	// -0.224 (mid -0.384), Z -0.165..0.165 (mid 0) at the centroid of the
+	// mesh's own top (a wide flat cup, not a point, so a bbox corner isn't
+	// the right anchor). Y is 0.38, BELOW that top (0.413): the cup has
+	// depth, so sitting the flame's own base ring exactly at the rim left it
+	// looking like it was floating just above the torch instead of coming
+	// out of it -- nestling it down into the cup by that same margin reads
+	// as rooted instead.
+	static constexpr glm::vec3 TORCH_FLAME_ANCHOR = glm::vec3(-0.384f, 0.38f, 0.0f);
+
+	// The flame's own local geometry (Flame.hpp's H[]/Rr[] arrays) was
+	// authored by eye directly against this SAME model's proportions (it's
+	// about 1.1 units tall unscaled), so riding each instance's own uniform
+	// scale -- extracted below, since the render matrix otherwise carries
+	// NO rotation (a flame stays vertical from its own buoyancy regardless
+	// of how the torch holding it is tilted) and so carries no scale either
+	// by default -- reproduces that proportion on every torch: full size on
+	// the wall-mounted ones, shrunk to match on the held one (whose instance
+	// is scaled down to arm's-length size, HAND_TORCH_SCALE). A single fixed
+	// world-space size instead made the flame look right on the (small)
+	// held torch and comically undersized on the (full-size) wall ones.
+
+	// The torch flame's point light. One color/falloff for every torch in
+	// the scene (held and wall-mounted alike): they're all the same kind of
+	// fire, so there's nothing to author per-instance. Tighter (lower g)
+	// than the gate lanterns (SceneLights.hpp/lights.json): a torch flame is
+	// a much smaller, closer source than a lamp head.
+	static constexpr glm::vec3 TORCH_LIGHT_COLOR = glm::vec3(1.0f, 0.5f, 0.16f);
+	static constexpr float TORCH_LIGHT_G = 1.6f;
+	static constexpr float TORCH_LIGHT_BETA = 1.4f;
+
+	// The glow billboard (see Flame.hpp/FlameGlow.*): world-space half-size
+	// of the quad, and how far above the flame's own anchor point its center
+	// sits, so the haze is centered on the flame's visual mass (the crown)
+	// rather than its base.
+	static constexpr float TORCH_GLOW_RADIUS = 0.3f;
+	static constexpr float TORCH_GLOW_HEIGHT_OFFSET = 0.12f;
+
+	// Seconds since startup, uploaded as gubo.time and read by Flame.vert/
+	// .frag and FlameGlow.frag. A free-running accumulator rather than a
+	// frame-indexed value, so the sway/flicker never repeats on a
+	// noticeable cycle.
+	float animTime = 0.0f;
 
 	// Walking sway: a lateral swing once per stride plus a vertical bounce
 	// at twice that frequency (one bounce per footstep), both driven by a
@@ -471,6 +546,41 @@ class Skeleton26ReplaceName : public BaseProject {
 			}
 		}
 
+		// Torch flames. DSglobal isn't populated yet (that happens in
+		// pipelinesAndDescriptorSetsInit(), after the descriptor pool
+		// exists), but its address is stable, so capturing a pointer to it
+		// now and reading through it later is safe -- same reasoning as
+		// handTorchInst above.
+		flame.init(this, &DSLglobal, &DSglobal);
+
+		// seed just spreads each flame's sway/flicker phase (see Flame.hpp),
+		// not a real RNG: index * a large-ish irrational-ish constant keeps
+		// them decorrelated without needing a seeded generator for one call.
+		auto addTorchFlame = [&](const char *id, glm::vec3 anchor) {
+			auto it = SC.InstanceIds.find(id);
+			if(it == SC.InstanceIds.end()) {
+				std::cout << "Torch instance '" << id << "' not found, skipping its flame\n";
+				return;
+			}
+			Instance *inst = SC.I[it->second];
+			int flameId = flame.spawn((float)torchFlames.size() * 2.3971f);
+			if(flameId < 0) {
+				return;
+			}
+			torchFlames.push_back({inst, flameId, anchor});
+		};
+
+		if(handTorchInst != nullptr) {
+			addTorchFlame("handTorch", TORCH_FLAME_ANCHOR);
+		}
+		// The wall-mounted dungeonTorch instances (see scene.json): two pairs
+		// flanking the hall's doorway plus one in the corridor.
+		addTorchFlame("dhTorchW1", TORCH_FLAME_ANCHOR);
+		addTorchFlame("dhTorchW2", TORCH_FLAME_ANCHOR);
+		addTorchFlame("dhTorchE1", TORCH_FLAME_ANCHOR);
+		addTorchFlame("dhTorchE2", TORCH_FLAME_ANCHOR);
+		addTorchFlame("dcTorchE", TORCH_FLAME_ANCHOR);
+
 		// Surface parameters for the BRDF, one per model.
 		materials.init(&SC, "assets/scenes/materials.json");
 
@@ -530,6 +640,10 @@ class Skeleton26ReplaceName : public BaseProject {
 		SC.pipelinesAndDescriptorSetsInit();
 		txt.pipelinesAndDescriptorSetsInit();
 		uiQuad.pipelinesAndDescriptorSetsInit();
+		// Same RP as the main pass: the flame draws inside it, right after
+		// the scene, so it shares the depth buffer instead of needing its
+		// own render pass the way UiQuad's 2D overlay does.
+		flame.pipelinesAndDescriptorSetsInit(&RP);
 	}
 
 	// Here you destroy your pipelines and Descriptor Sets!
@@ -543,6 +657,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		SC.pipelinesAndDescriptorSetsCleanup();
 		txt.pipelinesAndDescriptorSetsCleanup();
 		uiQuad.pipelinesAndDescriptorSetsCleanup();
+		flame.pipelinesAndDescriptorSetsCleanup();
 	}
 
 	// Here you destroy all the Models, Texture and Desc. Set Layouts you created!
@@ -564,6 +679,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		SC.localCleanup();
 		txt.localCleanup();
 		uiQuad.localCleanup();
+		flame.localCleanup();
 	}
 	
 	// Here it is the creation of the command buffer:
@@ -583,6 +699,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		RP.begin(commandBuffer, currentImage);
 
 		SC.populateCommandBuffer(commandBuffer, 0, currentImage);
+		flame.populateCommandBuffer(commandBuffer, currentImage);
 
 		RP.end(commandBuffer);
 	}
@@ -613,6 +730,34 @@ class Skeleton26ReplaceName : public BaseProject {
 			gubo.lights[i] = lights[i];
 		}
 
+		// Torch flames' point lights. NOT going through SceneLights/
+		// lights.json's own "instance"+"offset" anchoring: that reads the
+		// instance's Wm once, at SceneLights::init() time, which is exactly
+		// wrong for the held torch (its Wm doesn't exist in any meaningful
+		// form until GameLogic() starts overwriting it every frame -- an
+		// anchor taken before that would freeze the light at whatever the
+		// placeholder scene.json transform happened to be, typically the
+		// origin). So instead: appended straight into gubo here, every
+		// frame, from the same Wm the flame itself now rides.
+		for(const TorchFlame &tf : torchFlames) {
+			if(gubo.lightCount >= MAX_LIGHTS) {
+				break;
+			}
+			glm::vec3 worldPos = glm::vec3(tf.inst->Wm * glm::vec4(tf.anchor, 1.0f));
+
+			LightData L{};
+			L.pos = worldPos;
+			L.dir = glm::vec3(0.0f, -1.0f, 0.0f);	// unused for a point light
+			L.color = TORCH_LIGHT_COLOR;
+			L.g = TORCH_LIGHT_G;
+			L.beta = TORCH_LIGHT_BETA;
+			L.cosIn = 1.0f;
+			L.cosOut = 0.0f;
+			L.type = LIGHT_POINT;
+
+			gubo.lights[gubo.lightCount++] = L;
+		}
+
 		// By value: with the Ambient Light cheat off there is no stored ambient
 		// to hand back a reference to. See SceneLights::ambient().
 		const AmbientLight amb = sceneLights.ambient();
@@ -631,7 +776,51 @@ class Skeleton26ReplaceName : public BaseProject {
 
 		gubo.eyePos = glm::vec3(glm::inverse(View)[3]);
 
+		animTime += deltaT;
+		gubo.time = animTime;
+
 		DSglobal.map(currentImage, &gubo, 0);
+
+		// Each flame's render matrix uses only its torch's WORLD POSITION
+		// (inst->Wm * anchor), never its rotation: a flame stands upright
+		// from its own buoyancy no matter how the torch holding it is tilted
+		// or held, so inheriting the instance's full Wm here (as the flame
+		// used to) dragged it sideways with the torch, most visibly on the
+		// wall sconces (mounted at an angle) and the held one (grip tilt +
+		// walking bob roll). FLAME_WORLD_SCALE stands in for the scale that
+		// rotation-inheriting matrix would otherwise have carried.
+		//
+		// The glow billboard needs its own basis on top of that: it has to
+		// face the camera rather than stand upright, so its right/up come
+		// from View's own rotation (row 0/1 of a lookAt matrix are the
+		// camera's world-space right/up -- glm is column-major, so that's
+		// View[col][row] with row/col swapped from the usual read).
+		glm::vec3 worldRight = glm::vec3(View[0][0], View[1][0], View[2][0]);
+		glm::vec3 worldUp    = glm::vec3(View[0][1], View[1][1], View[2][1]);
+		glm::vec3 worldFwd   = glm::vec3(View[0][2], View[1][2], View[2][2]);
+
+		for(const TorchFlame &tf : torchFlames) {
+			glm::vec3 anchorWorld = glm::vec3(tf.inst->Wm * glm::vec4(tf.anchor, 1.0f));
+			// Every torch instance here uses a uniform scale (none has a
+			// stretched axis), so its length alone -- taken off any one
+			// basis column, rotation doesn't change a vector's length -- IS
+			// the scale factor, with no need to fully decompose Wm.
+			float instScale = glm::length(glm::vec3(tf.inst->Wm[0]));
+
+			glm::mat4 flameWm = glm::translate(glm::mat4(1.0f), anchorWorld)
+				* glm::scale(glm::mat4(1.0f), glm::vec3(instScale));
+			flame.update(tf.flameId, ViewPrj * flameWm, currentImage);
+
+			glm::vec3 glowCenter = anchorWorld + worldUp * (TORCH_GLOW_HEIGHT_OFFSET * instScale);
+			float glowRadius = TORCH_GLOW_RADIUS * instScale;
+			glm::mat4 glowM = glm::mat4(
+				glm::vec4(worldRight * glowRadius, 0.0f),
+				glm::vec4(worldUp * glowRadius, 0.0f),
+				glm::vec4(worldFwd, 0.0f),
+				glm::vec4(glowCenter, 1.0f)
+			);
+			flame.updateGlow(tf.flameId, ViewPrj * glowM, currentImage);
+		}
 
 		// defines the local parameters for the uniforms
 		UniformBufferObject ubo{};		
@@ -752,6 +941,23 @@ class Skeleton26ReplaceName : public BaseProject {
 		hud.update(window, windowWidth, windowHeight);
 
 		getSixAxis(deltaT, m, r, fire);
+
+		// Clamped AFTER getSixAxis (so input timing itself is untouched) but
+		// BEFORE anything below integrates physics with it. Gravity is
+		// plain Euler integration, camPos.y += camVerticalVelocity * deltaT
+		// with no clamp: on a slow or momentarily stalled frame (asset/
+		// pipeline work, a GPU driver hitch) deltaT spikes, one frame's fall
+		// overshoots every collider's AABB, and the ground pass below has
+		// nothing "near the feet" left to catch it on -- the player falls
+		// straight through the floor. 1/20s caps a single frame's fall to
+		// what a normal frame would produce even during a multi-frame stall;
+		// the game just briefly slows down instead of skipping physics
+		// entirely, which is the standard fix for Euler integration on a
+		// variable timestep.
+		const float MAX_DELTA_T = 1.0f / 20.0f;
+		if(deltaT > MAX_DELTA_T) {
+			deltaT = MAX_DELTA_T;
+		}
 
 		if(hud.isOpen()) {
 			// HUD is open: discard camera-look/move/fire input this frame so

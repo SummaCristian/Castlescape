@@ -68,6 +68,7 @@ layout(binding = 0, set = 0) uniform GlobalUniformBufferObject {
     vec3 ambientLower;   // indirect light bounced off the ground
     vec3 ambientDir;     // axis the two blend along, i.e. world up
     int debugFlags;      // LIGHT_DEBUG_* bits, set by the cheat menu
+    float time;          // seconds since startup, unused here (see Flame.vert)
     Light lights[MAX_LIGHTS];
 } gubo;
 

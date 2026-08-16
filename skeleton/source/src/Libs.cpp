@@ -29,3 +29,6 @@
 
 #define SCENELIGHTS_IMPLEMENTATION
 #include "custom/SceneLights.hpp"
+
+#define FLAME_IMPLEMENTATION
+#include "custom/Flame.hpp"
