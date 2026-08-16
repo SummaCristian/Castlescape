@@ -143,7 +143,6 @@ float shadowFactor(int shadowIndex, vec3 pos) {
         return 1.0;
     }
 
-    float closestDepth = sampleShadowMap(shadowIndex, shadowUV);
     // Shader-side depth bias: Pipeline::create (Starter.hpp) hard-codes
     // depthBiasEnable false, so there is no hardware slope-scaled bias
     // available, and this is the substitute. Too small and most of the scene
@@ -151,7 +150,25 @@ float shadowFactor(int shadowIndex, vec3 pos) {
     // detach from their casters ("peter-panning"). 0.0015 is a starting point
     // for this scene's depth ranges, not a derived value.
     const float bias = 0.0015;
-    return (lightNDC.z - bias > closestDepth) ? 0.0 : 1.0;
+
+    // PCF (percentage-closer filtering): average the hard 0/1 test over a 3x3
+    // neighbourhood in the shadow map instead of a single tap. A single tap
+    // makes the shadow edge follow the shadow map's texel grid exactly, which
+    // shows up as a jagged/staircased edge on large flat surfaces (the
+    // castle's walls) once the map is stretched over enough world-space area
+    // that one texel covers several screen pixels. Averaging nearby taps
+    // turns that hard step into a soft gradient a few texels wide.
+    // texelSize matches SHADOW_MAP_RES (main.cpp) -- kept in sync by hand
+    // since the shader has no access to that C++ constant.
+    const vec2 texelSize = vec2(1.0 / 1024.0);
+    float shadow = 0.0;
+    for(int x = -1; x <= 1; x++) {
+        for(int y = -1; y <= 1; y++) {
+            float d = sampleShadowMap(shadowIndex, shadowUV + vec2(x, y) * texelSize);
+            shadow += (lightNDC.z - bias > d) ? 0.0 : 1.0;
+        }
+    }
+    return shadow / 9.0;
 }
 
 // Whether one of the debug views from LightConstants.glsl is on. All of them
