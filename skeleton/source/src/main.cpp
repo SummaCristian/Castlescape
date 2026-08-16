@@ -250,52 +250,36 @@ class Skeleton26ReplaceName : public BaseProject {
 	// the "[E] Interact" prompt.
 	int nearbyDoor = -1;
 
-	// The torch held in the player's right hand. It's a normal scene
-	// instance (see handTorch in scene.json), but instead of a fixed
-	// authored transform, its world matrix is rebuilt every frame in
-	// GameLogic() from the camera's own position and basis vectors, so it
-	// rides along with the view the same way a first-person weapon model
-	// would. Left null if the instance can't be found, in which case the
-	// torch is simply not drawn.
+	// The torch held in the player's right hand. A normal scene instance
+	// (handTorch in scene.json) whose world matrix is rebuilt every frame
+	// from the camera's position and basis vectors, so it follows the view
+	// like a first-person weapon model. Null if the instance isn't found.
 	Instance *handTorchInst = nullptr;
-	// Where the torch sits relative to the eye, expressed in camera space
-	// (right, up, -front). At distance d the frustum's half-height is
-	// tan(FOVy/2)*d; at the chosen forward distance of 1.1 that bound is
-	// ~0.46. SM_Torch_01's local origin sits near its top, with the body
-	// hanging about 0.72 units below it (0.25 after the 0.35 scale), so a
-	// vertical offset of -0.35 pushes that lower part past the bound on
-	// purpose: the handle end crops off the bottom edge, same as a
-	// held weapon in a first-person view, while the torch head stays
-	// comfortably inside (its own top is only ~0.145 above the origin).
-	// Lateral bound is the same formula times aspect ratio, so it's
-	// roomier: 0.5 sits close to the right edge even at a narrow 4:3
-	// window (bound there is ~0.61) without touching it.
+	// Torch position relative to the eye, in camera space (right, up,
+	// -front). Low and close enough that the handle crops off the bottom
+	// of the screen, so only the torch itself is visible, like a held
+	// weapon in a first-person view.
 	static constexpr glm::vec3 HAND_TORCH_OFFSET = glm::vec3(0.5f, -0.35f, -1.1f);
-	// Extra tilt applied on top of the model's own orientation, in degrees,
-	// so it looks gripped rather than floating dead straight in the hand.
+	// Extra tilt on top of the model's own orientation, so it looks gripped
+	// rather than floating dead level.
 	static constexpr glm::vec3 HAND_TORCH_TILT_DEG = glm::vec3(-15.0f, 20.0f, 0.0f);
-	// Uniform scale applied to the held torch. SM_Torch_01 is sized for
-	// standing against a wall, so it needs shrinking to look right at
-	// arm's length.
+	// Uniform scale: SM_Torch_01 is sized for a wall mount, shrunk to look
+	// right at arm's length.
 	static constexpr float HAND_TORCH_SCALE = 0.35f;
 
-	// Walking sway, the classic FPS view-model bob: a lateral sway once per
-	// stride plus a vertical bounce at twice that frequency (one bounce per
-	// footstep, left-right-left-right), both driven by a single accumulating
-	// phase rather than wall-clock time, so it can't drift out of sync with
-	// itself. torchBobBlend is the actual 0..1 amplitude multiplier, eased
-	// toward 1 while walking and back to 0 at rest, so starting/stopping
-	// doesn't snap the torch into or out of the sway mid-swing.
+	// Walking sway: a lateral swing once per stride plus a vertical bounce
+	// at twice that frequency (one bounce per footstep), both driven by a
+	// single accumulating phase. torchBobBlend is the 0..1 sway amplitude,
+	// eased toward 1 while walking and back to 0 at rest.
 	float torchBobPhase = 0.0f;
 	float torchBobBlend = 0.0f;
-	// Radians/second the phase advances at normal walking speed; scaled up
-	// while sprinting so the sway keeps pace with the faster stride.
+	// Radians/second the phase advances at normal walking speed, faster
+	// while sprinting.
 	static constexpr float TORCH_BOB_SPEED = 7.0f;
-	// Sway amplitude, world units, before torchBobBlend scales it down.
+	// Sway amplitude in world units, before torchBobBlend scales it down.
 	static constexpr float TORCH_BOB_VERTICAL = 0.035f;
 	static constexpr float TORCH_BOB_LATERAL = 0.02f;
-	// How fast torchBobBlend eases toward its target, same exponential
-	// smoothing idea as eyeStepOffset above.
+	// How fast torchBobBlend eases toward its target.
 	static constexpr float TORCH_BOB_BLEND_TAU = 0.15f;
 
 	// Tallest surface the player can walk straight onto without jumping, measured
@@ -476,11 +460,8 @@ class Skeleton26ReplaceName : public BaseProject {
 		};
 		addDoor("dhDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f);
 
-		// Held torch: same lookup pattern as the doors above, just no Door
-		// wrapper since there's nothing to animate open/closed. Its Wm gets
-		// overwritten every frame in GameLogic(), so the placeholder
-		// transform authored in scene.json (or the lack of one) never
-		// actually shows.
+		// Held torch. Its Wm is overwritten every frame in GameLogic(), so
+		// the placeholder transform in scene.json never actually shows.
 		{
 			auto it = SC.InstanceIds.find("handTorch");
 			if(it == SC.InstanceIds.end()) {
@@ -1064,37 +1045,19 @@ class Skeleton26ReplaceName : public BaseProject {
 		// View-Projection
 		ViewPrj = Prj * View;
 
-		// Held torch. It has no physics or animation of its own: it just
-		// needs to sit at a fixed offset from the eye every frame, tilted
-		// like it's actually gripped rather than floating dead level.
-		//
-		// right/up/front are already the camera's own basis vectors (built
-		// a few lines up from camYaw/camPitch), so there's no need to invert
-		// View to get the camera's world transform back out; it's already
-		// sitting right here as three vectors and a position.
-		//
-		// Front is negated for the third column because the camera looks
-		// down its own -Z in view space (glm::lookAt(eyePos, eyePos+front,
-		// up) puts +front in front of the eye, which is -Z once you're in
-		// the camera's local frame), so -front is the axis that matches a
-		// model authored facing "forward" in the usual convention.
+		// Held torch: sits at a fixed offset from the eye, in the camera's
+		// own local space (right, up, -front; front is negated since the
+		// camera looks down its own local -Z).
 		if(handTorchInst != nullptr) {
-			// Walking sway: m.x/m.z are this frame's raw strafe/forward
-			// input, already zeroed above while the HUD is open, so no
-			// separate check for that is needed here. Airborne is excluded
-			// (grounded check) since bobbing while jumping/falling would
-			// read as feet still stepping mid-air.
 			bool isWalking = grounded && (std::abs(m.x) > 0.01f || std::abs(m.z) > 0.01f);
 			float bobTarget = isWalking ? 1.0f : 0.0f;
 			torchBobBlend += (bobTarget - torchBobBlend) * (1.0f - std::exp(-deltaT / TORCH_BOB_BLEND_TAU));
 			if(isWalking) {
 				torchBobPhase += TORCH_BOB_SPEED * (sprinting ? 1.4f : 1.0f) * deltaT;
 			}
-			// Vertical bounce runs at double the lateral sway's frequency:
-			// one full lateral swing per stride, but two footstep bounces
-			// (left foot, right foot) in that same stride.
 			float bobLateral = sinf(torchBobPhase) * TORCH_BOB_LATERAL * torchBobBlend;
 			float bobVertical = sinf(torchBobPhase * 2.0f) * TORCH_BOB_VERTICAL * torchBobBlend;
+			float bobRollDeg = bobLateral * 90.0f;
 
 			glm::mat4 camWm = glm::mat4(
 				glm::vec4(right, 0.0f),
@@ -1102,16 +1065,9 @@ class Skeleton26ReplaceName : public BaseProject {
 				glm::vec4(-front, 0.0f),
 				glm::vec4(eyePos, 1.0f)
 			);
-
-			// A little roll riding along with the lateral sway, like the
-			// torch is rocking in the hand rather than just sliding side
-			// to side. Degrees per world unit of lateral bob is arbitrary,
-			// tuned by eye.
-			float bobRollDeg = bobLateral * 90.0f;
 			glm::mat4 grip = glm::rotate(glm::mat4(1.0f), glm::radians(HAND_TORCH_TILT_DEG.x), glm::vec3(1.0f, 0.0f, 0.0f))
 							* glm::rotate(glm::mat4(1.0f), glm::radians(HAND_TORCH_TILT_DEG.y), glm::vec3(0.0f, 1.0f, 0.0f))
 							* glm::rotate(glm::mat4(1.0f), glm::radians(HAND_TORCH_TILT_DEG.z + bobRollDeg), glm::vec3(0.0f, 0.0f, 1.0f));
-
 			glm::vec3 bobbedOffset = HAND_TORCH_OFFSET + glm::vec3(bobLateral, bobVertical, 0.0f);
 
 			handTorchInst->Wm = camWm
