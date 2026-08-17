@@ -181,12 +181,15 @@ class Skeleton26ReplaceName : public BaseProject {
 	glm::mat4 ViewPrj;
 	glm::mat4 View;
 
-	// Free-look camera state (position + orientation), persisted across frames
-	glm::vec3 camPos = glm::vec3(0.0f, 1.8f, 5.0f);
+	// Free-look camera state (position + orientation), persisted across frames.
+	// Spawns inside the dungeon hall (dh), clear of the table and both torches,
+	// now that the castle courtyard is gone -- there's no outdoor approach
+	// to walk in from anymore.
+	glm::vec3 camPos = glm::vec3(-33.5f, 1.8f, 29.0f);
 	// Yaw: rotation around world up axis, in degrees.
 	// yaw=0 faces +X; increasing yaw turns right, decreasing turns left.
-	// Starts at -90 (faces -Z) to match the scene's original forward direction.
-	float camYaw = -90.0f;
+	// Faces +X so spawning looks straight down the hall toward the far door.
+	float camYaw = 0.0f;
 	// Pitch: up-down, defined in degrees.
 	// -90: looking down, +90: looking up
 	float camPitch = -10.0f;
@@ -256,6 +259,12 @@ class Skeleton26ReplaceName : public BaseProject {
 		// Off skips the tone map, so anything the tone map was pulling back
 		// into range clips to flat white instead.
 		bool toneMapEnabled = true;
+		// Off forces every shadowFactor() to 1, i.e. renders as if no shadow
+		// map existed, while still rendering the shadow passes themselves.
+		// Diagnostic: it splits "this artifact comes from shadow sampling"
+		// from "this artifact is in the geometry", which is otherwise hard to
+		// tell apart by eye since both show up as flicker on a wall.
+		bool shadowsEnabled = true;
 	} cheats;
 
 	// Numeric tuning for the movement cheats above, isolated the same way but
@@ -576,10 +585,12 @@ class Skeleton26ReplaceName : public BaseProject {
 		// its hinge (see the Door struct comment above), so promptOffset is
 		// the doorway's *centre* in the leaf's local frame instead -- the
 		// point the in-range check should measure from, not the jamb it
-		// hinges on. Measured off the current SM_WallDoor_Hole_01 geometry
-		// (opening spans local Y 0.19..4.85, Z 2.47..4.71; the panel's own
-		// origin sits at the hinge-side jamb, Y 0, Z ~4.82), not eyeballed --
-		// re-measure and update this if the asset is regenerated again.
+		// hinges on. Measured off the current SM_WallDoor_Hole_01 geometry by
+		// rasterizing its triangles, not eyeballed: the opening is ARCHED, not
+		// rectangular -- it spans local Z 2.42..4.77 and Y 0.18..4.10 as a
+		// rectangle, then curves in (1.91 wide at Y 4.25, 1.29 at Y 4.75) and
+		// closes at about Y 4.85. Re-measure and update this if the asset is
+		// regenerated again.
 		// openAngleDeg's sign picks which way it swings open; chosen without
 		// being able to see the render from here, so if it swings the wrong
 		// way, negate it.
@@ -598,6 +609,14 @@ class Skeleton26ReplaceName : public BaseProject {
 			doors.push_back(d);
 		};
 		addDoor("dhDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f);
+		// Second and third doors, gating the two new rooms (dl, dv) added east
+		// of the antechamber. The full dc/dl boundary is two tiles wide, so it
+		// took two hole-wall + leaf pairs, not one wall tile left solid next
+		// to it -- a plain wall there would have blocked half the doorway
+		// with no way through. Same leaf asset, same hinge geometry as the
+		// first door, so the same promptOffset/openAngleDeg apply unchanged.
+		addDoor("dlDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f);
+		addDoor("dlDoorPanel2", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f);
 
 		// The five watching skulls, one per torch (see scene.json "torchSkull"
 		// instances). One addWatchingSkull() call per skull, same reasoning as
@@ -660,6 +679,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		hud.addToggle("Spotlight", &sceneLights.spotEnabled);
 		hud.addToggle("Ambient Light", &sceneLights.ambientEnabled);
 		hud.addToggle("Sun Orbit", &sceneLights.orbitOverride);
+		hud.addToggle("Shadows", &cheats.shadowsEnabled);
 		hud.addToggle("Specular", &cheats.specularEnabled);
 		hud.addToggle("Tone Mapping", &cheats.toneMapEnabled);
 		hud.addToggle("Fullbright", &cheats.unlit);
@@ -906,6 +926,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		if(cheats.showNormals)      gubo.debugFlags |= LIGHT_DEBUG_NORMALS;
 		if(!cheats.specularEnabled) gubo.debugFlags |= LIGHT_DEBUG_NO_SPECULAR;
 		if(!cheats.toneMapEnabled)  gubo.debugFlags |= LIGHT_DEBUG_NO_TONEMAP;
+		if(!cheats.shadowsEnabled)  gubo.debugFlags |= LIGHT_DEBUG_NO_SHADOWS;
 
 		gubo.eyePos = glm::vec3(glm::inverse(View)[3]);
 

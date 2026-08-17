@@ -119,7 +119,10 @@ float sampleShadowMap(int idx, vec2 uv) {
 // the lookup entirely (the lanterns and the spot: see the scope note in
 // notes.md on why only the sun and the torches got this).
 float shadowFactor(int shadowIndex, vec3 pos) {
-    if(shadowIndex < 0) {
+    // Shadows off (cheat menu): light everything as if no map existed. Reads
+    // gubo.debugFlags directly rather than through debugOn(), which is
+    // declared further down the file.
+    if(shadowIndex < 0 || (gubo.debugFlags & LIGHT_DEBUG_NO_SHADOWS) != 0) {
         return 1.0;
     }
 

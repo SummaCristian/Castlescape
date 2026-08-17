@@ -36,5 +36,6 @@
 #define LIGHT_DEBUG_NORMALS     2	// the shading normal as a color
 #define LIGHT_DEBUG_NO_SPECULAR 4	// diffuse only, the BRDF's k forced to 1
 #define LIGHT_DEBUG_NO_TONEMAP  8	// skip the tone map, so overexposure clips
+#define LIGHT_DEBUG_NO_SHADOWS  16	// every shadowFactor() forced to 1 (fully lit)
 
 #endif
