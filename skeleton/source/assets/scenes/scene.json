@@ -19,7 +19,9 @@
 		{"id": "dungeonTorchHeld", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_Torch_Held_01.gltf", "format": "GLTF"},
 		{"id": "torchSkull", "VD": "VDposNormUV", "model": "assets/models/Dracula/TorchSkull_01.gltf", "format": "GLTF"},
 
-		{"id": "ghost", "VD": "VDposNormUV", "model": "assets/models/Entities/Ghost.gltf", "format": "GLTF"}
+		{"id": "ghost", "VD": "VDposNormUV", "model": "assets/models/Entities/Ghost.gltf", "format": "GLTF"},
+
+		{"id": "key", "VD": "VDposNormUV", "model": "assets/models/Miscellaneous/Key.mgcg", "format": "MGCG"}
 	],
 	"textures": [
 		{"id": "tex",          "texture": "assets/textures/toChange.jpg",         "format": "C"},
@@ -41,7 +43,9 @@
 
 		{"id": "torchSkullTex", "texture": "assets/textures/Dracula/T_TorchSkull_01_BaseColor.png", "format": "C"},
 
-		{"id": "ghostTex", "texture": "assets/textures/Entities/Ghost.png", "format": "C"}
+		{"id": "ghostTex", "texture": "assets/textures/Entities/Ghost.png", "format": "C"},
+
+		{"id": "keyTex", "texture": "assets/textures/Miscellaneous/Key_Albedo.png", "format": "C"}
 	],
 	"instances": [
 		{"technique": "CookTorrance", "elements": [
@@ -79,6 +83,7 @@
 			{"id": "dhPlate1", "model": "dungeonPlate", "texture": ["dungeonPlateTex"], "translate": [-28.0, 1.2, 30.0]},
 			{"id": "dhPlate2", "model": "dungeonPlate", "texture": ["dungeonPlateTex"], "translate": [-25.6, 1.2, 30.0], "eulerAngles": [0.0, 180.0, 0.0]},
 			{"id": "dhCandle", "model": "dungeonCandle", "texture": ["dungeonCandleTex"], "translate": [-26.8, 1.2, 30.0], "scale": [0.41, 0.41, 0.41]},
+			{"id": "dhKey", "model": "key", "texture": ["keyTex"], "translate": [-26.8, 1.2, 29.4], "scale": [0.0032, 0.0032, 0.0032]},
 			{"id": "dhBarrel1", "model": "dungeonBarrel", "texture": ["dungeonBarrelTex"], "translate": [-34.5, 0.02, 22.5], "scale": [0.48, 0.48, 0.48]},
 			{"id": "dhBarrel2", "model": "dungeonBarrel", "texture": ["dungeonBarrelTex"], "translate": [-34.5, 0.02, 37.5], "eulerAngles": [0.0, 25.0, 0.0], "scale": [0.48, 0.48, 0.48]},
 			{"id": "dhBarrel3", "model": "dungeonBarrel", "texture": ["dungeonBarrelTex"], "translate": [-19.5, 0.02, 22.5], "eulerAngles": [0.0, -40.0, 0.0], "scale": [0.48, 0.48, 0.48]},

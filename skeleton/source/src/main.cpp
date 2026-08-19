@@ -505,6 +505,78 @@ class Skeleton26ReplaceName : public BaseProject {
 	// the "[E] Interact" prompt.
 	int nearbyDoor = -1;
 
+	// A world object collected with [E], same list-of-interactables reasoning
+	// as Door (the brief calls for several: the key here, more likely later).
+	// Not strictly one-way: at least the key can be dropped again (G), which
+	// just flips `collected` back and re-parks the instance in the world, so
+	// the same entry keeps tracking it either way.
+	struct Pickup {
+		std::string instanceId;
+		Instance *inst = nullptr;
+		glm::vec3 worldPos{0.0f};	// measured once at load, used for the in-range check
+		bool collected = false;
+	};
+	std::vector<Pickup> pickups;
+	// Measured in 3D (unlike DOOR_INTERACT_RADIUS's XZ-only check): a pickup
+	// can sit at table height, well above the player's feet.
+	static constexpr float PICKUP_INTERACT_RADIUS = 2.5f;
+	// Index into `pickups` of whichever one is currently in range, or -1.
+	// Mirrors nearbyDoor; checked first in GameLogic() since grabbing
+	// something should win over interacting with whatever's behind it.
+	int nearbyPickup = -1;
+
+	// The dungeon key (assets/models/Miscellaneous/Key.mgcg, "dhKey" in
+	// scene.json). Index into `pickups`, set once in localInit(), so the
+	// held-key block in GameLogic() can reach the same Instance the world
+	// pickup used -- picking it up doesn't spawn a second copy, it just
+	// stops drawing this one where the table left it and starts drawing it
+	// in the player's hand instead (see the "collected" handling below).
+	int keyPickupIdx = -1;
+	bool hasKey = false;
+	// Edge-detection for the drop key, same reason as interactKeyWasPressed.
+	bool dropKeyWasPressed = false;
+	// World-pose scale for the key, whether sitting on a table or just
+	// dropped: the same 0.01 (raw-mesh) * 0.32 (gameplay) = 0.0032 scene.json's
+	// dhKey "scale" uses. Kept as one named constant instead of repeating
+	// 0.0032f at every drop site, and cross-referenced from scene.json's own
+	// entry so the two don't drift apart silently.
+	static constexpr float KEY_WORLD_SCALE = 0.0032f;
+	// Held pose. Negative X puts it in the LEFT hand (mirrors
+	// HAND_TORCH_OFFSET's +0.5, which is the right); the torch already owns
+	// the right hand and a torch-carrying explorer would hold a found key in
+	// the other one. Y raised from an earlier -0.45, which sat low enough to
+	// be out of frame entirely. Y tilt is mirrored the same way as X for a
+	// natural-looking grip -- unverified without a render, tune alongside
+	// the offset if it looks wrong.
+	static constexpr glm::vec3 HAND_KEY_OFFSET = glm::vec3(-0.40f, -0.4f, -0.9f);
+	// X = 90: the key's long axis is local Z (see KEY_MODEL_CORRECTION's
+	// comment below), and rotating 90 deg about X swings local Z onto world
+	// Y -- i.e. upright, tip up. The mesh's Z range is asymmetric
+	// (-90.84..20.07, in raw units), and the longer, more-negative side is
+	// what maps to +Y at this angle, which is the assumption that it's the
+	// bit/blade end rather than the bow/handle. If the render shows it
+	// tip-down instead, negate this to -90.
+	static constexpr glm::vec3 HAND_KEY_TILT_DEG = glm::vec3(90.0f, -20.0f, 0.0f);
+	// Extra gameplay scale on top of KEY_MODEL_CORRECTION's raw-mesh fix
+	// below, same 0.32 factor scene.json's dhKey "scale" applies on top of
+	// its own 0.01 (0.01 * 0.32 = 0.0032 there). Keeping the two numbers
+	// separate, both here and in scene.json, means this one can be retuned
+	// for how the key reads at arm's length without touching the fix for
+	// the raw asset's own huge export scale.
+	static constexpr float HAND_KEY_SCALE = 0.32f;
+	// The raw mesh is authored at Blender-export scale (extents run to ~110
+	// units long before this correction -- which, uncorrected, is exactly
+	// why the key first showed up enormous). It already lies naturally along
+	// its own local axes -- an earlier version of this code also replayed
+	// the glTF node's own baked 90 deg rotation, which turned out to stand
+	// the key upright instead, so only the 0.01 scale survived, here and in
+	// scene.json's dhKey "scale". Specifying any transform field there makes
+	// Scene.hpp use it INSTEAD of the glTF node's own baked transform (see
+	// notes.md), so the held pose -- which overwrites Wm completely every
+	// frame instead of building on the world transform -- has to redo that
+	// same 0.01 fix, not just the hand placement. HAND_KEY_SCALE above is
+	// the separate, further gameplay shrink.
+
 	// The torch held in the player's right hand. A normal scene instance
 	// (handTorch in scene.json) whose world matrix is rebuilt every frame
 	// from the camera's position and basis vectors, so it follows the view
@@ -1401,6 +1473,25 @@ class Skeleton26ReplaceName : public BaseProject {
 		addWatchingSkull("dhSkullTorchE2");
 		addWatchingSkull("dcSkullTorchE");
 		addWatchingSkull("dvSkullTorch");
+
+		// World pickups. worldPos is read from the instance's own Wm, same as
+		// WatchingSkull does, since dhKey's position already lives in
+		// scene.json and shouldn't be repeated here.
+		auto addPickup = [&](const char *id) {
+			auto it = SC.InstanceIds.find(id);
+			if(it == SC.InstanceIds.end()) {
+				std::cout << "Pickup instance '" << id << "' not found, skipping\n";
+				return;
+			}
+			Pickup p;
+			p.instanceId = id;
+			p.inst = SC.I[it->second];
+			p.worldPos = glm::vec3(p.inst->Wm[3]);
+			pickups.push_back(p);
+		};
+		keyPickupIdx = (int)pickups.size();
+		addPickup("dhKey");
+		if(keyPickupIdx >= (int)pickups.size()) keyPickupIdx = -1;	// addPickup skipped it
 
 		// The ghost's patrol: a closed rectangular loop around the perimeter
 		// of the west dungeon room (the one with the table), inset from the
@@ -2529,20 +2620,25 @@ class Skeleton26ReplaceName : public BaseProject {
 			coordsShown = false;
 		}
 
-		// "[E] Interact" prompt, shown only while a door is in range
-		// (nearbyDoor, set every frame in GameLogic()). A plain shown/hidden
-		// toggle needs no throttling like the coordinates overlay does: it's
-		// binary, so it only touches the text buffer on the frames the state
-		// actually flips.
+		// "[E] Interact"/"[E] Pick up" prompt, shown while a door or a pickup
+		// is in range (nearbyDoor/nearbyPickup, set every frame in
+		// GameLogic() -- pickups take priority, same as the E handling
+		// itself). Re-prints on top of a shown/hidden toggle whenever the
+		// text itself changes (e.g. walking from a door straight to the key),
+		// not just on the binary transition the door-only version needed.
 		static bool interactPromptShown = false;
-		bool showInteractPrompt = (nearbyDoor >= 0);
-		if(showInteractPrompt && !interactPromptShown) {
+		static std::string interactPromptText;
+		bool showInteractPrompt = (nearbyDoor >= 0 || nearbyPickup >= 0);
+		std::string wantedPromptText = (nearbyPickup >= 0) ? "[E] Pick up" : "[E] Interact";
+		if(showInteractPrompt && (!interactPromptShown || wantedPromptText != interactPromptText)) {
+			if(interactPromptShown) txt.removeText(3);
 			float sx, sy;
 			txt.pixelToScr((float)windowWidth / 2.0f, (float)windowHeight - 60.0f, sx, sy);
-			txt.print(sx, sy, "[E] Interact", 3, "CO", false, true, false,
+			txt.print(sx, sy, wantedPromptText, 3, "CO", false, true, false,
 					  TAL_CENTER, TRH_CENTER, TRV_BOTTOM,
 					  {1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f});
 			interactPromptShown = true;
+			interactPromptText = wantedPromptText;
 		} else if(!showInteractPrompt && interactPromptShown) {
 			txt.removeText(3);
 			interactPromptShown = false;
@@ -2757,11 +2853,73 @@ class Skeleton26ReplaceName : public BaseProject {
 					nearbyDoor = i;
 				}
 			}
+
+			// Pickups: same edge-triggered E as the door, checked first so
+			// grabbing something wins if a pickup and a door both happen to
+			// be in range. 3D distance (not XZ-only like the door check),
+			// since a pickup can sit at table height above the feet.
+			nearbyPickup = -1;
+			float bestPickupDist = PICKUP_INTERACT_RADIUS;
+			for(int i = 0; i < (int)pickups.size(); i++) {
+				if(pickups[i].collected) continue;
+				float dx = camPos.x - pickups[i].worldPos.x;
+				float dy = camPos.y - pickups[i].worldPos.y;
+				float dz = camPos.z - pickups[i].worldPos.z;
+				float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+				if(dist < bestPickupDist) {
+					bestPickupDist = dist;
+					nearbyPickup = i;
+				}
+			}
+
 			bool interactKey = glfwGetKey(window, GLFW_KEY_E);
-			if(nearbyDoor >= 0 && interactKey && !interactKeyWasPressed) {
-				doors[nearbyDoor].open = !doors[nearbyDoor].open;
+			if(interactKey && !interactKeyWasPressed) {
+				if(nearbyPickup >= 0) {
+					Pickup &p = pickups[nearbyPickup];
+					p.collected = true;
+					// No per-instance visibility flag exists (Starter draws
+					// every instance every frame), so "removed from the
+					// world" means parked far below the map instead. The key
+					// specifically gets redrawn in the player's hand every
+					// frame from here on (see the held-key block below);
+					// a pickup with no such block just stays parked here.
+					p.inst->Wm = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
+					if(nearbyPickup == keyPickupIdx) hasKey = true;
+				} else if(nearbyDoor >= 0) {
+					doors[nearbyDoor].open = !doors[nearbyDoor].open;
+				}
 			}
 			interactKeyWasPressed = interactKey;
+
+			// Drop key (G): puts the held key back down, lying flat in
+			// front of the player and facing the same way they are, so
+			// walking up to it again shows the pick-up prompt like any
+			// other pickup. Re-parks the SAME instance the held-key block
+			// was drawing in the hand, same one-instance reasoning as pickup.
+			bool dropKey = glfwGetKey(window, GLFW_KEY_G);
+			if(hasKey && keyPickupIdx >= 0 && dropKey && !dropKeyWasPressed) {
+				Pickup &p = pickups[keyPickupIdx];
+				const float EYE_HEIGHT = 1.8f;	// same eye height used throughout GameLogic()
+
+				glm::vec2 faceDir(front.x, front.z);
+				if(glm::length(faceDir) > 0.0001f) faceDir = glm::normalize(faceDir);
+				else faceDir = glm::vec2(0.0f, 1.0f);
+				// 0.03 above the feet: dropped exactly at floor height would
+				// coincide with the floor mesh and z-fight (see notes.md on
+				// the dungeon meshes' coplanar faces).
+				glm::vec3 dropPos(camPos.x + faceDir.x * 1.0f,
+								   camPos.y - EYE_HEIGHT + 0.03f,
+								   camPos.z + faceDir.y * 1.0f);
+				float yaw = std::atan2(faceDir.x, faceDir.y);
+
+				p.worldPos = dropPos;
+				p.collected = false;
+				hasKey = false;
+				p.inst->Wm = glm::translate(glm::mat4(1.0f), dropPos)
+							* glm::rotate(glm::mat4(1.0f), yaw, glm::vec3(0.0f, 1.0f, 0.0f))
+							* glm::scale(glm::mat4(1.0f), glm::vec3(KEY_WORLD_SCALE));
+			}
+			dropKeyWasPressed = dropKey;
 
 			for(Door &d : doors) {
 				float target = d.open ? d.openAngleDeg : 0.0f;
@@ -2933,26 +3091,35 @@ class Skeleton26ReplaceName : public BaseProject {
 		// View-Projection
 		ViewPrj = Prj * View;
 
-		// Held torch: sits at a fixed offset from the eye, in the camera's
-		// own local space (right, up, -front; front is negated since the
-		// camera looks down its own local -Z).
+		// Camera-space basis for anything rigidly attached to the view (held
+		// torch, held key): right/up/-front as columns, eyePos as the
+		// translation. front is negated since the camera looks down its own
+		// local -Z. Shared by both blocks below so they stay in lockstep.
+		glm::mat4 camWm = glm::mat4(
+			glm::vec4(right, 0.0f),
+			glm::vec4(up, 0.0f),
+			glm::vec4(-front, 0.0f),
+			glm::vec4(eyePos, 1.0f)
+		);
+
+		// Walk-bob signal shared by both hands: one accumulating phase, eased
+		// in/out by torchBobBlend so a start/stop doesn't snap the sway.
+		// Originally the torch's own state, now doubles for the key since
+		// both hands swing with the same gait -- only how each hand reads
+		// the phase (see bobLateral's sign below) differs between them.
+		bool isWalking = grounded && (std::abs(m.x) > 0.01f || std::abs(m.z) > 0.01f);
+		float bobTarget = isWalking ? 1.0f : 0.0f;
+		torchBobBlend += (bobTarget - torchBobBlend) * (1.0f - std::exp(-deltaT / TORCH_BOB_BLEND_TAU));
+		if(isWalking) {
+			torchBobPhase += TORCH_BOB_SPEED * (sprinting ? 1.4f : 1.0f) * deltaT;
+		}
+
+		// Held torch: sits at a fixed offset from the eye, in that camera-local space.
 		if(handTorchInst != nullptr) {
-			bool isWalking = grounded && (std::abs(m.x) > 0.01f || std::abs(m.z) > 0.01f);
-			float bobTarget = isWalking ? 1.0f : 0.0f;
-			torchBobBlend += (bobTarget - torchBobBlend) * (1.0f - std::exp(-deltaT / TORCH_BOB_BLEND_TAU));
-			if(isWalking) {
-				torchBobPhase += TORCH_BOB_SPEED * (sprinting ? 1.4f : 1.0f) * deltaT;
-			}
 			float bobLateral = sinf(torchBobPhase) * TORCH_BOB_LATERAL * torchBobBlend;
 			float bobVertical = sinf(torchBobPhase * 2.0f) * TORCH_BOB_VERTICAL * torchBobBlend;
 			float bobRollDeg = bobLateral * 90.0f;
 
-			glm::mat4 camWm = glm::mat4(
-				glm::vec4(right, 0.0f),
-				glm::vec4(up, 0.0f),
-				glm::vec4(-front, 0.0f),
-				glm::vec4(eyePos, 1.0f)
-			);
 			glm::mat4 grip = glm::rotate(glm::mat4(1.0f), glm::radians(HAND_TORCH_TILT_DEG.x), glm::vec3(1.0f, 0.0f, 0.0f))
 							* glm::rotate(glm::mat4(1.0f), glm::radians(HAND_TORCH_TILT_DEG.y), glm::vec3(0.0f, 1.0f, 0.0f))
 							* glm::rotate(glm::mat4(1.0f), glm::radians(HAND_TORCH_TILT_DEG.z + bobRollDeg), glm::vec3(0.0f, 0.0f, 1.0f));
@@ -2962,6 +3129,44 @@ class Skeleton26ReplaceName : public BaseProject {
 				* glm::translate(glm::mat4(1.0f), bobbedOffset)
 				* grip
 				* glm::scale(glm::mat4(1.0f), glm::vec3(HAND_TORCH_SCALE));
+		}
+
+		// Held key: same camera-anchored placement as the torch, live only
+		// once picked up. Reuses the world instance (parked below the map on
+		// pickup, see the interaction block above) instead of a second one --
+		// pointing its Wm at the camera every frame from here on is the
+		// entire "now it's in your hand" effect.
+		//
+		// Lateral bob and roll are read off the SAME phase but negated: a
+		// real walking gait swings opposite arms in opposite directions
+		// (contralateral swing), so mirroring just the sign, off the torch's
+		// own signal, is enough to read as "the other hand" rather than a
+		// second copy of the same motion. Vertical bob is left in phase --
+		// both hands still bounce with every footstep together.
+		if(hasKey && keyPickupIdx >= 0) {
+			float bobLateral = -sinf(torchBobPhase) * TORCH_BOB_LATERAL * torchBobBlend;
+			float bobVertical = sinf(torchBobPhase * 2.0f) * TORCH_BOB_VERTICAL * torchBobBlend;
+			float bobRollDeg = bobLateral * 90.0f;
+
+			glm::mat4 grip = glm::rotate(glm::mat4(1.0f), glm::radians(HAND_KEY_TILT_DEG.x), glm::vec3(1.0f, 0.0f, 0.0f))
+							* glm::rotate(glm::mat4(1.0f), glm::radians(HAND_KEY_TILT_DEG.y), glm::vec3(0.0f, 1.0f, 0.0f))
+							* glm::rotate(glm::mat4(1.0f), glm::radians(HAND_KEY_TILT_DEG.z + bobRollDeg), glm::vec3(0.0f, 0.0f, 1.0f));
+			glm::vec3 bobbedOffset = HAND_KEY_OFFSET + glm::vec3(bobLateral, bobVertical, 0.0f);
+			// Reproduces the raw-mesh scale fix scene.json's dhKey "scale"
+			// applies for the world pose (see KEY_MODEL_CORRECTION comment
+			// above) -- the held pose overwrites Wm from scratch instead of
+			// building on the world transform, so it has to redo that fix
+			// rather than inherit it. No extra rotation needed here (unlike
+			// an earlier version of this code): the raw mesh already lies
+			// naturally along its own local axes, which is also why
+			// scene.json's dhKey carries no "eulerAngles" of its own either.
+			glm::mat4 modelCorrection = glm::scale(glm::mat4(1.0f), glm::vec3(0.01f));
+
+			pickups[keyPickupIdx].inst->Wm = camWm
+				* glm::translate(glm::mat4(1.0f), bobbedOffset)
+				* grip
+				* glm::scale(glm::mat4(1.0f), glm::vec3(HAND_KEY_SCALE))
+				* modelCorrection;
 		}
 
 		return deltaT;
