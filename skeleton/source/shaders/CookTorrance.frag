@@ -139,7 +139,7 @@ float sampleShadowMap(int idx, vec2 uv) {
 // parameter instead of folding it into the float is what lets shadowFactor()
 // below ask a second map before settling for "lit", which a single bool-free
 // return value could not express.
-float shadowFromMap(int idx, vec3 pos, out bool covered) {
+float shadowFromMap(int idx, vec3 pos, float bias, out bool covered) {
     covered = false;
 
     vec4 lightClip = shadowUbo.lightSpace[idx] * vec4(pos, 1.0);
@@ -176,13 +176,14 @@ float shadowFromMap(int idx, vec3 pos, out bool covered) {
     covered = true;
 
     float closestDepth = sampleShadowMap(idx, shadowUV);
+
     // Shader-side depth bias: Pipeline::create (Starter.hpp) hard-codes
     // depthBiasEnable false, so there is no hardware slope-scaled bias
     // available, and this is the substitute. Too small and most of the scene
-    // shadows itself in stripes ("acne"); too large and shadows visibly
-    // detach from their casters ("peter-panning"). 0.0015 is a starting point
-    // for this scene's depth ranges, not a derived value.
-    const float bias = 0.0015;
+    // shadows itself in stripes ("acne"); too large and small casters stop
+    // casting at all and big ones visibly detach ("peter-panning"). Chosen by
+    // the caller, which knows which projection this map uses -- see
+    // shadowFactor().
     return (lightNDC.z - bias > closestDepth) ? 0.0 : 1.0;
 }
 
@@ -199,11 +200,13 @@ float shadowFromMap(int idx, vec3 pos, out bool covered) {
 // lit and the torch shone through its own wall into the next room, called it
 // shadowed and the torch lit only a wedge in front of itself.
 //
-// Whatever neither map covers stays lit and unshadowed. That is the thin band
-// of directions square with the wall which falls outside both frusta; it can
-// still bleed, exactly as it did before, and widening TORCH_SHADOW_FOV is what
-// narrows it.
-float shadowFactor(int shadowIndex, int type, vec3 pos) {
+// Whatever neither map covers stays lit and unshadowed: the band of directions
+// falling outside both frusta, which is also where a torch can still light
+// through geometry. The two TORCH_SHADOW_FOV_* in main.cpp are what set how
+// wide that band is and where it sits.
+//
+// NdotL is only used to pick the bias, see below.
+float shadowFactor(int shadowIndex, int type, vec3 pos, float NdotL) {
     // Shadows off (cheat menu): light everything as if no map existed. Reads
     // gubo.debugFlags directly rather than through debugOn(), which is
     // declared further down the file.
@@ -211,13 +214,44 @@ float shadowFactor(int shadowIndex, int type, vec3 pos) {
         return 1.0;
     }
 
+    // The bias is per PROJECTION KIND, because one number cannot serve both.
+    // These are offsets in the map's 0..1 depth, and how many centimetres that
+    // buys depends entirely on how the projection distributes depth:
+    //
+    //   the sun's orthographic box spreads 1..200 linearly, so a fixed 0.0015
+    //   is a fixed ~30cm everywhere. Left exactly as it was, since it works.
+    //
+    //   a torch's perspective map crams most of its range into the first
+    //   metre, so the SAME number is half a millimetre at the flame and ~2cm
+    //   four metres out (with near at 0.3 -- it was ~24cm back when near was
+    //   0.1, which swallowed every shadow the stones jutting out of the walls
+    //   should have cast). Hence a much smaller value here, and raising the
+    //   near plane in computeShadowMatrices() to earn it.
+    //
+    // Slope-scaled for the torches, which is the standard answer to the fact
+    // that one bias cannot suit every angle: a face square to the light barely
+    // varies in depth across a texel and wants the smallest bias that hides
+    // quantisation, while a face lit edge-on varies enormously across the same
+    // texel and needs a large one or it stripes itself with acne. The stones
+    // in the walls face the torches nearly head-on, so they land at the small
+    // end and keep their shadows; the floor, raked by a light up at head
+    // height, lands at the large end and stays clean.
+    float bias;
+    if(type == LIGHT_DIRECT) {
+        bias = 0.0015;
+    } else {
+        const float BIAS_MIN = 0.0004;   // head-on
+        const float BIAS_MAX = 0.0030;   // edge-on
+        bias = mix(BIAS_MIN, BIAS_MAX, clamp(1.0 - NdotL, 0.0, 1.0));
+    }
+
     bool covered;
-    float lit = shadowFromMap(shadowIndex, pos, covered);
+    float lit = shadowFromMap(shadowIndex, pos, bias, covered);
 
     // Only a point light HAS a second map. Asking for slot+1 on the sun would
     // read a matrix belonging to some other light entirely.
     if(!covered && type == LIGHT_POINT) {
-        lit = shadowFromMap(shadowIndex + 1, pos, covered);
+        lit = shadowFromMap(shadowIndex + 1, pos, bias, covered);
     }
 
     return lit;
@@ -385,9 +419,12 @@ void main() {
     vec3 Lo = vec3(0.0);
     for(int i = 0; i < gubo.lightCount; i++) {
         vec3 L = lightDirection(gubo.lights[i], fragPos);
+        // Same clamped dot the BRDF uses, computed once here because
+        // shadowFactor scales its depth bias by it too.
+        float NdotL = clamp(dot(N, L), 0.0, 1.0);
         Lo += lightRadiance(gubo.lights[i], fragPos)
             * BRDF(N, L, V, mD, ubo.mS, ubo.roughness, ubo.F0, k)
-            * shadowFactor(gubo.lights[i].shadowIndex, gubo.lights[i].type, fragPos);
+            * shadowFactor(gubo.lights[i].shadowIndex, gubo.lights[i].type, fragPos, NdotL);
     }
 
     vec3 color = Lo + hemisphericAmbient(N, mD);

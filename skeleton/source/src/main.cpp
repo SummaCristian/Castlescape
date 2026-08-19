@@ -717,13 +717,13 @@ class Skeleton26ReplaceName : public BaseProject {
 		//
 		// Each torch gets TWO maps, this direction and its exact opposite (see
 		// SHADOW_MAPS_PER_LIGHT and shadowFactor() in CookTorrance.frag), so
-		// the pair between them covers the whole sphere bar a thin band square
-		// with the aim. Which of the two halves is which barely matters now
-		// that both are rendered -- what the aim still buys is where the band
-		// of uncovered directions falls, so pointing it INTO the room (the
-		// +-X sign already used for the flame/light offsets in scene.json and
-		// lights.json) puts that band flat along the mounting wall, where the
-		// geometry it could leak through is furthest away.
+		// the pair between them covers the whole sphere bar a band around the
+		// plane square with the aim. The sign matters twice over: it says which
+		// map is the wide one (the rear, see the two FOVs below), and it puts
+		// the uncovered band flat along the mounting wall, where the geometry
+		// it could leak through is furthest away. Pointing INTO the room is
+		// the same +-X sign already used for the flame and light offsets in
+		// scene.json and lights.json.
 		//
 		// DEAD horizontal, no downward tilt: the band should lie in the plane
 		// of the wall, and any tilt rotates it to slice diagonally through the
@@ -737,16 +737,62 @@ class Skeleton26ReplaceName : public BaseProject {
 			glm::vec3(-1.0f, 0.0f, 0.0f),	// torchDV: east wall of the dv alcove
 		};
 
-		// Per torch map. Two back-to-back frusta this wide overlap everywhere
-		// except a band of about +-20 degrees around the plane square with the
-		// aim, and that band is the only place a torch can still light through
-		// geometry. Wider would close it further, but a perspective projection
-		// degenerates approaching 180 degrees: the same 1024 texels spread over
-		// more angle and stretch brutally towards the edges, which is depth
-		// precision the bias in CookTorrance.frag has to absorb. 140 is the
-		// compromise; the leftover band lies flat along the wall, where in this
-		// scene there is nothing close enough to leak into.
-		const float TORCH_SHADOW_FOV = 140.0f;
+		// The two maps get DIFFERENT fields of view, because they look at two
+		// very different things.
+		//
+		// The front one looks down the room: everything it has to shadow is
+		// metres away, so a moderate angle already covers it and the texels are
+		// better spent on resolution than on reach.
+		//
+		// The rear one looks at the wall the torch is bolted to, and that wall
+		// is only 0.47 away -- the flame's bracket offset (lights.json). At
+		// that range a frustum covers a disappointing patch of it: 140 degrees
+		// reaches 0.47 * tan(70) = 1.29m around the flame, so the wall below
+		// about chest height fell outside BOTH maps and, being outside, came
+		// out lit and unshadowed. That is why the stones set into the wall cast
+		// shadows above and to the sides of a torch but not down to the floor.
+		// 168 degrees reaches 0.47 * tan(84) = 4.5m instead, which takes the
+		// wall from floor to ceiling.
+		//
+		// Widening usually costs resolution, but barely does here: a flat wall
+		// parallel to the image plane projects LINEARLY, so those texels land
+		// on it evenly rather than bunching in the middle, and 1024 of them
+		// across 9m of wall is still about 1cm each -- fine for stones that
+		// stick out 5-10cm. What it does cost is the near-180 blowup in the
+		// projection, which is why only the map that needs the reach gets it.
+		//
+		// Between the two there is still an uncovered band, now the directions
+		// running 70-95 degrees off the aim. On the floor that is everything
+		// within 1.4m of the torch's base, where nothing stands between the
+		// flame and the ground to cast a shadow anyway.
+		const float TORCH_SHADOW_FOV_FRONT = 140.0f;
+		const float TORCH_SHADOW_FOV_BACK  = 168.0f;
+
+		// Near plane, and it is the single most important number here for how
+		// much shadow DETAIL survives. A perspective depth buffer packs most of
+		// its precision into the first slice in front of the near plane, so
+		// pushing that plane out flattens the distribution and buys precision
+		// everywhere else -- going 0.1 -> 0.3 makes a given depth bias worth
+		// three times fewer centimetres out in the room, which is the
+		// difference between the stones jutting out of the walls casting
+		// shadows and being swallowed whole by the bias.
+		//
+		// The ceiling on it is the 0.47 the flame sits in front of the wall it
+		// hangs on (the "offset" in lights.json): push the near plane past that
+		// and the mounting wall stops being drawn into the torch's rear map,
+		// which is the one thing stopping that torch lighting straight through
+		// the wall into the next room. 0.3 keeps a margin under it.
+		//
+		// Nothing is lost at the near end: the only geometry within 30cm of a
+		// flame is the torch that holds it, and that is not an occluder anyway
+		// (Material::castsShadow in SceneMaterials.hpp).
+		const float TORCH_SHADOW_NEAR = 0.3f;
+
+		// Past this a torch contributes almost nothing anyway: with g = 3.0 and
+		// beta = 1.4 (lights.json) it is down to about 8% of its stated colour.
+		// Kept tight for the same reason the near plane is pushed out -- the
+		// near/far ratio is what sets the depth precision.
+		const float TORCH_SHADOW_FAR = 15.0f;
 
 		// The sun has no position, only a travel direction (SceneLights.hpp),
 		// so its shadow camera needs a stand-in position: back away from a
@@ -804,9 +850,12 @@ class Skeleton26ReplaceName : public BaseProject {
 									 ? glm::vec3(0.0f, 0.0f, 1.0f)
 									 : glm::vec3(0.0f, 1.0f, 0.0f);
 
+				const float fov = (half == 0) ? TORCH_SHADOW_FOV_FRONT
+											  : TORCH_SHADOW_FOV_BACK;
+
 				glm::mat4 view = glm::lookAt(L.pos, L.pos + dir, up);
-				glm::mat4 proj = glm::perspective(glm::radians(TORCH_SHADOW_FOV),
-												  1.0f, 0.1f, 15.0f);
+				glm::mat4 proj = glm::perspective(glm::radians(fov), 1.0f,
+												  TORCH_SHADOW_NEAR, TORCH_SHADOW_FAR);
 				proj[1][1] *= -1;
 
 				shadowLightSpace[L.shadowIndex + half] = proj * view;
