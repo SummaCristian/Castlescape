@@ -27,8 +27,12 @@ layout(binding = 0, set = 0) uniform GlobalUniformBufferObject {
 layout(binding = 0, set = 1) uniform FlameUniformBufferObject {
 	mat4  mvpMat;
 	float seed;
-	float intensity;
+	float intensity;   // brightness envelope (spring-smoothed), see Flame.vert
 	vec2  lean;
+	float heightScale; // slow height envelope -- the crown the sparks spawn
+	                   // from rides the flame's actual height, see below
+	float glareBoost;  // unused by sparks: bloom already turns them into
+	                   // pinpricks, boosting them further just makes white dots
 } fubo;
 
 // Quad corner in the spark's own unstretched local units, both axes in
@@ -50,6 +54,13 @@ layout(location = 0) out vec2 quv;
 // 0 at spawn, 1 at despawn; Spark.frag uses it for both the color ramp and
 // the fade in/out that hides the loop reset.
 layout(location = 1) flat out float life;
+// How "on" this spark is, 0..1: the per-spark intensity gate below. Passed to
+// the fragment shader so a spark caught mid-life by a guttering flame fades
+// out like a dying spark instead of popping off.
+layout(location = 2) flat out float gate;
+// Gentle brightness coupling to the flame envelope, applied in Spark.frag on
+// top of the per-spark life ramp.
+layout(location = 3) flat out float glow;
 
 // Cheap 1D hash, Dave Hoskins' construction: three fract/multiply rounds are
 // enough to decorrelate the handful of quantities derived from inSeed below
@@ -60,6 +71,16 @@ float hash11(float x) {
 	x *= x + 33.33;
 	x *= x + x;
 	return fract(x);
+}
+
+// 1D value noise on top of hash11: a smooth random walk rather than a jump
+// per cell, for the wobble below. The 0.517/0.13 constants just decorrelate
+// the lattice from the raw seed multiples hash11 is fed elsewhere.
+float noise11(float x) {
+	float i = floor(x);
+	float f = fract(x);
+	float u = f * f * (3.0 - 2.0 * f);
+	return mix(hash11(i * 0.517 + 0.13), hash11((i + 1.0) * 0.517 + 0.13), u);
 }
 
 void main() {
@@ -86,7 +107,19 @@ void main() {
 	// effect is subtle over their short life and t alone reads cleanly.
 	float rise = t * mix(0.30, 0.52, hash11(inSeed * 7.0));
 
-	vec2 center = vec2(spawnX + driftAmount, spawnY + rise);
+	// Wobble: a per-spark noise walk on top of the smooth t*t drift, so the
+	// path curls and corrects the way a fleck tossed on turbulent air does,
+	// instead of following one clean parabola. Amplitude grows with age (a
+	// young spark is still carried by the flame's own updraft, an old one is
+	// at the mercy of the eddies) and the noise is sampled along TIME, so
+	// the wobble is motion, not a static bend.
+	float wob = (noise11(t * 3.0 + inSeed * 47.0) - 0.5) * 0.20 * t;
+
+	// The crown tracks the flame's actual height envelope: when the flame
+	// gutters short, sparks spawn (and fly) correspondingly lower instead of
+	// popping out of empty air above a shrunken flame.
+	vec2 center = vec2(spawnX + driftAmount + wob,
+	                   (spawnY + rise) * fubo.heightScale);
 
 	// Same lean the flame body itself is bent by, damped: sparks are small
 	// and light, so a gust visibly nudges them without swinging them as
@@ -100,11 +133,27 @@ void main() {
 	vec2 travelDir = normalize(vec2(driftAmount, max(rise, 0.05)));
 	vec2 perpDir = vec2(-travelDir.y, travelDir.x);
 
+	// "Spawn rate" without a dynamic mesh: the spark count is baked in, so
+	// rate is faked by giving every spark its own intensity THRESHOLD and
+	// letting the flame envelope gate it on. Thresholds spread 0.45..1.15
+	// against an envelope of 0.30..1.40, so roughly the dimmest 40% of
+	// thresholds are always burning and the rest arrive as bursts when the
+	// flame flares -- or return in a rush as it recovers from a gutter.
+	// Since the envelope is spring-smoothed CPU-side, the smoothstep band
+	// here turns into an ~0.1-0.3 s fade rather than a pop.
+	float thr = mix(0.45, 1.15, hash11(inSeed * 91.0));
+	gate = smoothstep(thr - 0.10, thr + 0.10, fubo.intensity);
+
 	// Small to begin with and shrinking further with age: a few hundredths
 	// of the flame's own half-width (mvpMat's x=1 unit is that half-width),
 	// so a spark reads as a fleck against the flame body, never another
-	// flame of its own.
-	float size = mix(0.05, 0.015, t);
+	// flame of its own. A flaring flame throws slightly bigger flecks; a
+	// fully gated-off spark collapses to a degenerate quad, so it costs no
+	// fragment work at all while it waits.
+	float size = mix(0.05, 0.015, t)
+	           * mix(0.85, 1.15, clamp(fubo.intensity, 0.3, 1.4) / 1.4);
+	size *= max(gate, 0.001);
+	glow = mix(0.75, 1.20, clamp(fubo.intensity, 0.3, 1.4) / 1.4);
 	// Stretched 2.5-4x along its direction of travel so it reads as a
 	// streak, not a dot -- varied per spark so they don't all look identical.
 	float stretch = mix(2.5, 4.0, hash11(inSeed * 71.0));

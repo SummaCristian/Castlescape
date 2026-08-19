@@ -16,6 +16,11 @@
 layout(location = 0) in vec2 quv;
 // 0 at spawn, 1 at despawn.
 layout(location = 1) flat in float life;
+// Intensity gate and envelope glow from Spark.vert: the gate folds into
+// alpha so a spark overtaken mid-life by a guttering flame dims away like a
+// dying spark; glow scales brightness gently with the flame's envelope.
+layout(location = 2) flat in float gate;
+layout(location = 3) flat in float glow;
 
 layout(location = 0) out vec4 outColor;
 
@@ -33,7 +38,7 @@ void main() {
 	// `life` ever actually reaching 0 or 1 is never visible -- the spark is
 	// already fully transparent on both ends of its own loop.
 	float fade = smoothstep(0.0, 0.08, life) * (1.0 - smoothstep(0.75, 1.0, life));
-	float alpha = falloff * fade;
+	float alpha = falloff * fade * gate;
 
 	// Same depth-write reasoning as Flame.frag: depthWriteEnable is hardcoded
 	// VK_TRUE on every pipeline including this one, so an undiscarded
@@ -55,5 +60,5 @@ void main() {
 	// short life.
 	float hdrBoost = mix(12.0, 3.0, life);
 
-	outColor = vec4(color * hdrBoost, alpha);
+	outColor = vec4(color * hdrBoost * glow, alpha);
 }

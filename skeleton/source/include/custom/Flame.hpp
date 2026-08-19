@@ -35,7 +35,9 @@
 // depthWriteEnable = VK_TRUE on every pipeline, transparent ones included, so
 // each glow quad used to write depth across its whole disc -- including the
 // outer ring where its alpha was essentially zero -- and punch a circular hole
-// in whatever was drawn behind it later.
+// in whatever was drawn behind it later. (A faint halo card was briefly tried
+// again on top of the bloom chain and removed: even barely visible it read as
+// a disc stamped behind the flame, and bloom already does the job.)
 //
 // Rendered as part of the main scene pass (main.cpp calls
 // populateCommandBuffer() right after SC.populateCommandBuffer(), no separate
@@ -77,15 +79,21 @@ struct SparkVertex {
 };
 
 // Matches FlameUniformBufferObject in Flame.vert/Spark.vert field for field.
-// 64 + 4 + 4 + 8 = 80 bytes, which is already a multiple of mat4's 16-byte
-// std140 alignment, so unlike the first version this needs no trailing pad --
-// the same concern notes.md walks through for LightData and the main
+// 64 + 4 + 4 + 8 + 4 + 4 = 88 bytes: `lean` lands at offset 72, which is
+// 8-aligned as std140 requires for a vec2, and the two trailing floats sit at
+// 80/84 -- glm and std140 agree on every offset, so no alignas and no trailing
+// pad -- the same concern notes.md walks through for LightData and the main
 // UniformBufferObject.
 struct FlameUniformBufferObject {
 	glm::mat4 mvpMat;
 	float seed;
-	float intensity;
+	float intensity;	// BRIGHTNESS envelope only (spring-smoothed CPU-side);
+						// no longer scales the card height -- heightScale does
 	glm::vec2 lean;
+	float heightScale;	// slow height envelope, ~0.78..1.09: a flame shortens
+						// over a third of a second, it doesn't teleport
+	float glareBoost;	// 1.0 + per-flame stare-at emphasis (see main.cpp's
+						// glare block); multiplies the HDR output
 };
 
 class Flame {
@@ -107,20 +115,29 @@ class Flame {
 
 	// Call every frame for every spawned id.
 	//
-	//   mvpMat     that flame's billboard basis times ViewPrj. Local space is
-	//              x = +/-1 across the half-width, y = 0 at the wick to 1 at
-	//              the tip, z = toward the camera. main.cpp builds it.
-	//   intensity  the flicker/guttering envelope, ~0.30 to ~1.40. Simulated
-	//              on the CPU rather than in the shader because the point
-	//              light this torch casts has to flicker off the SAME signal
-	//              -- see the TorchFlame struct in main.cpp.
-	//   lean       how far the flame is dragged over by the hand carrying it,
-	//              in billboard-local units.
+	//   mvpMat       that flame's billboard basis times ViewPrj. Local space is
+	//                x = +/-1 across the half-width, y = 0 at the wick to 1 at
+	//                the tip, z = toward the camera. main.cpp builds it.
+	//   intensity    the BRIGHTNESS flicker/guttering envelope, ~0.30 to
+	//                ~1.40, spring-smoothed. Simulated on the CPU rather than
+	//                in the shader because the point light this torch casts
+	//                has to flicker off the SAME signal -- see the TorchFlame
+	//                struct in main.cpp.
+	//   heightScale  the HEIGHT envelope, ~0.78..1.09 -- same underlying
+	//                signal, compressed and chased much more slowly, because
+	//                a flame's height varies less, and later, than its light
+	//                output does. Splitting the two is what killed the old
+	//                whole-flame "jumps".
+	//   lean         how far the flame is dragged over by the hand carrying
+	//                it, in billboard-local units.
+	//   glareBoost   1.0 + stare-at emphasis for THIS flame, so a torch being
+	//                looked at dead-on overdrives its own HDR output on top
+	//                of the global exposure/bloom swell.
 	//
 	// Same idea as re-mapping a scene instance's UBO: the command buffer is
 	// recorded once, only the buffer contents change per frame.
-	void update(int id, const glm::mat4 &mvpMat, float intensity, const glm::vec2 &lean,
-				int currentImage);
+	void update(int id, const glm::mat4 &mvpMat, float intensity, float heightScale,
+				const glm::vec2 &lean, float glareBoost, int currentImage);
 
 	void pipelinesAndDescriptorSetsInit(RenderPass *_RP);
 	void pipelinesAndDescriptorSetsCleanup();
@@ -342,8 +359,8 @@ int Flame::spawn(float seed) {
 	return id;
 }
 
-void Flame::update(int id, const glm::mat4 &mvpMat, float intensity, const glm::vec2 &lean,
-				   int currentImage) {
+void Flame::update(int id, const glm::mat4 &mvpMat, float intensity, float heightScale,
+				   const glm::vec2 &lean, float glareBoost, int currentImage) {
 	if(id < 0 || id >= (int)DS.size()) {
 		return;
 	}
@@ -352,6 +369,8 @@ void Flame::update(int id, const glm::mat4 &mvpMat, float intensity, const glm::
 	fubo.seed = seeds[id];
 	fubo.intensity = intensity;
 	fubo.lean = lean;
+	fubo.heightScale = heightScale;
+	fubo.glareBoost = glareBoost;
 	DS[id].map(currentImage, &fubo, 0);
 }
 

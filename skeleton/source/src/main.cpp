@@ -441,10 +441,31 @@ class Skeleton26ReplaceName : public BaseProject {
 		// gutter together.
 		float phase = 0.0f;
 
-		// Flicker/guttering envelope, ~0.30 (mid-gutter) to ~1.40 (a flare).
-		// Scales the flame's height and brightness, its spark output, and the
-		// point light's colour and reach.
+		// BRIGHTNESS flicker/guttering envelope, ~0.30 (mid-gutter) to ~1.40
+		// (a flare). Scales the flame's brightness, its spark output/rate, and
+		// the point light's colour and reach -- but NOT the flame's height any
+		// more, see heightScale. Chased toward its noise-driven target by a
+		// critically-damped spring (intensityVel below) instead of being
+		// assigned raw: the raw signal is a fresh noise sample every frame,
+		// and slamming the whole flame to it at once was exactly the visible
+		// "jumping". A spring is continuous in value AND slope, so brightness
+		// glides, yet still ducks through a gutter in a couple tenths of a
+		// second.
 		float intensity = 1.0f;
+		float intensityVel = 0.0f;
+
+		// HEIGHT envelope, ~0.78..1.09. Same underlying signal as intensity,
+		// but compressed (a flame's height varies far less than its light
+		// output) and low-passed much harder (FLAME_HEIGHT_TAU): light
+		// responds to combustion instantly, the fuel column's height follows
+		// it late. One shared signal for both was the other half of the old
+		// "jumping" -- the flame teleported between heights at flicker rate.
+		float heightScale = 1.0f;
+
+		// This torch's own smoothed stare-at factor, 0..1 (see the glare
+		// block in updateUniformBuffer): how squarely and closely the camera
+		// is looking at this flame, used to overdrive its HDR output.
+		float glare = 0.0f;
 
 		// Where the anchor was last frame, and a low-passed velocity derived
 		// from it. A flame is dragged by the air it moves through, so it
@@ -461,18 +482,28 @@ class Skeleton26ReplaceName : public BaseProject {
 	};
 	std::vector<TorchFlame> torchFlames;
 
+	// Global glare level, 0..1: the max over every wall torch's own stare-at
+	// factor, smoothed asymmetrically (GLARE_TAU_RISE/FALL). Feeds the post
+	// chain's exposure/bloom every frame -- a member rather than a local so
+	// the smoothing survives between frames.
+	float glareSmoothed = 0.0f;
+
 	// One anchor for every torch: SM_Torch_01 (wall-mounted) and
 	// SM_Torch_Held_01 (held) turn out to be the identical mesh, confirmed
 	// by walking their POSITION accessors directly rather than trusting the
 	// two models' reported min/max (which, misleadingly, differ). X -0.544..
 	// -0.224 (mid -0.384), Z -0.165..0.165 (mid 0) at the centroid of the
 	// mesh's own top (a wide flat cup, not a point, so a bbox corner isn't
-	// the right anchor). Y is 0.38, BELOW that top (0.413): the cup has
+	// the right anchor). Y is 0.30, well BELOW that top (0.413): the cup has
 	// depth, so sitting the flame's own base ring exactly at the rim left it
 	// looking like it was floating just above the torch instead of coming
-	// out of it -- nestling it down into the cup by that same margin reads
-	// as rooted instead.
-	static constexpr glm::vec3 TORCH_FLAME_ANCHOR = glm::vec3(-0.384f, 0.38f, 0.0f);
+	// out of it. The old mesh flame only needed to nestle down to 0.38, but
+	// the shader flame's field fades out right at its own y=0 (Flame.frag's
+	// baseFade plus the alpha window), so its first VISIBLE pixels sit a few
+	// percent up the card -- the anchor compensates by sinking that much
+	// further into the cup, and the fade doubles as the flame emerging from
+	// inside it rather than balancing on the rim.
+	static constexpr glm::vec3 TORCH_FLAME_ANCHOR = glm::vec3(-0.384f, 0.30f, 0.0f);
 
 	// The flame's size, in the torch model's own local units, so it rides
 	// each instance's uniform scale: full size on the wall-mounted torches,
@@ -494,7 +525,10 @@ class Skeleton26ReplaceName : public BaseProject {
 	// than the gate lanterns (SceneLights.hpp/lights.json): a torch flame is
 	// a much smaller, closer source than a lamp head.
 	static constexpr glm::vec3 TORCH_LIGHT_COLOR = glm::vec3(1.0f, 0.5f, 0.16f);
-	static constexpr float TORCH_LIGHT_G = 1.6f;
+	// 2.1 rather than the original 1.6: with the falloff (g/d)^beta this
+	// lifts the light by a flat ~45% at every distance, so the torches
+	// genuinely carry into the room instead of only rimming their own wall.
+	static constexpr float TORCH_LIGHT_G = 2.1f;
 	static constexpr float TORCH_LIGHT_BETA = 1.4f;
 
 	// How far a torch light still gets uploaded, and how many may be live at
@@ -503,8 +537,8 @@ class Skeleton26ReplaceName : public BaseProject {
 	// uploaded light costs a full GGX evaluation across the whole screen
 	// whether or not it can be seen.
 	//
-	// The radius is set generously on purpose: at g = 1.6 and beta = 1.4 a
-	// torch 25 units out contributes about 2% of its colour, which is already
+	// The radius is set generously on purpose: at g = 2.1 and beta = 1.4 a
+	// torch 25 units out contributes about 3% of its colour, which is still
 	// below what the ambient term hides, so nothing you could actually notice
 	// goes dark. This is headroom, not the fix -- the MSAA change in
 	// localInit() is what actually bought the frame budget back, and all six
@@ -512,12 +546,27 @@ class Skeleton26ReplaceName : public BaseProject {
 	static constexpr float TORCH_LIGHT_CULL_DIST = 25.0f;
 	static constexpr int TORCH_LIGHT_MAX_LIVE = 8;
 
-	// Fire envelope. Real flames flicker in a band around 10-15 Hz, so the
-	// fast term is sampled at 12; the slower terms underneath it stop the
-	// result from reading as uniform hash. A plain sine was what the first
-	// version used, and the ear-equivalent problem applies to the eye: a pure
-	// period is a metronome you lock onto within about two seconds.
-	static constexpr float FLAME_FLICKER_HZ = 12.0f;
+	// Fire envelope. The fast term used to be sampled at 12 Hz and weighted
+	// half the whole signal, which is physically the right flicker band but
+	// looked wrong for a structural reason: a WHOLE-FLAME envelope applies
+	// that twitch to every pixel at once, and no real flame changes uniformly
+	// -- that reads as a brightness dial being wiggled. The fast twitch now
+	// lives in Flame.frag as a per-pixel shimmer that varies along the flame;
+	// the CPU keeps a slower 7 Hz term at reduced weight purely so the light
+	// the torch casts still dances a little, and the slower terms underneath
+	// it stop the result from reading as uniform hash. (A plain sine was what
+	// the first version used, and the ear-equivalent problem applies to the
+	// eye: a pure period is a metronome you lock onto within two seconds.)
+	static constexpr float FLAME_FLICKER_HZ = 7.0f;
+	// The spring rate the brightness envelope chases its target with
+	// (critically damped, see TorchFlame::intensityVel). 14 rad/s settles in
+	// roughly 2/14 ~ 0.15 s: fast enough that a gutter still visibly ducks,
+	// slow enough that no frame-to-frame noise step survives as a jump.
+	static constexpr float FLAME_BRIGHT_OMEGA = 14.0f;
+	// How slowly the HEIGHT envelope chases the same signal (one-pole, in
+	// seconds). A flame shortens over a third of a second; it doesn't
+	// teleport between heights the way it can flicker in brightness.
+	static constexpr float FLAME_HEIGHT_TAU = 0.35f;
 	// Guttering: brief, irregular collapses where the flame ducks and dims
 	// almost to nothing. Driven by its own slow noise crossing a high
 	// threshold, so it happens rarely and never on a schedule.
@@ -525,6 +574,26 @@ class Skeleton26ReplaceName : public BaseProject {
 	static constexpr float FLAME_GUTTER_LO = 0.66f;	// noise below this: no gutter
 	static constexpr float FLAME_GUTTER_HI = 0.82f;	// above this: full gutter
 	static constexpr float FLAME_GUTTER_DEPTH = 0.48f;	// how far it ducks
+
+	// Stare-at glare: walking up to a wall torch and centring it in view
+	// swells the post chain's exposure and bloom (and that torch's own HDR
+	// output), like an eye caught by something too bright to look at. Doing
+	// it view-DEPENDENT rather than just making flames brighter is what
+	// masks the billboard's flat-card nature exactly when it is most
+	// visible: face-on, up close. Purely geometric -- camera pose, anchor
+	// position, envelope -- so there is no feedback through the renderer.
+	static constexpr float GLARE_COS_MIN = 0.90f;	// facing cosine: below, no glare
+	static constexpr float GLARE_COS_MAX = 0.985f;	// above, full glare
+	static constexpr float GLARE_DIST_NEAR = 1.0f;	// fades in past this...
+	static constexpr float GLARE_DIST_FAR = 9.0f;	// ...and is gone by here
+	// Asymmetric smoothing: dazzle arrives fast, the eye recovers slower.
+	// The asymmetry is also what prevents pumping when the view strafes back
+	// and forth across the facing threshold.
+	static constexpr float GLARE_TAU_RISE = 0.15f;
+	static constexpr float GLARE_TAU_FALL = 0.40f;
+	static constexpr float GLARE_EXPOSURE_GAIN = 0.30f;	// exposure *= 1 + gain*glare
+	static constexpr float GLARE_BLOOM_GAIN = 0.90f;	// bloomIntensity likewise
+	static constexpr float GLARE_FLAME_GAIN = 0.50f;	// that flame's own HDR boost
 
 	// Lean. TAU is how fast the smoothed velocity chases the real one: too
 	// short and the flame snaps about as rigidly as it did before, too long
@@ -1339,14 +1408,16 @@ class Skeleton26ReplaceName : public BaseProject {
 		// flame, its sparks and its light are all driven by the same envelope
 		// within the same frame (see the TorchFlame struct).
 		for(TorchFlame &tf : torchFlames) {
-			// Flicker: a fast ~12 Hz term for the visible dance, a slow term
-			// under it so the flame also breathes over seconds, and a middle
-			// one to stop the two from reading as separate layers.
+			// Flicker: a fast term for the light's visible dance (demoted from
+			// half the signal to a quarter -- the per-pixel shimmer in
+			// Flame.frag owns the fast twitch now, see FLAME_FLICKER_HZ), a
+			// slow term under it so the flame also breathes over seconds, and
+			// a middle one to stop the two from reading as separate layers.
 			float t = animTime + tf.phase;
 			float fast   = fireFbm(t * FLAME_FLICKER_HZ);
 			float middle = fireFbm(t * 3.1f + 7.0f);
 			float slow   = fireFbm(t * 0.6f + 91.0f);
-			float n = 0.50f * fast + 0.15f * middle + 0.35f * slow;	// [0,1]
+			float n = 0.25f * fast + 0.30f * middle + 0.45f * slow;	// [0,1]
 
 			// Guttering, applied on top: a separate slow noise crossing a high
 			// threshold, so a flame occasionally ducks hard and recovers
@@ -1354,8 +1425,24 @@ class Skeleton26ReplaceName : public BaseProject {
 			float gut = fireFbm(t * FLAME_GUTTER_SPEED + 311.0f);
 			float gutter = glm::smoothstep(FLAME_GUTTER_LO, FLAME_GUTTER_HI, gut);
 
-			tf.intensity = glm::clamp((0.72f + 0.62f * n) * (1.0f - FLAME_GUTTER_DEPTH * gutter),
+			// This is the TARGET, not the value: assigning it raw was the old
+			// whole-flame "jump" every time the noise stepped.
+			float target = glm::clamp((0.78f + 0.50f * n) * (1.0f - FLAME_GUTTER_DEPTH * gutter),
 									  0.30f, 1.40f);
+
+			// Critically-damped spring toward the target: continuous in value
+			// AND slope, so brightness never steps frame-to-frame, yet a
+			// gutter still ducks in ~0.2 s (see FLAME_BRIGHT_OMEGA).
+			float w0 = FLAME_BRIGHT_OMEGA;
+			tf.intensityVel += ((target - tf.intensity) * w0 * w0
+								- 2.0f * w0 * tf.intensityVel) * deltaT;
+			tf.intensity += tf.intensityVel * deltaT;
+
+			// Height: the same signal, compressed into a narrower band and
+			// chased much more slowly -- see TorchFlame::heightScale.
+			float hTarget = 0.78f + 0.31f * (target - 0.30f) / 1.10f;	// ~0.78..1.09
+			tf.heightScale += (hTarget - tf.heightScale)
+							  * (1.0f - std::exp(-deltaT / FLAME_HEIGHT_TAU));
 
 			// Lean. A flame is dragged by the air it moves through, so it
 			// leans AGAINST its own velocity: the world-space lean vector is
@@ -1490,6 +1577,54 @@ class Skeleton26ReplaceName : public BaseProject {
 
 		DSglobal.map(currentImage, &gubo, 0);
 
+		// Stare-at glare (see the GLARE_* constants): how squarely and how
+		// closely the camera is looking at each WALL torch's flame. The held
+		// torch is excluded on purpose -- it sits near screen centre by
+		// construction, so glare from it would be a permanent bias rather
+		// than an event. Purely geometric (camera pose, anchor, envelope):
+		// nothing here reads back anything rendered, so raising the exposure
+		// below cannot recruit new glare and feed on itself.
+		{
+			// camToWorld's column 2 points from the scene back toward the
+			// eye (see the billboard bases above), so the camera's actual
+			// look direction is its negation.
+			const glm::vec3 camFwd = -handBbFwd;
+			float glareTarget = 0.0f;
+			for(TorchFlame &tf : torchFlames) {
+				float tfTarget = 0.0f;
+				if(!tf.heldByCamera) {
+					glm::vec3 fpos = glm::vec3(tf.inst->Wm * glm::vec4(tf.anchor, 1.0f));
+					glm::vec3 to = fpos - eyePos;
+					float dist = glm::length(to);
+					if(dist > 1e-4f && dist < GLARE_DIST_FAR) {
+						// Facing band: a smoothstep over the view-to-flame
+						// cosine, so glare ramps in as the flame approaches
+						// screen centre instead of switching.
+						float facing = glm::dot(camFwd, to / dist);
+						float f = glm::smoothstep(GLARE_COS_MIN, GLARE_COS_MAX, facing);
+						// Distance window: nothing right at the anchor (the
+						// flame fills the view anyway there, and the numbers
+						// go degenerate), full inside a few units, fading
+						// out entirely by GLARE_DIST_FAR.
+						float d = glm::smoothstep(GLARE_DIST_NEAR, GLARE_DIST_NEAR + 0.8f, dist)
+								* (1.0f - glm::smoothstep(GLARE_DIST_FAR * 0.5f, GLARE_DIST_FAR, dist));
+						// A guttering flame dazzles less: ride the same
+						// envelope everything else does.
+						tfTarget = f * d * glm::clamp(tf.intensity, 0.0f, 1.2f);
+					}
+				}
+				// Per-flame smoothed copy, feeding that flame's own HDR
+				// boost (fubo.glareBoost) further down.
+				float tauF = tfTarget > tf.glare ? GLARE_TAU_RISE : GLARE_TAU_FALL;
+				tf.glare += (tfTarget - tf.glare) * (1.0f - std::exp(-deltaT / tauF));
+				glareTarget = std::max(glareTarget, tfTarget);
+			}
+			// max(), not sum: two torches lined up in view should read as one
+			// dazzle, not stack into double exposure.
+			float tau = glareTarget > glareSmoothed ? GLARE_TAU_RISE : GLARE_TAU_FALL;
+			glareSmoothed += (glareTarget - glareSmoothed) * (1.0f - std::exp(-deltaT / tau));
+		}
+
 		// The four post-processing passes. Each one's texelSize is that of the
 		// texture it READS, not the one it writes, since it is used to step
 		// from one source texel to the next.
@@ -1503,8 +1638,12 @@ class Skeleton26ReplaceName : public BaseProject {
 			post.time = animTime;
 			post.threshold = BLOOM_THRESHOLD;
 			post.knee = BLOOM_KNEE;
-			post.bloomIntensity = BLOOM_INTENSITY;
-			post.exposure = SCENE_EXPOSURE;
+			// The stare-at glare rides the two knobs the post chain already
+			// has: more bloom spread AND more exposure when the player looks
+			// into a flame. Smoothed asymmetrically upstream, so this never
+			// pumps frame-to-frame.
+			post.bloomIntensity = BLOOM_INTENSITY * (1.0f + GLARE_BLOOM_GAIN * glareSmoothed);
+			post.exposure = SCENE_EXPOSURE * (1.0f + GLARE_EXPOSURE_GAIN * glareSmoothed);
 			post.debugFlags = gubo.debugFlags;
 
 			// Bright pass: reads the full-resolution scene and writes the
@@ -1586,7 +1725,8 @@ class Skeleton26ReplaceName : public BaseProject {
 				glm::vec4(anchorWorld, 1.0f)
 			);
 
-			flame.update(tf.flameId, ViewPrj * billboard, tf.intensity, tf.lean, currentImage);
+			flame.update(tf.flameId, ViewPrj * billboard, tf.intensity, tf.heightScale,
+						 tf.lean, 1.0f + GLARE_FLAME_GAIN * tf.glare, currentImage);
 		}
 
 		// defines the local parameters for the uniforms

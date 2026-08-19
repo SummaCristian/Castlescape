@@ -3,7 +3,7 @@
 // faceted mesh with a fake per-facet "light" (a cross-product face normal
 // against a made-up light direction) and a height-based color gradient. That
 // approach's silhouette was whatever the mesh's triangles happened to be --
-// hard-edged, closed, and opaque. Here the mesh is just three flat billboard
+// hard-edged, closed, and opaque. Here the mesh is just flat billboard
 // cards (Flame.vert); everything that makes it read as fire -- the tapered
 // flame shape, the licking internal structure, the soft translucent fringe,
 // wisps that pinch off near the tip -- comes from a procedural fire field
@@ -38,6 +38,7 @@ layout(location = 0) in vec2 uv;
 layout(location = 1) flat in float layer;
 layout(location = 2) flat in float intensity;
 layout(location = 3) flat in float seed;
+layout(location = 4) flat in float glare;
 
 layout(location = 0) out vec4 outColor;
 
@@ -79,8 +80,37 @@ float fbm(vec2 p) {
 	return sum;
 }
 
+// 2-octave variant for the spine and bubble fields below: both only need
+// low-frequency structure (a slow wander, fist-sized pockets), so paying for
+// fbm's two fine octaves there would buy nothing visible.
+float noiseLo(vec2 p) {
+	return noise2(p) * 0.65 + noise2(p * 2.13 + 7.31) * 0.35;
+}
+
 void main() {
 	float y = uv.y;
+
+	// One time base for the whole fire field, scaled up from real seconds:
+	// every motion here -- advection, spine sway, warp morph, bubbles,
+	// shimmer -- rides this one value, so the flame's overall tempo is a
+	// single knob instead of five rates to re-balance against each other.
+	// 1.3 makes it burn visibly livelier without turning frantic.
+	float ft = gubo.time * 1.3;
+
+	// WANDERING SPINE. The centreline itself sways: the sample x is shifted
+	// by slow noise advected down the flame axis, zero at the wick (a flame
+	// is pinned to its fuel) and strongest at the tip (y*y, same reasoning
+	// as the lean's h*h in Flame.vert). Everything downstream -- the profile
+	// mask, the advection, the bubbles -- works in this spine-relative x, so
+	// the WHOLE field curls, silhouette and internal structure together,
+	// instead of the texture sliding around inside a static cutout. This is
+	// the single biggest difference between "pulsing in place" and burning:
+	// without it the flame's outline never travels at all.
+	// Worst case |offset| at the tip is 0.35 and the tip half-width is well
+	// under that from 1.0, so the swayed field always stays inside the card.
+	vec2 spineP = vec2(seed * 7.0 + layer * 1.7, y * 1.6 - ft * 0.9);
+	float sway = (noiseLo(spineP) - 0.5) * 2.0;	// ~[-1,1], low frequency
+	float x = uv.x - sway * 0.35 * y * y;
 
 	// Flame profile mask: half-width w(y), necked at the wick, widest just
 	// above it, tapering to a point at the tip.
@@ -99,7 +129,7 @@ void main() {
 	// Parabolic rather than linear across the width: keeps the core full while
 	// dropping off faster as it approaches the edge, so the body reads as
 	// rounded instead of as a wedge with a bright crease down the middle.
-	float r = abs(uv.x) / w;
+	float r = abs(x) / w;
 	float shape = clamp(1.0 - r * r, 0.0, 1.0);
 
 	// Extra fade right at the wick and right at the very tip, on top of the
@@ -120,7 +150,7 @@ void main() {
 	// mesh sway, just applied to a noise lookup instead of a vertex offset.
 	float scrollSpeed = 0.55 + layer * 0.18;
 	float scrollPhase = seed * 9.0 + layer * 3.1;
-	vec2 p = vec2(uv.x * 2.2, y * 3.4 - gubo.time * scrollSpeed - scrollPhase);
+	vec2 p = vec2(x * 2.2, y * 3.4 - ft * scrollSpeed - scrollPhase);
 
 	// Domain warp: offset the FBM lookup by a second, lower-frequency FBM
 	// (itself slowly advected) instead of sampling the first FBM directly.
@@ -129,9 +159,14 @@ void main() {
 	// warping the SAMPLE POINT makes the bright regions themselves curl and
 	// travel sideways as they rise, which is what a real flame's turbulent
 	// tongues look like.
-	vec2 warpCoord = p * 0.4 + vec2(0.0, -gubo.time * scrollSpeed * 0.5);
+	// The warp coordinate now has a LATERAL time term too, so the warp field
+	// morphs as well as translates: a tongue changes shape as it rises
+	// instead of the same frozen curl riding up the card unchanged. And the
+	// warp's bite grows with height -- near-laminar at the wick, where a
+	// real flame is a smooth cone, fully turbulent by the tip.
+	vec2 warpCoord = p * 0.4 + vec2(ft * 0.16, -ft * scrollSpeed * 0.5);
 	vec2 warp = vec2(fbm(warpCoord), fbm(warpCoord + 19.3)) - 0.5;
-	float heatNoise = fbm(p + warp * 1.15);
+	float heatNoise = fbm(p + warp * mix(0.85, 1.55, y));
 
 	// How hard the noise is allowed to bite into the silhouette, as a function
 	// of height. This is what stops the mask above from reading as a solid
@@ -148,6 +183,22 @@ void main() {
 	float noiseTerm = clamp(1.0 + (heatNoise - 0.55) * 2.0 * carve, 0.0, 1.5);
 
 	float heat = shape * noiseTerm;
+
+	// BUBBLING: pockets of extra-hot gas that form low in the flame, ride the
+	// advection up, and die out toward the tip where `shape` pinches away.
+	// A thresholded low-frequency field rather than more fbm detail: the
+	// smoothstep turns noise into distinct blobs with in-between gaps, which
+	// is what "bubbles" are -- fbm octaves alone only ever make the existing
+	// texture busier. The field scrolls ~35% FASTER than the body field, so
+	// the pockets visibly overtake the texture they ride through, reading as
+	// buoyant volumes rather than painted-on brightness. Sharing `warp` (at
+	// reduced strength) keeps them curling with the same turbulence as the
+	// tongues around them. Added to heat, a pocket both brightens (the
+	// temperature ramp below) and locally bulges the silhouette (the alpha
+	// window reads heat too).
+	vec2 bp = vec2(x * 3.0, y * 2.2 - ft * scrollSpeed * 1.35 - scrollPhase * 1.3);
+	float bubbles = smoothstep(0.58, 0.80, noiseLo(bp + warp * 0.6));
+	heat += bubbles * shape * mix(0.55, 0.20, y);
 
 	// Outer fringe genuinely translucent, not just dim -- this is what a
 	// billboard card can do that the old closed mesh never could. The window
@@ -190,10 +241,22 @@ void main() {
 	float hdrBoost = mix(1.0, 6.0, smoothstep(0.3, 1.0, heat));
 	color *= hdrBoost;
 
-	// intensity is the same CPU-driven flicker/guttering envelope that
-	// shortened the card in Flame.vert -- applying it to color too means a
-	// guttering flame visibly dims as well as shrinks.
-	color *= intensity;
+	// SHIMMER: the fast flicker the CPU envelope used to slam onto the whole
+	// flame at once (the old 12 Hz `fast` term), relocated here where it can
+	// vary ALONG the flame -- different heights twitch at different moments,
+	// which reads as combustion rather than a brightness dial being wiggled.
+	// The CPU envelope keeps only the slower breathing/guttering, because the
+	// point light must ride that same signal (see main.cpp), and a light
+	// can't flicker per-pixel anyway.
+	float shimmer = 0.88 + 0.24 * noise2(vec2(y * 2.0 + seed * 31.0 + layer,
+	                                          ft * 7.0));
+
+	// intensity is the same CPU-driven envelope that drives the torch's own
+	// point light, so flame and light dim together; glare is the stare-at
+	// boost (1.0 unless this torch is being looked at dead-on), which
+	// overdrives the HDR output so bloom flares exactly when the player
+	// stares into the flame.
+	color *= intensity * shimmer * glare;
 
 	outColor = vec4(color, alpha);
 }
