@@ -82,7 +82,7 @@ struct GlobalUniformBufferObject {
 
 // Set 2: the shadow-sampling data, bound once and read by CookTorrance.frag.
 // One matrix per shadow-casting light (NUM_SHADOW_LIGHTS, LightConstants.glsl
-// -- the sun plus the five torches), each the SAME view-projection its own
+// -- the sun plus the six torches), each the SAME view-projection its own
 // shadow pass rendered with (see computeShadowMatrices()). Static for the
 // life of the program, since none of those lights move, but still re-mapped
 // every frame in updateUniformBuffer() rather than once at startup: map()
@@ -123,9 +123,9 @@ class Skeleton26ReplaceName : public BaseProject {
 	Pipeline PFlame;
 
 	// Shadow mapping: one depth-only render pass per shadow-casting light
-	// (NUM_SHADOW_LIGHTS = the sun plus the five torches, LightConstants.glsl)
+	// (NUM_SHADOW_LIGHTS = the sun plus the six torches, LightConstants.glsl)
 	// and ONE pipeline shared across all of them. Reusing PShadow instead of
-	// six separate pipelines relies on Vulkan's render-pass-compatibility
+	// one pipeline per pass relies on Vulkan's render-pass-compatibility
 	// rule: RPShadow[i] all use the identical AT_DEPTH_ONLY attachment
 	// configuration, so a pipeline created against one of them works with any
 	// of the others. Unlike RP/P, both are created once in localInit() and
@@ -140,7 +140,7 @@ class Skeleton26ReplaceName : public BaseProject {
 	RenderPass RPShadow[NUM_SHADOW_LIGHTS];
 	Pipeline PShadow;
 	// set 2 for the main pass's shadow sampling: one UBO (the light-space
-	// matrices) plus six sampler bindings, one per shadow map, read by
+	// matrices) plus one sampler binding per shadow map, read by
 	// CookTorrance.frag's shadowFactor(). DSLlocal/DSLglobal stay set 1/0.
 	//
 	// No DescriptorSet member of its own: unlike DSglobal, this one goes
@@ -420,21 +420,28 @@ class Skeleton26ReplaceName : public BaseProject {
 					// third  element : the pipeline stage where it will be used
 					{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_ALL_GRAPHICS, sizeof(GlobalUniformBufferObject), 1}
 				  });
-		// Shadow sampling (set 2 of P, see CookTorrance.frag). One UBO, six
-		// separate sampler bindings -- see the member declaration above for why
+		// Shadow sampling (set 2 of P, see CookTorrance.frag). One UBO, one
+		// separate sampler binding per map -- see the member declaration for why
 		// not one array binding. linkSize on the samplers is their own index
 		// into the flat VkDescriptorImageInfo list Scene builds per instance
 		// (see the texDefs passed to PRs[0].init below), the same role it plays
-		// for DSLlocal's single texture, just six-wide here.
-		DSLshadowSample.init(this, {
-					{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(ShadowUniformBufferObject), 1},
-					{1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 1},
-					{2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 1, 1},
-					{3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 2, 1},
-					{4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 3, 1},
-					{5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 4, 1},
-					{6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 5, 1}
-				  });
+		// for DSLlocal's single texture, just NUM_SHADOW_LIGHTS-wide here.
+		//
+		// Built in a loop rather than written out: at NUM_SHADOW_LIGHTS = 13
+		// the literal list was getting long enough to hide a typo, and this
+		// way the count lives in exactly one place. Binding 0 is the UBO, so
+		// map i sits at binding i+1 -- the same numbering CookTorrance.frag
+		// declares its shadowMap0..12 with, which nothing but agreement here
+		// keeps true.
+		std::vector<DescriptorSetLayoutBinding> shadowSampleBindings = {
+					{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(ShadowUniformBufferObject), 1}
+				  };
+		for(int i = 0; i < NUM_SHADOW_LIGHTS; i++) {
+			shadowSampleBindings.push_back({(uint32_t)(i + 1),
+											VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+											VK_SHADER_STAGE_FRAGMENT_BIT, i, 1});
+		}
+		DSLshadowSample.init(this, shadowSampleBindings);
 		VD.init(this, {
 				  {0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX}
 				}, {
@@ -451,7 +458,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		// sets the blue sky
 		RP.properties[0].clearValue = {0.0f,0.9f,1.0f,1.0f};
 
-		// The six shadow render passes -- the sun's and each torch's, in
+		// The shadow render passes -- the sun's and each torch's, in
 		// LightData::shadowIndex order (see SceneLights::init). AT_DEPTH_ONLY
 		// is a stock configuration built for exactly this: a D32_SFLOAT
 		// attachment usable both as a depth target and, after
@@ -496,7 +503,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		PFlame.setCullMode(VK_CULL_MODE_NONE);
 
 		// The shadow pass's own pipeline (see the member declaration for why
-		// one, shared, instead of six). Its only set is DSLlocal -- the SAME
+		// one, shared, instead of one each). Its only set is DSLlocal -- the SAME
 		// per-instance buffer the main pass's ubo.mMat comes from, reused
 		// here at set 0 instead of set 1 to read Wm again for a different
 		// projection; see Shadow.vert's header for why that's safe. The
@@ -509,7 +516,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		PShadow.init(this, &VD, "shaders/Shadow.vert.spv",
 								"shaders/Shadow.frag.spv",
 								{&DSLlocal}, {shadowPushConstant});
-		// Created against RPShadow[0], but usable with all six: they share the
+		// Created against RPShadow[0], but usable with all of them: they share the
 		// identical AT_DEPTH_ONLY attachment layout, and Vulkan only requires
 		// render-pass COMPATIBILITY (same attachment formats/samples/layouts)
 		// between the render pass a pipeline was created with and the one
@@ -525,6 +532,16 @@ class Skeleton26ReplaceName : public BaseProject {
 		VDRs.resize(1);
 		VDRs[0].init("VDposNormUV",  &VD);
 
+		// DSLshadowSample: none of these are "fromInstance" -- the shadow maps
+		// are the same fixed images for every instance, not per-instance
+		// textures like DSLlocal's albedo map. pos is unused on a
+		// non-fromInstance entry. In a loop for the same reason the layout
+		// above is.
+		std::vector<TextureDefs> shadowMapDefs;
+		for(int i = 0; i < NUM_SHADOW_LIGHTS; i++) {
+			shadowMapDefs.push_back({false, 0, RPShadow[i].attachments[0].getViewAndSampler()});
+		}
+
 		PRs.resize(2);
 		PRs[0].init("CookTorrance", {
 							{&P, {//Pipeline and DSL for the main pass
@@ -532,19 +549,7 @@ class Skeleton26ReplaceName : public BaseProject {
 							 /*DSLlocal*/{
 									/*t0*/{true,  0, {}}
 								  },
-							 // DSLshadowSample: none of these are "fromInstance"
-							 // -- all six shadow maps are the same fixed images
-							 // for every instance, not per-instance textures
-							 // like DSLlocal's albedo map above. pos is unused
-							 // on a non-fromInstance entry.
-							 /*DSLshadowSample*/{
-									{false, 0, RPShadow[0].attachments[0].getViewAndSampler()},
-									{false, 0, RPShadow[1].attachments[0].getViewAndSampler()},
-									{false, 0, RPShadow[2].attachments[0].getViewAndSampler()},
-									{false, 0, RPShadow[3].attachments[0].getViewAndSampler()},
-									{false, 0, RPShadow[4].attachments[0].getViewAndSampler()},
-									{false, 0, RPShadow[5].attachments[0].getViewAndSampler()}
-								  }
+							 /*DSLshadowSample*/ shadowMapDefs
 								 }
 								}
 						  }, /*TotalNtextures*/1, &VD);
@@ -686,7 +691,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		hud.addToggle("Show Normals", &cheats.showNormals);
 	}
 
-	// Builds the view-projection matrix each of the six shadow passes renders
+	// Builds the view-projection matrix each of the shadow passes renders
 	// with, in LightData::shadowIndex order. Called once, from localInit()
 	// right after sceneLights.init(): the sun and the torches never move, so
 	// there is nothing here that needs recomputing per frame.
@@ -706,16 +711,42 @@ class Skeleton26ReplaceName : public BaseProject {
 		// motivated this feature (see notes.md) was light bleeding through
 		// exactly that wall.
 		//
-		// Index-matched to the FIVE torches in the order they appear in
-		// lights.json (torchW1, torchW2, torchE1, torchE2, torchDC), i.e.
-		// shadowIndex 1..5 once the sun takes 0.
-		static const glm::vec3 TORCH_SHADOW_DIR[5] = {
-			glm::normalize(glm::vec3( 1.0f, -0.3f, 0.0f)),	// torchW1: west wall, aims +X into the room
-			glm::normalize(glm::vec3( 1.0f, -0.3f, 0.0f)),	// torchW2
-			glm::normalize(glm::vec3(-1.0f, -0.3f, 0.0f)),	// torchE1: east wall, aims -X into the room
-			glm::normalize(glm::vec3(-1.0f, -0.3f, 0.0f)),	// torchE2
-			glm::normalize(glm::vec3(-1.0f, -0.3f, 0.0f)),	// torchDC
+		// Index-matched to the SIX torches in the order they appear in
+		// lights.json (torchW1, torchW2, torchE1, torchE2, torchDC, torchDV),
+		// i.e. shadowIndex 1..6 once the sun takes 0.
+		//
+		// Each torch gets TWO maps, this direction and its exact opposite (see
+		// SHADOW_MAPS_PER_LIGHT and shadowFactor() in CookTorrance.frag), so
+		// the pair between them covers the whole sphere bar a thin band square
+		// with the aim. Which of the two halves is which barely matters now
+		// that both are rendered -- what the aim still buys is where the band
+		// of uncovered directions falls, so pointing it INTO the room (the
+		// +-X sign already used for the flame/light offsets in scene.json and
+		// lights.json) puts that band flat along the mounting wall, where the
+		// geometry it could leak through is furthest away.
+		//
+		// DEAD horizontal, no downward tilt: the band should lie in the plane
+		// of the wall, and any tilt rotates it to slice diagonally through the
+		// room instead.
+		static const glm::vec3 TORCH_SHADOW_DIR[6] = {
+			glm::vec3( 1.0f, 0.0f, 0.0f),	// torchW1: west wall, aims +X into the room
+			glm::vec3( 1.0f, 0.0f, 0.0f),	// torchW2
+			glm::vec3(-1.0f, 0.0f, 0.0f),	// torchE1: east wall, aims -X into the room
+			glm::vec3(-1.0f, 0.0f, 0.0f),	// torchE2
+			glm::vec3(-1.0f, 0.0f, 0.0f),	// torchDC
+			glm::vec3(-1.0f, 0.0f, 0.0f),	// torchDV: east wall of the dv alcove
 		};
+
+		// Per torch map. Two back-to-back frusta this wide overlap everywhere
+		// except a band of about +-20 degrees around the plane square with the
+		// aim, and that band is the only place a torch can still light through
+		// geometry. Wider would close it further, but a perspective projection
+		// degenerates approaching 180 degrees: the same 1024 texels spread over
+		// more angle and stretch brutally towards the edges, which is depth
+		// precision the bias in CookTorrance.frag has to absorb. 140 is the
+		// compromise; the leftover band lies flat along the wall, where in this
+		// scene there is nothing close enough to leak into.
+		const float TORCH_SHADOW_FOV = 140.0f;
 
 		// The sun has no position, only a travel direction (SceneLights.hpp),
 		// so its shadow camera needs a stand-in position: back away from a
@@ -735,28 +766,51 @@ class Skeleton26ReplaceName : public BaseProject {
 				continue;
 			}
 
-			glm::mat4 view, proj;
 			if(L.type == LIGHT_DIRECT) {
 				glm::vec3 pos = SUN_TARGET - L.dir * SUN_DISTANCE;
-				view = glm::lookAt(pos, SUN_TARGET, glm::vec3(0.0f, 1.0f, 0.0f));
-				proj = glm::ortho(-SUN_ORTHO_HALF_EXTENT, SUN_ORTHO_HALF_EXTENT,
-								  -SUN_ORTHO_HALF_EXTENT, SUN_ORTHO_HALF_EXTENT,
-								  1.0f, 200.0f);
-			} else {
-				glm::vec3 dir = TORCH_SHADOW_DIR[torchSlot++];
-				view = glm::lookAt(L.pos, L.pos + dir, glm::vec3(0.0f, 1.0f, 0.0f));
-				// 120 degrees: wide enough that a torch mounted flush on the
-				// wall still catches the floor near its base, which a
-				// narrower cone (closer to the point light's own reach)
-				// tends to clip.
-				proj = glm::perspective(glm::radians(120.0f), 1.0f, 0.1f, 15.0f);
+				glm::mat4 view = glm::lookAt(pos, SUN_TARGET, glm::vec3(0.0f, 1.0f, 0.0f));
+				glm::mat4 proj = glm::ortho(-SUN_ORTHO_HALF_EXTENT, SUN_ORTHO_HALF_EXTENT,
+											-SUN_ORTHO_HALF_EXTENT, SUN_ORTHO_HALF_EXTENT,
+											1.0f, 200.0f);
+				// Same Vulkan Y-flip as the main camera's projection (see
+				// View/ViewPrj in GameLogic()); GLM assumes an OpenGL-handed
+				// NDC otherwise.
+				proj[1][1] *= -1;
+				shadowLightSpace[L.shadowIndex] = proj * view;
+				continue;
 			}
-			// Same Vulkan Y-flip as the main camera's projection (see View/
-			// ViewPrj in GameLogic()); GLM assumes an OpenGL-handed NDC
-			// otherwise.
-			proj[1][1] *= -1;
 
-			shadowLightSpace[L.shadowIndex] = proj * view;
+			// A point light's two maps: the aim, then its opposite. Same
+			// order SceneLights::init reserved the slots in and the same
+			// order shadowFactor() tries them.
+			//
+			// The aim table is hand-written per torch and lights.json could
+			// outgrow it (its entries are the only thing here that is not
+			// derived from the light itself), so a torch past the end takes
+			// the last direction rather than reading off the array. Wrong-
+			// looking shadows on one torch beat undefined behaviour.
+			const int aimIndex = std::min(torchSlot++,
+										  (int)(sizeof(TORCH_SHADOW_DIR) / sizeof(TORCH_SHADOW_DIR[0])) - 1);
+			const glm::vec3 aim = TORCH_SHADOW_DIR[aimIndex];
+			for(int half = 0; half < SHADOW_MAPS_PER_LIGHT; half++) {
+				const glm::vec3 dir = (half == 0) ? aim : -aim;
+
+				// lookAt degenerates if the aim is parallel to `up`, so pick
+				// an up that cannot be: world up unless the torch looks
+				// straight up or down, in which case any horizontal axis does.
+				// Every TORCH_SHADOW_DIR entry is horizontal today, so this
+				// only guards a future edit.
+				const glm::vec3 up = (std::abs(dir.y) > 0.99f)
+									 ? glm::vec3(0.0f, 0.0f, 1.0f)
+									 : glm::vec3(0.0f, 1.0f, 0.0f);
+
+				glm::mat4 view = glm::lookAt(L.pos, L.pos + dir, up);
+				glm::mat4 proj = glm::perspective(glm::radians(TORCH_SHADOW_FOV),
+												  1.0f, 0.1f, 15.0f);
+				proj[1][1] *= -1;
+
+				shadowLightSpace[L.shadowIndex + half] = proj * view;
+			}
 		}
 	}
 
@@ -841,7 +895,7 @@ class Skeleton26ReplaceName : public BaseProject {
 
 	void populateCommandBuffer(VkCommandBuffer commandBuffer, int currentImage) {
 
-		// The six shadow passes, one per shadow-casting light, all before the
+		// The shadow passes, one per shadow-casting light, all before the
 		// main pass they feed: CookTorrance.frag samples these maps, so they
 		// have to be fully rendered (and, thanks to RPShadow's
 		// ATDEP_DEPTH_TRANS dependency, transitioned to a readable layout)
@@ -858,6 +912,14 @@ class Skeleton26ReplaceName : public BaseProject {
 							   &shadowLightSpace[i]);
 			for(int j = 0; j < SC.TI[0].InstanceCount; j++) {
 				Instance &inst = SC.TI[0].I[j];
+
+				// The light fixtures don't occlude (see Material::castsShadow).
+				// Same forModel() lookup the main pass does for the BRDF, so no
+				// extra per-frame work beyond the branch.
+				if(!materials.forModel(inst.Mid).castsShadow) {
+					continue;
+				}
+
 				// set 0 here is DSLlocal's per-instance buffer -- the SAME
 				// descriptor set the main pass binds at set 1 (DS[0][1]),
 				// re-mapped with this instance's current Wm every frame in
@@ -935,7 +997,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		// defines the local parameters for the uniforms
 		UniformBufferObject ubo{};
 
-		// Same six matrices every CookTorrance instance's set 2 gets mapped
+		// Same matrices every CookTorrance instance's set 2 gets mapped
 		// with below -- built once here rather than inside the loop since
 		// it's identical for every one of them. Static content (see
 		// computeShadowMatrices()), but still re-mapped every frame: map()

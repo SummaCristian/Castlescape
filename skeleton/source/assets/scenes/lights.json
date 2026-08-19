@@ -50,7 +50,8 @@
 			"castsShadow": true
 		},
 
-		// The five dungeon wall torches. Offset is the flame's position relative
+		// The dungeon wall torches (five here, plus torchDV at the end of this
+		// file, six in all). Offset is the flame's position relative
 		// to its torch instance's own origin -- NOT rotated by the instance's
 		// eulerAngles (SceneLights adds it in world space), which is why the two
 		// walls need opposite-signed X: the west-wall torches are rotated 180 on
@@ -123,10 +124,11 @@
 			"castsShadow": true
 		},
 
-		// The new-room torch (dv). Not shadow-casting: NUM_SHADOW_LIGHTS
-		// is a fixed compile-time slot count (sun + the original five torches),
-		// and giving this one a shadow pass would need a seventh shadow
-		// framebuffer/pipeline pass wired up in main.cpp -- out of scope here.
+		// The dv alcove's torch. Shadow-casting like the other five: without a
+		// map of its own shadowFactor() returns 1 for every fragment it
+		// reaches, so this one lit the dl room straight through the wall
+		// between them. NUM_SHADOW_LIGHTS went 6 -> 7 to give it a slot; the
+		// aim of its shadow camera is TORCH_SHADOW_DIR's last entry.
 		{
 			"id": "torchDV",
 			"type": "point",
@@ -136,7 +138,8 @@
 			"g": 3.0,
 			"beta": 1.4,
 			"flicker": true,
-			"flickerStrength": 0.35
+			"flickerStrength": 0.35,
+			"castsShadow": true
 		}
 	]
 }

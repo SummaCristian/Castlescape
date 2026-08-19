@@ -51,6 +51,12 @@ struct LightData {
 	// the light-space matrix array (main.cpp), assigned in declaration order
 	// by init() below from lights.json's "castsShadow" flag.
 	//
+	// A POINT light takes TWO consecutive slots, not one: shadowIndex is the
+	// map looking one way and shadowIndex+1 the map looking the opposite way,
+	// which is how a light that radiates in every direction gets shadowed all
+	// round instead of only inside one map's cone (see shadowFactor() in
+	// CookTorrance.frag, and SHADOW_MAPS_PER_LIGHT below).
+	//
 	// Fits in the same 16-byte slot as cosOut+type without changing that
 	// slot's size: std140 pads a struct used in an array (this one, via
 	// Light lights[MAX_LIGHTS] in the shader) up to a multiple of 16 bytes
@@ -262,12 +268,21 @@ void SceneLights::init(Scene *SC, const std::string &file) {
 		}
 
 		if(l.value("castsShadow", false)) {
-			L.shadowIndex = nextShadowIndex++;
-			if(L.shadowIndex >= NUM_SHADOW_LIGHTS) {
-				std::cout << "SceneLights: more than " << NUM_SHADOW_LIGHTS
-						  << " shadow-casting lights, the rest render unshadowed\n";
+			// Two slots for a point light, one for anything else. A direct
+			// light (the sun) shadows through a single orthographic box that
+			// already covers the whole scene, and a spot only emits inside its
+			// cone, so for both of those one map is the whole story. A point
+			// light emits in every direction and one perspective map covers at
+			// most a hemisphere, hence the pair.
+			const int need = (L.type == LIGHT_POINT) ? SHADOW_MAPS_PER_LIGHT : 1;
+			if(nextShadowIndex + need > NUM_SHADOW_LIGHTS) {
+				std::cout << "SceneLights: out of shadow map slots (" << NUM_SHADOW_LIGHTS
+						  << "), '" << l.value("id", std::string("?"))
+						  << "' renders unshadowed\n";
 				L.shadowIndex = -1;
-				nextShadowIndex--;
+			} else {
+				L.shadowIndex = nextShadowIndex;
+				nextShadowIndex += need;
 			}
 		}
 

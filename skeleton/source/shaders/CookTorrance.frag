@@ -62,7 +62,9 @@ struct Light {
     float cosIn;    // spot: cosine of the half inner angle
     float cosOut;   // spot: cosine of the half outer angle
     int type;
-    // -1: unshadowed (the lanterns, the spot). Else which slot of shadowMaps
+    // -1: unshadowed. Every light in the current lights.json casts a shadow,
+    // so nothing hits that path now, but it stays for lights added past
+    // NUM_SHADOW_LIGHTS. Else which slot of shadowMaps
     // / lightSpace below holds this light's shadow map. Set by SceneLights
     // from lights.json's "castsShadow", see the struct comment there.
     int shadowIndex;
@@ -80,17 +82,18 @@ layout(binding = 0, set = 0) uniform GlobalUniformBufferObject {
 
 // Shadow sampling, set 2: its own descriptor set because it belongs to
 // neither "once a frame" (set 0) nor "once an object" (set 1) -- it's once
-// per SHADOW-CASTING LIGHT, six fixed slots that exist for the run of the
-// program. lightSpace is the same view-projection matrix Shadow.vert used to
-// render each map, needed again here to place fragPos in that light's space.
+// per SHADOW-CASTING LIGHT, NUM_SHADOW_LIGHTS fixed slots that exist for the
+// run of the program. lightSpace is the same view-projection matrix
+// Shadow.vert used to render each map, needed again here to place fragPos in
+// that light's space.
 //
-// Six SEPARATE sampler bindings rather than one binding declared as an array
-// of 6: Scene::init's descriptor-pool accounting (Scene.hpp, the loop that
+// SEPARATE sampler bindings rather than one binding declared as an array:
+// Scene::init's descriptor-pool accounting (Scene.hpp, the loop that
 // does `texturesInPool += 1` per binding) counts bindings, not the
 // descriptors an array binding actually needs, and every existing binding in
 // this project has count 1. An array binding would silently under-reserve
-// the pool. Six ordinary bindings sidestep that instead of relying on a path
-// nothing else here exercises.
+// the pool. Ordinary one-per-map bindings sidestep that instead of relying on
+// a path nothing else here exercises.
 layout(binding = 0, set = 2) uniform ShadowUniformBufferObject {
     mat4 lightSpace[NUM_SHADOW_LIGHTS];
 } shadowUbo;
@@ -101,32 +104,56 @@ layout(binding = 3, set = 2) uniform sampler2D shadowMap2;
 layout(binding = 4, set = 2) uniform sampler2D shadowMap3;
 layout(binding = 5, set = 2) uniform sampler2D shadowMap4;
 layout(binding = 6, set = 2) uniform sampler2D shadowMap5;
+layout(binding = 7, set = 2) uniform sampler2D shadowMap6;
+layout(binding = 8, set = 2) uniform sampler2D shadowMap7;
+layout(binding = 9, set = 2) uniform sampler2D shadowMap8;
+layout(binding = 10, set = 2) uniform sampler2D shadowMap9;
+layout(binding = 11, set = 2) uniform sampler2D shadowMap10;
+layout(binding = 12, set = 2) uniform sampler2D shadowMap11;
+layout(binding = 13, set = 2) uniform sampler2D shadowMap12;
 
-// Stands in for shadowMaps[idx], which the six-separate-bindings choice above
-// rules out. NUM_SHADOW_LIGHTS is 6 (LightConstants.glsl); if that ever
+// Stands in for shadowMaps[idx], which the separate-bindings choice above
+// rules out. NUM_SHADOW_LIGHTS is 13 (LightConstants.glsl); if that ever
 // changes, a case has to be added or removed here by hand.
 float sampleShadowMap(int idx, vec2 uv) {
-    if(idx == 0) return texture(shadowMap0, uv).r;
-    if(idx == 1) return texture(shadowMap1, uv).r;
-    if(idx == 2) return texture(shadowMap2, uv).r;
-    if(idx == 3) return texture(shadowMap3, uv).r;
-    if(idx == 4) return texture(shadowMap4, uv).r;
-    return texture(shadowMap5, uv).r;
+    if(idx ==  0) return texture(shadowMap0,  uv).r;
+    if(idx ==  1) return texture(shadowMap1,  uv).r;
+    if(idx ==  2) return texture(shadowMap2,  uv).r;
+    if(idx ==  3) return texture(shadowMap3,  uv).r;
+    if(idx ==  4) return texture(shadowMap4,  uv).r;
+    if(idx ==  5) return texture(shadowMap5,  uv).r;
+    if(idx ==  6) return texture(shadowMap6,  uv).r;
+    if(idx ==  7) return texture(shadowMap7,  uv).r;
+    if(idx ==  8) return texture(shadowMap8,  uv).r;
+    if(idx ==  9) return texture(shadowMap9,  uv).r;
+    if(idx == 10) return texture(shadowMap10, uv).r;
+    if(idx == 11) return texture(shadowMap11, uv).r;
+    return texture(shadowMap12, uv).r;
 }
 
-// 1.0: fully lit. 0.0: this light's shadow map says something else is closer
-// to the light than `pos` is, i.e. `pos` is in shadow. shadowIndex < 0 skips
-// the lookup entirely (the lanterns and the spot: see the scope note in
-// notes.md on why only the sun and the torches got this).
-float shadowFactor(int shadowIndex, vec3 pos) {
-    // Shadows off (cheat menu): light everything as if no map existed. Reads
-    // gubo.debugFlags directly rather than through debugOn(), which is
-    // declared further down the file.
-    if(shadowIndex < 0 || (gubo.debugFlags & LIGHT_DEBUG_NO_SHADOWS) != 0) {
+// One map's verdict on one point. 1.0 lit, 0.0 shadowed.
+//
+// `covered` is the part that matters to the caller: a shadow map only knows
+// about the frustum it was rendered with, and OUTSIDE that frustum it has
+// nothing to say -- not "lit", just no answer. Returning that as an out
+// parameter instead of folding it into the float is what lets shadowFactor()
+// below ask a second map before settling for "lit", which a single bool-free
+// return value could not express.
+float shadowFromMap(int idx, vec3 pos, out bool covered) {
+    covered = false;
+
+    vec4 lightClip = shadowUbo.lightSpace[idx] * vec4(pos, 1.0);
+
+    // Behind this map's camera. For a perspective matrix w is the view-space
+    // distance in FRONT of the camera, so w <= 0 puts `pos` on the far side of
+    // the plane through the light. The divide below would mirror such a point
+    // back into the map's 0..1 range and sample a depth belonging to a
+    // completely different direction, so it has to be caught here. The sun's
+    // orthographic matrix always yields w = 1 and never trips this.
+    if(lightClip.w <= 0.0) {
         return 1.0;
     }
 
-    vec4 lightClip = shadowUbo.lightSpace[shadowIndex] * vec4(pos, 1.0);
     // w is 1 for the sun's orthographic matrix and only actually divides
     // anything for the torches' perspective ones, but doing it unconditionally
     // costs nothing and keeps this one code path for both projection kinds.
@@ -138,15 +165,17 @@ float shadowFactor(int shadowIndex, vec3 pos) {
     vec2 shadowUV = lightNDC.xy * 0.5 + 0.5;
 
     // Outside the map (a torch's cone, or the sun's fixed ortho box, doesn't
-    // reach here): nothing to compare against, so don't shadow it. Missing
-    // this check would sample garbage at the map's clamped edge instead.
+    // reach here): nothing to compare against. Missing this check would sample
+    // garbage at the map's clamped edge instead.
     if(shadowUV.x < 0.0 || shadowUV.x > 1.0 ||
        shadowUV.y < 0.0 || shadowUV.y > 1.0 ||
        lightNDC.z < 0.0 || lightNDC.z > 1.0) {
         return 1.0;
     }
 
-    float closestDepth = sampleShadowMap(shadowIndex, shadowUV);
+    covered = true;
+
+    float closestDepth = sampleShadowMap(idx, shadowUV);
     // Shader-side depth bias: Pipeline::create (Starter.hpp) hard-codes
     // depthBiasEnable false, so there is no hardware slope-scaled bias
     // available, and this is the substitute. Too small and most of the scene
@@ -155,6 +184,43 @@ float shadowFactor(int shadowIndex, vec3 pos) {
     // for this scene's depth ranges, not a derived value.
     const float bias = 0.0015;
     return (lightNDC.z - bias > closestDepth) ? 0.0 : 1.0;
+}
+
+// 1.0: fully lit. 0.0: this light's shadow maps say something else is closer
+// to the light than `pos` is, i.e. `pos` is in shadow. shadowIndex < 0 skips
+// the lookup and lights unconditionally, which is why a light without a slot
+// leaks through every wall it reaches.
+//
+// A POINT light owns two maps aimed opposite ways (SHADOW_MAPS_PER_LIGHT, and
+// see computeShadowMatrices() in main.cpp): its own slot looks one way and
+// slot+1 looks the other, so wherever the first has nothing to say the second
+// usually does. This is what makes a torch light the room AND the wall it
+// hangs on. With one map the back half-space had no good answer -- called it
+// lit and the torch shone through its own wall into the next room, called it
+// shadowed and the torch lit only a wedge in front of itself.
+//
+// Whatever neither map covers stays lit and unshadowed. That is the thin band
+// of directions square with the wall which falls outside both frusta; it can
+// still bleed, exactly as it did before, and widening TORCH_SHADOW_FOV is what
+// narrows it.
+float shadowFactor(int shadowIndex, int type, vec3 pos) {
+    // Shadows off (cheat menu): light everything as if no map existed. Reads
+    // gubo.debugFlags directly rather than through debugOn(), which is
+    // declared further down the file.
+    if(shadowIndex < 0 || (gubo.debugFlags & LIGHT_DEBUG_NO_SHADOWS) != 0) {
+        return 1.0;
+    }
+
+    bool covered;
+    float lit = shadowFromMap(shadowIndex, pos, covered);
+
+    // Only a point light HAS a second map. Asking for slot+1 on the sun would
+    // read a matrix belonging to some other light entirely.
+    if(!covered && type == LIGHT_POINT) {
+        lit = shadowFromMap(shadowIndex + 1, pos, covered);
+    }
+
+    return lit;
 }
 
 // Whether one of the debug views from LightConstants.glsl is on. All of them
@@ -321,7 +387,7 @@ void main() {
         vec3 L = lightDirection(gubo.lights[i], fragPos);
         Lo += lightRadiance(gubo.lights[i], fragPos)
             * BRDF(N, L, V, mD, ubo.mS, ubo.roughness, ubo.F0, k)
-            * shadowFactor(gubo.lights[i].shadowIndex, fragPos);
+            * shadowFactor(gubo.lights[i].shadowIndex, gubo.lights[i].type, fragPos);
     }
 
     vec3 color = Lo + hemisphericAmbient(N, mD);

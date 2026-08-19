@@ -15,11 +15,31 @@
 // lightCount saying how much of it is real.
 #define MAX_LIGHTS 16
 
-// How many lights cast a shadow: the sun (1) plus the five torches (5). The
-// gate lanterns and the courtyard spot don't -- see notes.md for the scope
-// decision. Sized as an array bound (shadow map samplers, light-space
-// matrices), so it has to be a compile-time constant like MAX_LIGHTS.
-#define NUM_SHADOW_LIGHTS 6
+// How many SHADOW MAPS exist, which is no longer the same as how many lights
+// cast a shadow: a point light needs two (see below), so this is the sun (1)
+// plus two per torch (6 x 2). Sized as an array bound (shadow map samplers,
+// light-space matrices), so it has to be a compile-time constant like
+// MAX_LIGHTS.
+//
+// Adding a slot means four edits, all of them in step: this number, one more
+// sampler binding plus a sampleShadowMap() case in CookTorrance.frag, one more
+// DSLshadowSample binding plus RPShadow entry in main.cpp, and one more aim
+// direction in TORCH_SHADOW_DIR. SceneLights::init hands out slots in
+// lights.json order and warns if a "castsShadow" light finds none left.
+//
+// 13 is also close to a hard ceiling: these are 13 of the fragment stage's
+// sampled images and the albedo map is a 14th, against a Vulkan guaranteed
+// minimum (maxPerStageDescriptorSampledImages) of 16. Real desktop drivers
+// allow far more, but past ~16 the code stops being portable by spec.
+#define NUM_SHADOW_LIGHTS 13
+
+// Maps per point light: one aimed along its shadow direction, one aimed the
+// exact opposite way. A perspective map covers at most a hemisphere, and a
+// torch radiates in every direction, so a single map left everything behind
+// it either black (if unprojectable points are called shadowed) or lit
+// straight through the wall (if they are called lit). Two back-to-back maps
+// put every point in front of exactly one of them.
+#define SHADOW_MAPS_PER_LIGHT 2
 
 #define LIGHT_DIRECT 0
 #define LIGHT_POINT  1
