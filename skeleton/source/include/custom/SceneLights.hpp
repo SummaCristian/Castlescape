@@ -47,15 +47,18 @@ struct LightData {
 	float cosIn;					// spot: cosine of the half inner angle
 	float cosOut;					// spot: cosine of the half outer angle
 	int type;						// LIGHT_DIRECT / LIGHT_POINT / LIGHT_SPOT
-	// -1: doesn't cast a shadow. Else an index into the shadow map array and
-	// the light-space matrix array (main.cpp), assigned in declaration order
-	// by init() below from lights.json's "castsShadow" flag.
-	//
-	// A POINT light takes TWO consecutive slots, not one: shadowIndex is the
-	// map looking one way and shadowIndex+1 the map looking the opposite way,
-	// which is how a light that radiates in every direction gets shadowed all
-	// round instead of only inside one map's cone (see shadowFactor() in
-	// CookTorrance.frag, and SHADOW_MAPS_PER_LIGHT below).
+	// -1: doesn't cast a shadow. Else an index into the shadow array that
+	// matches this light's TYPE, assigned in declaration order by init()
+	// below from lights.json's "castsShadow" flag:
+	//   LIGHT_DIRECT / LIGHT_SPOT  -> index into the 2D depth maps
+	//                                 (NUM_SHADOW_MAPS_2D, shadowLightSpace2D
+	//                                 in main.cpp)
+	//   LIGHT_POINT                -> index into the cube shadow maps
+	//                                 (NUM_SHADOW_CUBES, one CubeShadowMap
+	//                                 per torch in main.cpp)
+	// One slot each, unlike the old two-perspective-map workaround: a real
+	// cube map answers in every direction on its own (see shadowFactor() in
+	// CookTorrance.frag).
 	//
 	// Fits in the same 16-byte slot as cosOut+type without changing that
 	// slot's size: std140 pads a struct used in an array (this one, via
@@ -159,9 +162,12 @@ class SceneLights {
 	static glm::vec3 readVec3(const nlohmann::json &js, const glm::vec3 &fallback);
 
 	// Next shadowIndex to hand out, incremented once per "castsShadow": true
-	// entry in declaration order. Not reset after init() -- there is only
-	// ever one pass over lights.json.
-	int nextShadowIndex = 0;
+	// entry in declaration order -- one counter per shadow ARRAY (2D depth
+	// maps vs. point-light cube maps, see LightData::shadowIndex), since a
+	// direct/spot light and a point light no longer share the same array.
+	// Not reset after init() -- there is only ever one pass over lights.json.
+	int nextShadowIndex2D = 0;
+	int nextShadowIndexCube = 0;
 };
 
 #ifdef SCENELIGHTS_IMPLEMENTATION
@@ -268,21 +274,30 @@ void SceneLights::init(Scene *SC, const std::string &file) {
 		}
 
 		if(l.value("castsShadow", false)) {
-			// Two slots for a point light, one for anything else. A direct
+			// A point light draws from the CUBE array (one real 6-face cube
+			// map per torch), everything else from the 2D array: a direct
 			// light (the sun) shadows through a single orthographic box that
 			// already covers the whole scene, and a spot only emits inside its
-			// cone, so for both of those one map is the whole story. A point
-			// light emits in every direction and one perspective map covers at
-			// most a hemisphere, hence the pair.
-			const int need = (L.type == LIGHT_POINT) ? SHADOW_MAPS_PER_LIGHT : 1;
-			if(nextShadowIndex + need > NUM_SHADOW_LIGHTS) {
-				std::cout << "SceneLights: out of shadow map slots (" << NUM_SHADOW_LIGHTS
-						  << "), '" << l.value("id", std::string("?"))
-						  << "' renders unshadowed\n";
-				L.shadowIndex = -1;
+			// cone, so for both of those a single 2D depth map is the whole
+			// story.
+			if(L.type == LIGHT_POINT) {
+				if(nextShadowIndexCube >= NUM_SHADOW_CUBES) {
+					std::cout << "SceneLights: out of cube shadow map slots ("
+							  << NUM_SHADOW_CUBES << "), '" << l.value("id", std::string("?"))
+							  << "' renders unshadowed\n";
+					L.shadowIndex = -1;
+				} else {
+					L.shadowIndex = nextShadowIndexCube++;
+				}
 			} else {
-				L.shadowIndex = nextShadowIndex;
-				nextShadowIndex += need;
+				if(nextShadowIndex2D >= NUM_SHADOW_MAPS_2D) {
+					std::cout << "SceneLights: out of 2D shadow map slots ("
+							  << NUM_SHADOW_MAPS_2D << "), '" << l.value("id", std::string("?"))
+							  << "' renders unshadowed\n";
+					L.shadowIndex = -1;
+				} else {
+					L.shadowIndex = nextShadowIndex2D++;
+				}
 			}
 		}
 
