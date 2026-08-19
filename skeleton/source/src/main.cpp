@@ -768,6 +768,33 @@ class Skeleton26ReplaceName : public BaseProject {
 	};
 	std::vector<WatchingSkull> watchingSkulls;
 
+	// The dungeon ghost (assets/models/Entities/Ghost.gltf, "ghost" instance
+	// in scene.json): a single-mesh, single-texture prop (see the model's own
+	// notes.md-style history -- body and "orb" were originally two separate
+	// pieces, joined in Blender and re-UV'd onto one flat-grey texture so the
+	// engine's one-texture-per-instance loader could draw it as one entity).
+	// Patrols a closed loop of waypoints at constant speed, facing its
+	// direction of travel, with a sinusoidal bob layered on top of the Y
+	// coordinate -- same idea as the torch's flame envelope, just applied to
+	// world position instead of brightness. Uses the CookTorrance technique
+	// like every other prop, so it casts/receives shadows in both the sun's
+	// 2D map and the torches' cube maps for free, and needs no per-object
+	// shadow plumbing of its own.
+	struct Ghost {
+		Instance *inst = nullptr;
+		std::vector<glm::vec3> waypoints;	// XZ used for the path; Y is the resting hover height
+		int targetIdx = 1;					// waypoints[] index currently being approached
+		float distAlongSegment = 0.0f;		// world units already covered on the current leg
+		float bobPhase = 0.0f;
+	};
+	Ghost ghost;
+
+	// World units/second along the path.
+	static constexpr float GHOST_SPEED = 1.5f;
+	// Bob envelope: how far above/below the resting hover height (radians/sec, world units).
+	static constexpr float GHOST_BOB_SPEED = 1.6f;
+	static constexpr float GHOST_BOB_AMPLITUDE = 0.3f;
+
 	// Tallest surface the player can walk straight onto without jumping, measured
 	// from the feet. Deliberately a single shared constant rather than a local in
 	// each collision block: the two collision passes in GameLogic() must agree on
@@ -1374,6 +1401,26 @@ class Skeleton26ReplaceName : public BaseProject {
 		addWatchingSkull("dhSkullTorchE2");
 		addWatchingSkull("dcSkullTorchE");
 		addWatchingSkull("dvSkullTorch");
+
+		// The ghost's patrol: a closed rectangular loop around the perimeter
+		// of the west dungeon room (the one with the table), inset from the
+		// walls/torches and clear of the table+chairs sitting in the middle.
+		// Y is the resting hover height -- GameLogic() adds the bob on top
+		// of it every frame, it isn't part of the path shape itself.
+		{
+			auto it = SC.InstanceIds.find("ghost");
+			if(it == SC.InstanceIds.end()) {
+				std::cout << "Ghost instance 'ghost' not found, skipping\n";
+			} else {
+				ghost.inst = SC.I[it->second];
+				ghost.waypoints = {
+					glm::vec3(-33.0f, 2.2f, 23.0f),
+					glm::vec3(-33.0f, 2.2f, 37.0f),
+					glm::vec3(-19.0f, 2.2f, 37.0f),
+					glm::vec3(-19.0f, 2.2f, 23.0f),
+				};
+			}
+		}
 
 		// Held torch. Its Wm is overwritten every frame in GameLogic(), so
 		// the placeholder transform in scene.json never actually shows.
@@ -2743,6 +2790,41 @@ class Skeleton26ReplaceName : public BaseProject {
 				float yaw = std::atan2(dx, dz);
 				s.inst->Wm = glm::translate(glm::mat4(1.0f), s.worldPos)
 							* glm::rotate(glm::mat4(1.0f), yaw, glm::vec3(0.0f, 1.0f, 0.0f));
+			}
+
+			// Ghost: walks its waypoint loop at constant speed (distance-based,
+			// not time-based, so GHOST_SPEED is an actual world-units/second
+			// figure regardless of leg length), facing the leg it's currently
+			// on, with a sinusoidal bob added on top of the hover height
+			// afterwards -- the facing/position math and the bob are kept
+			// separate so the bob never fights the direction the ghost is
+			// looking.
+			if(ghost.inst != nullptr && ghost.waypoints.size() >= 2) {
+				int n = (int)ghost.waypoints.size();
+				glm::vec3 from = ghost.waypoints[ghost.targetIdx == 0 ? n - 1 : ghost.targetIdx - 1];
+				glm::vec3 to = ghost.waypoints[ghost.targetIdx];
+				float segLen = glm::length(glm::vec2(to.x - from.x, to.z - from.z));
+
+				ghost.distAlongSegment += GHOST_SPEED * deltaT;
+				while(segLen > 0.0f && ghost.distAlongSegment >= segLen) {
+					ghost.distAlongSegment -= segLen;
+					ghost.targetIdx = (ghost.targetIdx + 1) % n;
+					from = ghost.waypoints[ghost.targetIdx == 0 ? n - 1 : ghost.targetIdx - 1];
+					to = ghost.waypoints[ghost.targetIdx];
+					segLen = glm::length(glm::vec2(to.x - from.x, to.z - from.z));
+				}
+
+				float t = segLen > 0.0f ? ghost.distAlongSegment / segLen : 0.0f;
+				glm::vec3 pos = glm::mix(from, to, t);
+
+				ghost.bobPhase += GHOST_BOB_SPEED * deltaT;
+				pos.y += std::sin(ghost.bobPhase) * GHOST_BOB_AMPLITUDE;
+
+				// +M_PI: the ghost mesh's modeled front faces -Z, not +Z like the
+				// watching skulls -- confirmed by it walking backwards without this.
+				float yaw = std::atan2(to.x - from.x, to.z - from.z) + (float)M_PI;
+				ghost.inst->Wm = glm::translate(glm::mat4(1.0f), pos)
+								* glm::rotate(glm::mat4(1.0f), yaw, glm::vec3(0.0f, 1.0f, 0.0f));
 			}
 
 			// Gravity: constant downward acceleration, integrated into a vertical
