@@ -3137,14 +3137,12 @@ class Skeleton26ReplaceName : public BaseProject {
 		// pointing its Wm at the camera every frame from here on is the
 		// entire "now it's in your hand" effect.
 		//
-		// Lateral bob and roll are read off the SAME phase but negated: a
-		// real walking gait swings opposite arms in opposite directions
-		// (contralateral swing), so mirroring just the sign, off the torch's
-		// own signal, is enough to read as "the other hand" rather than a
-		// second copy of the same motion. Vertical bob is left in phase --
-		// both hands still bounce with every footstep together.
+		// Lateral bob, roll and vertical bob all read off the SAME phase with
+		// the SAME sign as the torch's: both hands swing left together and
+		// right together (not toward/away from center), which is what the
+		// held-key sway is meant to match here.
 		if(hasKey && keyPickupIdx >= 0) {
-			float bobLateral = -sinf(torchBobPhase) * TORCH_BOB_LATERAL * torchBobBlend;
+			float bobLateral = sinf(torchBobPhase) * TORCH_BOB_LATERAL * torchBobBlend;
 			float bobVertical = sinf(torchBobPhase * 2.0f) * TORCH_BOB_VERTICAL * torchBobBlend;
 			float bobRollDeg = bobLateral * 90.0f;
 
