@@ -1201,7 +1201,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		addDoor("dlDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f);
 		addDoor("dlDoorPanel2", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f);
 
-		// The five watching skulls, one per torch (see scene.json "torchSkull"
+		// The watching skulls, one per torch (see scene.json "torchSkull"
 		// instances). One addWatchingSkull() call per skull, same reasoning as
 		// addDoor() above: adding another is one line, not new plumbing.
 		auto addWatchingSkull = [&](const char *id) {
@@ -1220,6 +1220,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		addWatchingSkull("dhSkullTorchE1");
 		addWatchingSkull("dhSkullTorchE2");
 		addWatchingSkull("dcSkullTorchE");
+		addWatchingSkull("dvSkullTorch");
 
 		// Held torch. Its Wm is overwritten every frame in GameLogic(), so
 		// the placeholder transform in scene.json never actually shows.
@@ -1274,12 +1275,14 @@ class Skeleton26ReplaceName : public BaseProject {
 			addTorchFlame("handTorch", TORCH_FLAME_ANCHOR, true);
 		}
 		// The wall-mounted dungeonTorch instances (see scene.json): two pairs
-		// flanking the hall's doorway plus one in the corridor.
+		// flanking the hall's doorway, one in the corridor, one in the dv
+		// alcove.
 		addTorchFlame("dhTorchW1", TORCH_FLAME_ANCHOR);
 		addTorchFlame("dhTorchW2", TORCH_FLAME_ANCHOR);
 		addTorchFlame("dhTorchE1", TORCH_FLAME_ANCHOR);
 		addTorchFlame("dhTorchE2", TORCH_FLAME_ANCHOR);
 		addTorchFlame("dcTorchE", TORCH_FLAME_ANCHOR);
+		addTorchFlame("dvTorch", TORCH_FLAME_ANCHOR);
 
 		// Surface parameters for the BRDF, one per model.
 		materials.init(&SC, "assets/scenes/materials.json");
@@ -1960,6 +1963,13 @@ class Skeleton26ReplaceName : public BaseProject {
 				L.cosIn = 1.0f;
 				L.cosOut = 0.0f;
 				L.type = LIGHT_POINT;
+				// Not a shadow caster of its own (these lights aren't in
+				// lights.json and never got a SceneLights::init slot): -1
+				// skips shadowFactor()'s lookup entirely. Left unset this
+				// zero-initializes to 0, the sun's own shadow map, and
+				// indoors -- in the sun's shadow -- that reads every torch
+				// flame's light as fully shadowed.
+				L.shadowIndex = -1;
 
 				gubo.lights[gubo.lightCount++] = L;
 				live++;

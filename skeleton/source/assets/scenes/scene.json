@@ -117,6 +117,7 @@
 			{"id": "dvCornNE", "model": "dungeonCorner", "texture": ["dungeonCornerTex"], "translate": [20.0, 0.02, 19.2], "eulerAngles": [0.0, 90.0, 0.0]},
 			{"id": "dvCornSE", "model": "dungeonCorner", "texture": ["dungeonCornerTex"], "translate": [20.0, 0.02, 33.6]},
 			{"id": "dvTorch", "model": "dungeonTorch", "texture": ["dungeonTorchTex"], "translate": [18.76, 3.5, 26.4]},
+			{"id": "dvSkullTorch", "model": "torchSkull", "texture": ["torchSkullTex"], "translate": [18.29, 4.12, 26.4]},
 			{"id": "dvBarrel", "model": "dungeonBarrel", "texture": ["dungeonBarrelTex"], "translate": [15.5, 0.02, 22.5], "eulerAngles": [0.0, 20.0, 0.0], "scale": [0.48, 0.48, 0.48]},
 			{"id": "dvSkull", "model": "dungeonSkull", "texture": ["dungeonSkullTex"], "translate": [15.5, 0.02, 30.5], "eulerAngles": [0.0, -20.0, 0.0], "scale": [0.46, 0.46, 0.46]},
 
