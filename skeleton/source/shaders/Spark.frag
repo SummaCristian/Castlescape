@@ -1,11 +1,8 @@
 // FRAGMENT SHADER for the flame's spark particles (see Spark.vert). Unlit,
 // HDR-bright, alpha-blended -- same reasoning as Flame.frag: a spark is a
 // tiny fleck of burning fuel, it emits, there's nothing to light it FROM.
-// Replaces the old Ember.frag, which faked "bright" by clipping color at a
-// fixed 1.6x multiplier because there was no HDR target or bloom pass to
-// hand real overbright values to. This renderer now has both, so sparks
-// write real HDR values and let bloom turn them into the pinpricks of light
-// they're supposed to read as.
+// Sparks write real HDR values and let the bloom pass downstream turn them
+// into the pinpricks of light they're supposed to read as.
 
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
@@ -48,9 +45,7 @@ void main() {
 		discard;
 	}
 
-	// Hot yellow-white at birth, cooling to deep orange by death -- the same
-	// two-stop idea the old Ember.frag used, just with brighter HDR output
-	// at the hot end instead of a clipped flat multiplier.
+	// Hot yellow-white at birth, cooling to deep orange by death.
 	vec3 hot = vec3(1.00, 0.95, 0.75);
 	vec3 cool = vec3(0.95, 0.35, 0.05);
 	vec3 color = mix(hot, cool, life);

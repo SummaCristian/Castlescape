@@ -1,13 +1,10 @@
-// VERTEX SHADER for the flame body (see custom/Flame.hpp). This REPLACES the
-// old low-poly faceted mesh -- a small hand-built stack of jittered rings,
-// animated per-vertex by scrolling noise -- with camera-facing billboard
-// quads. The old mesh could only ever read as a solid, hard-edged wobbling
-// shape: however much noise you feed a fixed vertex count, the silhouette is
-// still a closed polygon with no way to fray at the edges or let a wisp
-// actually detach. A billboard punches its silhouette per pixel instead (see
-// Flame.frag), which is the only way to get that. All this shader does is
-// place flat cards in the flame's own local space and let the envelopes bend
-// them; every bit of the actual look lives in the fragment shader.
+// VERTEX SHADER for the flame body (see custom/Flame.hpp): camera-facing
+// billboard quads. A billboard punches its silhouette per pixel in the
+// fragment shader (Flame.frag), rather than the mesh itself defining a fixed
+// closed outline, which is what lets the flame fray at the edges and let
+// wisps detach. All this shader does is place flat cards in the flame's own
+// local space and let the envelopes bend them; every bit of the actual look
+// lives in the fragment shader.
 //
 // set 0 is the SAME global uniform the main pass uses (DSglobal in main.cpp,
 // extended with a "time" field); the flame doesn't need eyePos or the light
@@ -39,15 +36,14 @@ layout(binding = 0, set = 1) uniform FlameUniformBufferObject {
 	mat4  mvpMat;      // billboard basis * ViewPrj, built CPU-side per frame
 	float seed;        // per-torch phase offset so torches don't move in lockstep
 	float intensity;   // CPU-driven BRIGHTNESS envelope, ~0.30 .. 1.40,
-	                   // spring-smoothed -- no longer scales height (see below)
+	                   // spring-smoothed; does not scale height (see below)
 	vec2  lean;        // billboard-LOCAL lean from hand motion: x = along the
 	                   // billboard's right axis, y = along its forward axis
-	float heightScale; // slow HEIGHT envelope, ~0.78 .. 1.09. Split from
-	                   // intensity because sharing one signal for both was the
-	                   // old version's "jumping" flame: light output can
-	                   // flicker fast, but height follows the fuel column and
-	                   // lags it -- so the CPU chases this one much more
-	                   // slowly (see main.cpp's FLAME_HEIGHT_TAU).
+	float heightScale; // slow HEIGHT envelope, ~0.78 .. 1.09, kept separate
+	                   // from intensity: light output can flicker fast, but
+	                   // height follows the fuel column and lags it, so the
+	                   // CPU chases this one much more slowly (see main.cpp's
+	                   // FLAME_HEIGHT_TAU).
 	float glareBoost;  // 1.0 + stare-at emphasis, passed through to Flame.frag
 } fubo;
 
@@ -92,9 +88,7 @@ void main() {
 	pos.x = inCorner.x * widthScale;
 	// heightScale scales the WHOLE height, not just the color/alpha: a
 	// guttering flame is visibly shorter, not just dimmer, exactly like a
-	// real one starved of fuel or caught by a draft. This used to be
-	// fubo.intensity -- splitting height onto its own slower envelope is
-	// what stopped the flame visibly teleporting between heights.
+	// real one starved of fuel or caught by a draft.
 	pos.y = h * fubo.heightScale * layerHeightScale;
 	// Depth-separate the three cards along local z so they aren't coplanar;
 	// 0.10 units is small next to the flame's own ~1-unit half-width, just

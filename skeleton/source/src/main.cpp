@@ -443,14 +443,13 @@ class Skeleton26ReplaceName : public BaseProject {
 
 		// BRIGHTNESS flicker/guttering envelope, ~0.30 (mid-gutter) to ~1.40
 		// (a flare). Scales the flame's brightness, its spark output/rate, and
-		// the point light's colour and reach -- but NOT the flame's height any
-		// more, see heightScale. Chased toward its noise-driven target by a
+		// the point light's colour and reach -- but not the flame's height,
+		// see heightScale. Chased toward its noise-driven target by a
 		// critically-damped spring (intensityVel below) instead of being
 		// assigned raw: the raw signal is a fresh noise sample every frame,
-		// and slamming the whole flame to it at once was exactly the visible
-		// "jumping". A spring is continuous in value AND slope, so brightness
-		// glides, yet still ducks through a gutter in a couple tenths of a
-		// second.
+		// and slamming the whole flame to it at once would visibly "jump". A
+		// spring is continuous in value AND slope, so brightness glides, yet
+		// still ducks through a gutter in a couple tenths of a second.
 		float intensity = 1.0f;
 		float intensityVel = 0.0f;
 
@@ -458,8 +457,8 @@ class Skeleton26ReplaceName : public BaseProject {
 		// but compressed (a flame's height varies far less than its light
 		// output) and low-passed much harder (FLAME_HEIGHT_TAU): light
 		// responds to combustion instantly, the fuel column's height follows
-		// it late. One shared signal for both was the other half of the old
-		// "jumping" -- the flame teleported between heights at flicker rate.
+		// it late. Kept as its own signal rather than sharing intensity's,
+		// so the flame's height glides instead of teleporting at flicker rate.
 		float heightScale = 1.0f;
 
 		// This torch's own smoothed stare-at factor, 0..1 (see the glare
@@ -497,12 +496,11 @@ class Skeleton26ReplaceName : public BaseProject {
 	// the right anchor). Y is 0.30, well BELOW that top (0.413): the cup has
 	// depth, so sitting the flame's own base ring exactly at the rim left it
 	// looking like it was floating just above the torch instead of coming
-	// out of it. The old mesh flame only needed to nestle down to 0.38, but
-	// the shader flame's field fades out right at its own y=0 (Flame.frag's
-	// baseFade plus the alpha window), so its first VISIBLE pixels sit a few
-	// percent up the card -- the anchor compensates by sinking that much
-	// further into the cup, and the fade doubles as the flame emerging from
-	// inside it rather than balancing on the rim.
+	// out of it. The flame's field fades out right at its own y=0
+	// (Flame.frag's baseFade plus the alpha window), so its first VISIBLE
+	// pixels sit a few percent up the card -- the anchor compensates by
+	// sinking that much further into the cup, and the fade doubles as the
+	// flame emerging from inside it rather than balancing on the rim.
 	static constexpr glm::vec3 TORCH_FLAME_ANCHOR = glm::vec3(-0.384f, 0.30f, 0.0f);
 
 	// The flame's size, in the torch model's own local units, so it rides
@@ -512,10 +510,10 @@ class Skeleton26ReplaceName : public BaseProject {
 	// instead made the flame look right on the (small) held torch and
 	// comically undersized on the (full-size) wall ones.
 	//
-	// HALF_WIDTH is deliberately wider than the old mesh's widest ring: the
-	// billboard's noise field eats into its own silhouette from the edges in,
-	// so the quad has to be bigger than the fire that ends up drawn inside it
-	// or the flame gets visibly clipped to a rectangle.
+	// HALF_WIDTH is deliberately wider than the visible flame ends up being:
+	// the billboard's noise field eats into its own silhouette from the
+	// edges in, so the quad has to be bigger than the fire that ends up
+	// drawn inside it or the flame gets visibly clipped to a rectangle.
 	static constexpr float FLAME_HEIGHT = 0.95f;
 	static constexpr float FLAME_HALF_WIDTH = 0.20f;
 
@@ -525,9 +523,8 @@ class Skeleton26ReplaceName : public BaseProject {
 	// than the gate lanterns (SceneLights.hpp/lights.json): a torch flame is
 	// a much smaller, closer source than a lamp head.
 	static constexpr glm::vec3 TORCH_LIGHT_COLOR = glm::vec3(1.0f, 0.5f, 0.16f);
-	// 2.1 rather than the original 1.6: with the falloff (g/d)^beta this
-	// lifts the light by a flat ~45% at every distance, so the torches
-	// genuinely carry into the room instead of only rimming their own wall.
+	// With the falloff (g/d)^beta, g = 2.1 makes the torches genuinely carry
+	// into the room instead of only rimming their own wall.
 	static constexpr float TORCH_LIGHT_G = 2.1f;
 	static constexpr float TORCH_LIGHT_BETA = 1.4f;
 
@@ -546,17 +543,14 @@ class Skeleton26ReplaceName : public BaseProject {
 	static constexpr float TORCH_LIGHT_CULL_DIST = 25.0f;
 	static constexpr int TORCH_LIGHT_MAX_LIVE = 8;
 
-	// Fire envelope. The fast term used to be sampled at 12 Hz and weighted
-	// half the whole signal, which is physically the right flicker band but
-	// looked wrong for a structural reason: a WHOLE-FLAME envelope applies
-	// that twitch to every pixel at once, and no real flame changes uniformly
-	// -- that reads as a brightness dial being wiggled. The fast twitch now
-	// lives in Flame.frag as a per-pixel shimmer that varies along the flame;
-	// the CPU keeps a slower 7 Hz term at reduced weight purely so the light
-	// the torch casts still dances a little, and the slower terms underneath
-	// it stop the result from reading as uniform hash. (A plain sine was what
-	// the first version used, and the ear-equivalent problem applies to the
-	// eye: a pure period is a metronome you lock onto within two seconds.)
+	// Fire envelope. The fast, physically-right flicker band lives in
+	// Flame.frag instead, as a per-pixel shimmer that varies along the flame
+	// -- a WHOLE-FLAME envelope applying that twitch to every pixel at once
+	// reads as a brightness dial being wiggled, since no real flame changes
+	// uniformly. The CPU keeps a slower 7 Hz term at reduced weight purely so
+	// the light the torch casts still dances a little, layered under slower
+	// terms so the result doesn't read as a metronome (a pure sine period is
+	// something the eye locks onto within two seconds).
 	static constexpr float FLAME_FLICKER_HZ = 7.0f;
 	// The spring rate the brightness envelope chases its target with
 	// (critically damped, see TorchFlame::intensityVel). 14 rad/s settles in
@@ -612,7 +606,7 @@ class Skeleton26ReplaceName : public BaseProject {
 	static constexpr float TORCH_LEAN_MAX = 0.30f;
 
 	// Seconds since startup, uploaded as gubo.time and read by Flame.vert/
-	// .frag and FlameGlow.frag. A free-running accumulator rather than a
+	// .frag and Spark.vert. A free-running accumulator rather than a
 	// frame-indexed value, so the sway/flicker never repeats on a
 	// noticeable cycle.
 	float animTime = 0.0f;
@@ -1334,8 +1328,7 @@ class Skeleton26ReplaceName : public BaseProject {
 
 		// The camera's world position, needed below to cull torch lights by
 		// distance, and again by the flame billboards to work out which way to
-		// face. Pulled up here from where it used to sit (just before the
-		// DSglobal.map() call) so both have it.
+		// face.
 		const glm::mat4 camToWorld = glm::inverse(View);
 		const glm::vec3 eyePos = glm::vec3(camToWorld[3]);
 
@@ -1482,15 +1475,15 @@ class Skeleton26ReplaceName : public BaseProject {
 
 			// Straight from speed to half-widths of tip offset.
 			//
-			// This deliberately does NOT divide by the flame's world half-width,
-			// which is what the first attempt did and why the flame ended up
-			// permanently folded over. The held torch's half-width is about
-			// 0.07 world units, so dividing by it multiplied every velocity by
-			// ~14: merely turning on the spot swings the torch through roughly
-			// 2 units/s, which saturated the lean to its cap and pinned it
-			// there. It also made the effect scale-dependent in the wrong
-			// direction -- the small held torch reacted three times harder than
-			// a full-size wall one, when they should behave identically.
+			// Deliberately does NOT divide by the flame's world half-width:
+			// the held torch's half-width is about 0.07 world units, so
+			// dividing by it would multiply every velocity by ~14 -- merely
+			// turning on the spot swings the torch through roughly 2 units/s,
+			// which saturates the lean to its cap and pins it there
+			// permanently folded over. It would also make the effect
+			// scale-dependent in the wrong direction: the small held torch
+			// would react three times harder than a full-size wall one, when
+			// they should behave identically.
 			tf.lean = glm::vec2(glm::dot(leanWorld, leanRight), glm::dot(leanWorld, leanFwd))
 					  * TORCH_LEAN_PER_SPEED;
 			if(glm::length(tf.lean) > TORCH_LEAN_MAX) {
@@ -1663,8 +1656,8 @@ class Skeleton26ReplaceName : public BaseProject {
 			DSblurV.map(currentImage, &post, 0);
 
 			// Composite: samples both textures with plain normalised UVs, so
-			// the texel size is not read at all. The tone map that used to live
-			// at the end of CookTorrance.frag now happens here instead, which
+			// the texel size is not read at all. The tone map (see
+			// CookTorrance.frag) happens here, at the end of the chain, which
 			// is why debugFlags has to reach this pass -- the Tone Mapping
 			// cheat toggles it.
 			post.texelSize = fullTexel;
@@ -1690,15 +1683,10 @@ class Skeleton26ReplaceName : public BaseProject {
 		//     torch at exactly the pitch angles that made this worth splitting
 		//     out. See TorchFlame::heldByCamera.
 		//
-		// This is also what fixes the flame not following the player's
-		// orientation at all. The old matrix was translate * scale with NO
-		// rotation at all, so the mesh's local axes stayed welded to world
-		// X/Z: turning on the spot swung the flame's own asymmetric crown
-		// around relative to the torch holding it. A camera-facing billboard
-		// has no such orientation to get wrong -- it presents the same face
-		// from every angle by construction -- so the problem stops existing
-		// rather than being corrected. What is left is the part that SHOULD
-		// respond to movement, and that now goes in deliberately as tf.lean.
+		// A camera-facing billboard has no orientation to get wrong relative
+		// to the player turning -- it presents the same face from every
+		// angle by construction. What's left is the part that SHOULD respond
+		// to movement, and that goes in deliberately as tf.lean.
 		//
 		// Local space for the shaders: x is +/-1 across the flame's half-width,
 		// y is 0 at the wick and 1 at the natural tip, z is toward the camera

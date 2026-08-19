@@ -5,39 +5,17 @@
 // matrix every frame (the same way SceneLights anchors a light to an instance
 // + offset), so a lantern can get one later with one more call.
 //
-// WHAT THIS REPLACED, AND WHY. The first version was a low-poly mesh: a stack
-// of jittered rings tapering to a jagged crown, deformed by noise in the vertex
-// shader and shaded flat and opaque. It had three problems that no amount of
-// extra geometry fixes:
-//
-//   1. It was opaque, with a hard silhouette. Real flame edges are the MOST
-//      transparent part of the flame -- they thin out, they do not stop. A
-//      crisp-edged solid reads as a painted object however well it wobbles.
-//   2. It was fake-lit: a per-facet normal dotted against a hardcoded light
-//      direction. That is directional shading on an EMITTER, which is what
-//      made it read as an orange crystal. Fire has no lit side.
-//   3. A surface of revolution, however deformed, can bulge and lean but can
-//      never pinch off, detach a wisp, or open a hole -- which is most of what
-//      fire visibly does.
-//
-// So the flame is now a VOLUME SHADED IN THE FRAGMENT SHADER rather than a
-// deformed surface: three camera-facing quads at slightly different depths
+// The flame is a VOLUME SHADED IN THE FRAGMENT SHADER rather than a modelled
+// surface: three camera-facing quads at slightly different depths
 // (createMesh()), through which Flame.frag renders a domain-warped FBM fire
-// field with real alpha. That is fewer triangles than the mesh it replaces --
-// 6 instead of 130 -- and it gets soft edges, internal structure and detaching
-// wisps for free, because they are properties of the field rather than of the
-// geometry.
+// field with real alpha. Shape, internal structure, soft edges and detaching
+// wisps all come out of that field rather than out of the geometry, which is
+// just six triangles.
 //
-// The glow billboard the old version carried is gone entirely. It existed to
-// fake bloom, and there is now a real bloom chain downstream (see main.cpp's
-// render graph), so the halo comes out of the HDR pipeline instead. That also
-// disposes of its depth-write artefacts: Starter.hpp hardcodes
-// depthWriteEnable = VK_TRUE on every pipeline, transparent ones included, so
-// each glow quad used to write depth across its whole disc -- including the
-// outer ring where its alpha was essentially zero -- and punch a circular hole
-// in whatever was drawn behind it later. (A faint halo card was briefly tried
-// again on top of the bloom chain and removed: even barely visible it read as
-// a disc stamped behind the flame, and bloom already does the job.)
+// The glow/bloom halo comes entirely from the HDR pipeline downstream (see
+// main.cpp's render graph): the flame writes real overbright colour and the
+// bloom chain picks it up, so there is no separate glow billboard to manage
+// here.
 //
 // Rendered as part of the main scene pass (main.cpp calls
 // populateCommandBuffer() right after SC.populateCommandBuffer(), no separate
@@ -87,8 +65,8 @@ struct SparkVertex {
 struct FlameUniformBufferObject {
 	glm::mat4 mvpMat;
 	float seed;
-	float intensity;	// BRIGHTNESS envelope only (spring-smoothed CPU-side);
-						// no longer scales the card height -- heightScale does
+	float intensity;	// BRIGHTNESS envelope, spring-smoothed CPU-side; the
+						// card's height is scaled separately by heightScale
 	glm::vec2 lean;
 	float heightScale;	// slow height envelope, ~0.78..1.09: a flame shortens
 						// over a third of a second, it doesn't teleport
@@ -175,10 +153,8 @@ class Flame {
 
 	// Enough sparks that the eye reads a stream rather than counting them, few
 	// enough that they stay flecks thrown off a flame rather than a plume of
-	// their own. The old version had 7 four-triangle solids, which read as
-	// orange confetti; 96 turned out to read as a bonfire. These are 2
-	// triangles each and entirely procedural, so this costs no CPU at all and
-	// the number is purely an aesthetic choice.
+	// their own. Each is 2 triangles and entirely procedural, so this costs
+	// no CPU at all and the count is purely an aesthetic choice.
 	static constexpr int SPARK_COUNT = 48;
 
 	int maxInstances = 0;
@@ -213,9 +189,9 @@ void Flame::init(BaseProject *_BP, DescriptorSetLayout *_DSLglobal, DescriptorSe
 
 	// OTHER for both, not POSITION: the element type only matters when
 	// Starter.hpp is filling a vertex buffer from a model file, and these two
-	// meshes are built here by hand. (The old glow quad already relied on
-	// this.) Nothing in the flame's local space is a world position anyway --
-	// `corner` is a quad parameter the vertex shader turns into one.
+	// meshes are built here by hand. Nothing in the flame's local space is a
+	// world position anyway -- `corner` is a quad parameter the vertex
+	// shader turns into one.
 	VD.init(BP, {
 			  {0, sizeof(FlameVertex), VK_VERTEX_INPUT_RATE_VERTEX}
 			}, {

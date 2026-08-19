@@ -1,20 +1,14 @@
 // FRAGMENT SHADER for the flame body (see custom/Flame.hpp and Flame.vert).
-// This REPLACES the old low-poly fragment shader, which shaded a static
-// faceted mesh with a fake per-facet "light" (a cross-product face normal
-// against a made-up light direction) and a height-based color gradient. That
-// approach's silhouette was whatever the mesh's triangles happened to be --
-// hard-edged, closed, and opaque. Here the mesh is just flat billboard
-// cards (Flame.vert); everything that makes it read as fire -- the tapered
-// flame shape, the licking internal structure, the soft translucent fringe,
-// wisps that pinch off near the tip -- comes from a procedural fire field
-// evaluated per pixel and discarded down to that field's own silhouette.
-// Still unlit and still no fake lighting: fire emits, it doesn't reflect the
-// scene's light, and there is no lit side or shadow side to compute.
+// The mesh is just flat billboard cards (Flame.vert); everything that makes
+// it read as fire -- the tapered flame shape, the licking internal
+// structure, the soft translucent fringe, wisps that pinch off near the tip
+// -- comes from a procedural fire field evaluated per pixel and discarded
+// down to that field's own silhouette. Unlit: fire emits, it doesn't reflect
+// the scene's light, so there is no lit side or shadow side to compute.
 //
-// The renderer now has an HDR (RGBA16F) target and a real bloom pass
-// downstream, so unlike the old mesh (which had to fake "too bright to look
-// at" by clipping color at 1.0, see the removed `overexposure` hack) this
-// shader writes real HDR values for the hot core and lets bloom do the rest.
+// The renderer has an HDR (RGBA16F) target and a real bloom pass downstream,
+// so this shader writes real HDR values for the hot core and lets bloom do
+// the rest.
 
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
@@ -44,9 +38,6 @@ layout(location = 0) out vec4 outColor;
 
 // Cheap 2D value noise: hash the four corners of the cell p falls in, blend
 // with a smoothstep so there's no visible grid, no texture lookups needed.
-// Same construction as the old Flame.vert used for mesh sway -- kept here
-// unchanged because it's cheap and has no visible periodicity at the scales
-// this shader samples it at.
 float hash21(vec2 p) {
 	p = fract(p * vec2(123.34, 456.21));
 	p += dot(p, p + 45.32);
@@ -145,9 +136,8 @@ void main() {
 	// pulsing sheet. Subtracting time from the sample's y coordinate (not
 	// adding) is what makes the PATTERN travel up the card instead of
 	// merely pulsing in place: a fixed screen point sees, as time advances,
-	// the noise value that used to sit lower down -- i.e. fuel visibly
-	// rising through the flame. Same trick the old Flame.vert used for its
-	// mesh sway, just applied to a noise lookup instead of a vertex offset.
+	// the noise value that previously sat lower down -- i.e. fuel visibly
+	// rising through the flame.
 	float scrollSpeed = 0.55 + layer * 0.18;
 	float scrollPhase = seed * 9.0 + layer * 3.1;
 	vec2 p = vec2(x * 2.2, y * 3.4 - ft * scrollSpeed - scrollPhase);
@@ -159,7 +149,7 @@ void main() {
 	// warping the SAMPLE POINT makes the bright regions themselves curl and
 	// travel sideways as they rise, which is what a real flame's turbulent
 	// tongues look like.
-	// The warp coordinate now has a LATERAL time term too, so the warp field
+	// The warp coordinate has a LATERAL time term too, so the warp field
 	// morphs as well as translates: a tongue changes shape as it rises
 	// instead of the same frozen curl riding up the card unchanged. And the
 	// warp's bite grows with height -- near-laminar at the wick, where a
@@ -200,9 +190,8 @@ void main() {
 	float bubbles = smoothstep(0.58, 0.80, noiseLo(bp + warp * 0.6));
 	heat += bubbles * shape * mix(0.55, 0.20, y);
 
-	// Outer fringe genuinely translucent, not just dim -- this is what a
-	// billboard card can do that the old closed mesh never could. The window
-	// starts well above 0 so that the fringe is a real gradient several pixels
+	// Outer fringe genuinely translucent, not just dim. The window starts
+	// well above 0 so that the fringe is a real gradient several pixels
 	// wide rather than saturating to opaque almost immediately.
 	float alpha = smoothstep(0.15, 0.50, heat);
 
@@ -216,11 +205,10 @@ void main() {
 		discard;
 	}
 
-	// Temperature ramp keyed on `heat` (the noise-carved fire field), NOT on
-	// mesh height like the old shader's tier-based gradient -- the hottest,
-	// whitest pixels are wherever the noise says the core currently is,
-	// which drifts and licks upward instead of always sitting at a fixed
-	// height on the card.
+	// Temperature ramp keyed on `heat` (the noise-carved fire field), not on
+	// mesh height -- the hottest, whitest pixels are wherever the noise says
+	// the core currently is, which drifts and licks upward instead of
+	// always sitting at a fixed height on the card.
 	vec3 cCold   = vec3(0.55, 0.06, 0.02);   // deep red, coolest visible edge
 	vec3 cOrange = vec3(1.00, 0.42, 0.05);
 	vec3 cYellow = vec3(1.00, 0.78, 0.25);
@@ -241,13 +229,12 @@ void main() {
 	float hdrBoost = mix(1.0, 6.0, smoothstep(0.3, 1.0, heat));
 	color *= hdrBoost;
 
-	// SHIMMER: the fast flicker the CPU envelope used to slam onto the whole
-	// flame at once (the old 12 Hz `fast` term), relocated here where it can
-	// vary ALONG the flame -- different heights twitch at different moments,
-	// which reads as combustion rather than a brightness dial being wiggled.
-	// The CPU envelope keeps only the slower breathing/guttering, because the
-	// point light must ride that same signal (see main.cpp), and a light
-	// can't flicker per-pixel anyway.
+	// SHIMMER: a fast per-pixel flicker that varies ALONG the flame --
+	// different heights twitch at different moments, which reads as
+	// combustion rather than a brightness dial being wiggled. The CPU
+	// envelope (`intensity`) only carries the slower breathing/guttering,
+	// because the point light must ride that same signal (see main.cpp),
+	// and a light can't flicker per-pixel anyway.
 	float shimmer = 0.88 + 0.24 * noise2(vec2(y * 2.0 + seed * 31.0 + layer,
 	                                          ft * 7.0));
 

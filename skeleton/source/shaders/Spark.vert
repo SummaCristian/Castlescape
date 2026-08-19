@@ -1,15 +1,14 @@
 // VERTEX SHADER for the flame's spark particles (see custom/Flame.hpp and
-// Flame.vert). Entirely procedural, same spirit as the old Ember.vert it
-// replaces: no CPU-side particle system and no per-particle uniform data
-// beyond what's already baked into the mesh (inSeed) and already bound for
-// the flame body (gubo.time, fubo.mvpMat/seed/intensity/lean). Every spark's
-// whole lifecycle -- spawn, rise, drift, stretch, shrink -- is a function of
-// those, looping forever via fract(), and every spark reuses the flame
-// body's OWN descriptor set (set 1) rather than getting one of its own, the
-// same reasoning the old Ember.vert used: a spark needs the torch's mvp and
-// seed and nothing else, so there's no reason to keep a second copy in step.
-// Unlike the old embers, sparks also pick up fubo.lean, so they visibly
-// follow the same wind/motion that's bending the flame body itself.
+// Flame.vert). Entirely procedural: no CPU-side particle system and no
+// per-particle uniform data beyond what's already baked into the mesh
+// (inSeed) and already bound for the flame body (gubo.time,
+// fubo.mvpMat/seed/intensity/lean). Every spark's whole lifecycle -- spawn,
+// rise, drift, stretch, shrink -- is a function of those, looping forever
+// via fract(), and every spark reuses the flame body's OWN descriptor set
+// (set 1) rather than getting one of its own: a spark needs the torch's mvp
+// and seed and nothing else, so there's no reason to keep a second copy in
+// step. Sparks also pick up fubo.lean, so they visibly follow the same
+// wind/motion that's bending the flame body itself.
 
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
