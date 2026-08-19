@@ -1,89 +1,112 @@
-// VERTEX SHADER for the torch flames. Paired with Flame.frag, on their own
-// pipeline (see PFlame in main.cpp) because a flame needs two things the scene
-// pipeline cannot give it: alpha blending, and no back-face culling.
+// VERTEX SHADER for the flame body (see custom/Flame.hpp): camera-facing
+// billboard quads. A billboard punches its silhouette per pixel in the
+// fragment shader (Flame.frag), rather than the mesh itself defining a fixed
+// closed outline, which is what lets the flame fray at the edges and let
+// wisps detach. All this shader does is place flat cards in the flame's own
+// local space and let the envelopes bend them; every bit of the actual look
+// lives in the fragment shader.
 //
-// Unlike PosNormUV.vert, which only transforms the vertex, this one MOVES it:
-// the mesh is a static sculpt, so every bit of the flame's motion is made
-// here, by pushing each vertex along its own normal by an amount that varies
-// with position and time. That is deliberately the same operation Blender's
-// Displace modifier performs -- the flame was authored that way and glTF has
-// no way to export it (it animates node transforms, skins and morph targets,
-// never a modifier stack), so it is reproduced on the GPU instead.
-//
-// Doing it per vertex rather than per pixel matters: this changes the
-// silhouette, which is what makes a flame read as alive. A fragment-only
-// effect can only ever repaint a shape that never moves.
+// set 0 is the SAME global uniform the main pass uses (DSglobal in main.cpp,
+// extended with a "time" field); the flame doesn't need eyePos or the light
+// array, but binding the very same descriptor set means it doesn't need its
+// own copy of eyePos/lightCount/etc kept in step.
+// set 1 is one small per-torch block: an mvp built CPU-side from the
+// camera's own right/up/forward vectors (a billboard has to face the camera,
+// it can't ride the torch's own orientation), plus a seed so several torches
+// don't flicker in lockstep, the CPU-driven envelopes -- brightness and
+// height SEPARATELY, see below -- and a lean the CPU derives from hand motion
+// so the flame visibly responds to the torch being swung rather than just
+// sitting there.
 
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
-#extension GL_GOOGLE_include_directive : require
 
-#include "custom/Noise.glsl"
-
-// Same block, same order, as PosNormUV.vert and CookTorrance.frag: both
-// pipelines share DSLlocal, so one C++ UniformBufferObject feeds both and the
-// declarations have to agree field for field. The material fields go unused
-// here -- a flame has no BRDF -- but they still have to be declared to keep
-// the std140 offsets right.
-layout(binding = 0, set = 1) uniform UniformBufferObject {
-	mat4 mvpMat;
-	mat4 mMat;
-	mat4 nMat;
-	vec3 mS;
-	float roughness;
-	float F0;
-	float k;
-	int flatNormals;
+layout(binding = 0, set = 0) uniform GlobalUniformBufferObject {
+	vec3 eyePos;
+	int lightCount;
+	vec3 ambientUpper;
+	vec3 ambientLower;
+	vec3 ambientDir;
+	int debugFlags;
 	float time;
-} ubo;
+	// lights[] follows in the real block; unread here, so left undeclared.
+} gubo;
 
-layout(location = 0) in vec3 inPosition;
-layout(location = 1) in vec3 inNormal;
-layout(location = 2) in vec2 inUV;
+layout(binding = 0, set = 1) uniform FlameUniformBufferObject {
+	mat4  mvpMat;      // billboard basis * ViewPrj, built CPU-side per frame
+	float seed;        // per-torch phase offset so torches don't move in lockstep
+	float intensity;   // CPU-driven BRIGHTNESS envelope, ~0.30 .. 1.40,
+	                   // spring-smoothed; does not scale height (see below)
+	vec2  lean;        // billboard-LOCAL lean from hand motion: x = along the
+	                   // billboard's right axis, y = along its forward axis
+	float heightScale; // slow HEIGHT envelope, ~0.78 .. 1.09, kept separate
+	                   // from intensity: light output can flicker fast, but
+	                   // height follows the fuel column and lags it, so the
+	                   // CPU chases this one much more slowly (see main.cpp's
+	                   // FLAME_HEIGHT_TAU).
+	float glareBoost;  // 1.0 + stare-at emphasis, passed through to Flame.frag
+} fubo;
 
-layout(location = 0) out vec3 fragPos;
-layout(location = 1) out vec3 fragNorm;
-layout(location = 2) out vec2 fragUV;
-// Height up the flame, 0 at the base and 1 at the tip. Computed here from the
-// local position rather than read from the UVs, so the fragment stage gets a
-// value that means the same thing whatever the UV unwrap happens to look like.
-layout(location = 3) out float fragHeight;
+// Quad corner in the billboard's own local units, NOT yet placed: x spans
+// the flame's width, y spans 0 (wick) to 1 (the flame's natural full-height
+// tip) before heightScale scales it down for guttering.
+layout(location = 0) in vec2 inCorner;
+// Which of the three depth-offset cards this vertex belongs to: 0 (farthest)
+// to 2 (nearest). A float, not an int, purely so it interpolates/flat-outs
+// the same way every other per-instance value here does.
+layout(location = 1) in float inLayer;
 
-// The sculpt's local bounding box runs y = 0 .. 0.30 (read off the accessor
-// min/max in Flame_01.gltf). Hard-coded rather than passed in: it is a
-// property of this one mesh, and this shader is only ever used with it.
-const float FLAME_TOP = 0.30;
+// x in [-1,1] across the card, y in [0,1] up it -- the SAME normalized space
+// Flame.frag's shape function works in, regardless of how this vertex shader
+// actually scales/skews the card in world space below.
+layout(location = 0) out vec2 uv;
+// flat: one value per card, so the fragment shader can tell which of the
+// three layers a pixel belongs to without a fourth attribute.
+layout(location = 1) flat out float layer;
+layout(location = 2) flat out float intensity;
+layout(location = 3) flat out float seed;
+layout(location = 4) flat out float glare;
 
 void main() {
-	float h = clamp(inPosition.y / FLAME_TOP, 0.0, 1.0);
+	// h=0 at the wick (pinned to the torch head), h=1 at the untouched tip.
+	// Kept separate from the envelope-scaled height below because the lean
+	// formula and the fragment shader's shape mask both want the RAW
+	// fraction up the card, not the guttered one.
+	float h = inCorner.y;
 
-	// Two noise lookups at different rates, so the wobble never settles into a
-	// visible period. Sampled in the XZ plane and scrolled in time: sampling
-	// includes y as well would make the noise slide up the flame, which reads
-	// as the surface travelling rather than flickering.
-	float n1 = fbm(vec2(inPosition.x * 22.0 + ubo.time * 1.3,
-						inPosition.z * 22.0 - ubo.time * 0.9));
-	float n2 = fbm(vec2(inPosition.z * 15.0 - ubo.time * 2.1,
-						inPosition.x * 15.0 + ubo.time * 1.7));
+	// The three cards aren't identical rectangles stacked on the same spot:
+	// a little size variance keeps them from perfectly overlapping, which
+	// would read as one flat card face-on instead of a volume with depth.
+	// The far layer (0) is drawn slightly larger, the near one (2) slightly
+	// smaller -- for a flame that's mostly convex, that's the direction that
+	// actually looks like thickness rather than a cutout stack.
+	float layerT = inLayer / 2.0;               // 0, 0.5, 1
+	float widthScale       = mix(1.12, 0.88, layerT);
+	float layerHeightScale = mix(1.06, 0.94, layerT);
 
-	// Ramped by h*h: the base is sitting in the torch cup and must stay put,
-	// or the flame visibly detaches from the mesh it belongs to. Only the top
-	// is free to move, which is also how a real flame behaves.
-	float amp = 0.020 * h * h;
-	vec3 p = inPosition + normalize(inNormal) * (n1 - 0.5) * 2.0 * amp;
+	vec3 pos;
+	pos.x = inCorner.x * widthScale;
+	// heightScale scales the WHOLE height, not just the color/alpha: a
+	// guttering flame is visibly shorter, not just dimmer, exactly like a
+	// real one starved of fuel or caught by a draft.
+	pos.y = h * fubo.heightScale * layerHeightScale;
+	// Depth-separate the three cards along local z so they aren't coplanar;
+	// 0.10 units is small next to the flame's own ~1-unit half-width, just
+	// enough for parallax as the camera moves around the torch.
+	pos.z = (inLayer - 1.0) * 0.10;
 
-	// Slow sway of the whole tip, on top of the noise. Two different
-	// frequencies on the two axes so it traces a wandering path instead of a
-	// straight line back and forth.
-	p.x += (sin(ubo.time * 2.3) + (n2 - 0.5)) * 0.018 * h * h;
-	p.z += (cos(ubo.time * 1.7) + (n2 - 0.5)) * 0.014 * h * h;
+	// Lean is pinned at the base and swings hardest at the tip -- h*h rather
+	// than h keeps the lower two-thirds of the flame nearly upright and
+	// concentrates the sway exactly where a real flame's is, at the loose
+	// end away from the wick.
+	pos.xz += fubo.lean * h * h;
 
-	gl_Position = ubo.mvpMat * vec4(p, 1.0);
-	fragPos = (ubo.mMat * vec4(p, 1.0)).xyz;
-	// The displaced normal is not recomputed: the fragment stage uses it only
-	// for a soft-edge term, which a slightly stale normal is plenty accurate
-	// for. Deriving the true one would need the noise gradient per vertex.
-	fragNorm = mat3(ubo.nMat) * inNormal;
-	fragUV = inUV;
-	fragHeight = h;
+	gl_Position = fubo.mvpMat * vec4(pos, 1.0);
+
+	uv = vec2(inCorner.x, h);
+
+	layer = inLayer;
+	intensity = fubo.intensity;
+	seed = fubo.seed;
+	glare = fubo.glareBoost;
 }

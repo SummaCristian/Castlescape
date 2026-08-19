@@ -77,6 +77,7 @@ layout(binding = 0, set = 0) uniform GlobalUniformBufferObject {
     vec3 ambientLower;   // indirect light bounced off the ground
     vec3 ambientDir;     // axis the two blend along, i.e. world up
     int debugFlags;      // LIGHT_DEBUG_* bits, set by the cheat menu
+    float time;          // seconds since startup, unused here (see Flame.vert)
     Light lights[MAX_LIGHTS];
 } gubo;
 
@@ -352,12 +353,18 @@ vec3 BRDF(vec3 N, vec3 L, vec3 V, vec3 mD, vec3 mS, float roughness, float F0, f
     return NdotL * (k * mD + (1.0 - k) * specular);
 }
 
-// HDR tone map, L09 s.45. Divides by luminance rather than per-channel, which
-// would desaturate highlights towards white.
-vec3 toneMap(vec3 c) {
-    float Y = dot(c, vec3(0.2126, 0.7152, 0.0722));
-    return c / (Y + 1.0);
-}
+// The tone map (L09 s.45) used to be applied at the end of this shader. It has
+// MOVED to Composite.frag, the last pass of the HDR chain, and the reason is
+// worth stating: tone mapping squashes everything into [0,1], and a bloom pass
+// works by finding the pixels that came out ABOVE 1. Compressing the range here
+// would throw away the only thing the bright pass is looking for, and the flame
+// would end up with no glow around it at all.
+//
+// So this shader now writes raw, un-clamped radiance into a floating-point
+// attachment, and the range compression happens once, at the very end, after
+// the bloom has been extracted from it. The Tone Mapping cheat still works; it
+// just takes effect one pass later (gubo.debugFlags is forwarded to the
+// composite's own uniform block by updateUniformBuffer()).
 
 void main() {
     // Interpolation shortens the normal wherever the corner normals diverge.
@@ -429,14 +436,9 @@ void main() {
 
     vec3 color = Lo + hemisphericAmbient(N, mD);
 
-    // Debug view: no tone map, so anything above 1 is clipped by the hardware
-    // instead of being compressed back into range. Flat white areas are where
-    // the tone map was doing the work.
-    if(!debugOn(LIGHT_DEBUG_NO_TONEMAP)) {
-        color = toneMap(color);
-    }
-
-    // Written linear, not gamma-encoded: the swapchain is B8G8R8A8_SRGB, so the
-    // hardware does the linear-to-sRGB encode on write.
+    // Written linear and unclamped into an R16G16B16A16_SFLOAT attachment, so
+    // a surface that receives more than a unit of light keeps saying so rather
+    // than being cut off at white. Composite.frag tone maps it down at the end
+    // of the chain; the bloom passes in between are what read the excess.
     outColor = vec4(color, 1.0);
 }

@@ -1,65 +1,23 @@
-// FRAGMENT SHADER for the torch flames. Paired with Flame.vert.
+// FRAGMENT SHADER for the flame body (see custom/Flame.hpp and Flame.vert).
+// The mesh is just flat billboard cards (Flame.vert); everything that makes
+// it read as fire -- the tapered flame shape, the licking internal
+// structure, the soft translucent fringe, wisps that pinch off near the tip
+// -- comes from a procedural fire field evaluated per pixel and discarded
+// down to that field's own silhouette. Unlit: fire emits, it doesn't reflect
+// the scene's light, so there is no lit side or shadow side to compute.
 //
-// A flame is not a lit surface, so there is no BRDF here and nothing from
-// materials.json is read: it emits light instead of reflecting it, and its
-// colour is a function of how hot that part of the flame is, not of what lamp
-// is pointing at it. Nothing in this file samples the albedo texture either --
-// the whole appearance is generated from fbm() noise, because the alternative
-// (a painted texture on a static mesh) can only ever look like a painted
-// static mesh.
-//
-// The other half of the job is ALPHA. Fire is a translucent volume you see
-// through, and an opaque mesh reads as orange plastic no matter how it is
-// coloured. The pipeline this shader runs on enables blending (PFlame in
-// main.cpp calls setTransparency(true)), so the alpha written here is what
-// makes the edges dissolve into the room behind them.
+// The renderer has an HDR (RGBA16F) target and a real bloom pass downstream,
+// so this shader writes real HDR values for the hot core and lets bloom do
+// the rest.
 
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
-#extension GL_GOOGLE_include_directive : require
 
-#include "custom/Noise.glsl"
-#include "custom/LightConstants.glsl"
-
-layout(location = 0) in vec3 fragPos;
-layout(location = 1) in vec3 fragNorm;
-layout(location = 2) in vec2 fragUV;
-layout(location = 3) in float fragHeight;
-
-layout(location = 0) out vec4 outColor;
-
-// Declared to match the block the scene pipeline uses, field for field: both
-// pipelines share DSLlocal and DSLglobal, so the layouts must agree even
-// though this shader only reads `time` out of the first and `eyePos` out of
-// the second.
-layout(binding = 0, set = 1) uniform UniformBufferObject {
-	mat4 mvpMat;
-	mat4 mMat;
-	mat4 nMat;
-	vec3 mS;
-	float roughness;
-	float F0;
-	float k;
-	int flatNormals;
-	float time;
-} ubo;
-
-struct Light {
-	vec3 pos;
-	float g;
-	vec3 dir;
-	float beta;
-	vec3 color;
-	float cosIn;
-	float cosOut;
-	int type;
-	// Unused here (the flame has no lighting loop), declared only because
-	// this struct sits inside gubo, and both pipelines bind the exact same
-	// GlobalUniformBufferObject at set 0 -- see CookTorrance.frag, which
-	// actually reads it.
-	int shadowIndex;
-};
-
+// Only gubo.time is read here, but the block must be declared with every
+// field UP TO it in the same order as main.cpp's real struct: std140 offsets
+// are purely positional, so a shader can stop declaring early (the trailing
+// lights[] is never read here) but can't skip or reorder anything before
+// what it does read.
 layout(binding = 0, set = 0) uniform GlobalUniformBufferObject {
 	vec3 eyePos;
 	int lightCount;
@@ -67,64 +25,225 @@ layout(binding = 0, set = 0) uniform GlobalUniformBufferObject {
 	vec3 ambientLower;
 	vec3 ambientDir;
 	int debugFlags;
-	Light lights[MAX_LIGHTS];
+	float time;
 } gubo;
 
-// Body-heat ramp: dark red at the cool edges, through orange and yellow, to a
-// near-white core. Driven by an intensity value rather than sampled from a
-// gradient texture, so it cannot smear when the mesh moves underneath it and
-// needs no UV unwrap to be correct.
-vec3 fireColor(float t) {
-	vec3 c = mix(vec3(0.35, 0.02, 0.0), vec3(0.9, 0.15, 0.0), smoothstep(0.0, 0.35, t));
-	c = mix(c, vec3(1.0, 0.5, 0.05), smoothstep(0.35, 0.62, t));
-	c = mix(c, vec3(1.0, 0.85, 0.35), smoothstep(0.62, 0.85, t));
-	c = mix(c, vec3(1.0, 0.98, 0.85), smoothstep(0.85, 1.0, t));
-	return c;
+layout(location = 0) in vec2 uv;
+layout(location = 1) flat in float layer;
+layout(location = 2) flat in float intensity;
+layout(location = 3) flat in float seed;
+layout(location = 4) flat in float glare;
+
+layout(location = 0) out vec4 outColor;
+
+// Cheap 2D value noise: hash the four corners of the cell p falls in, blend
+// with a smoothstep so there's no visible grid, no texture lookups needed.
+float hash21(vec2 p) {
+	p = fract(p * vec2(123.34, 456.21));
+	p += dot(p, p + 45.32);
+	return fract(p.x * p.y);
+}
+
+float noise2(vec2 p) {
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	float a = hash21(i);
+	float b = hash21(i + vec2(1.0, 0.0));
+	float c = hash21(i + vec2(0.0, 1.0));
+	float d = hash21(i + vec2(1.0, 1.0));
+	vec2 u = f * f * (3.0 - 2.0 * f);
+	return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+// 4 octaves, each double frequency and half amplitude of the last -- the
+// standard construction for detail at multiple scales at once (coarse
+// tongues AND fine licking edges) instead of one single-frequency blob.
+// The 2.02 (not a clean 2.0) keeps successive octaves from ever landing on
+// exactly the same grid, which would show as a faint repeating overlay.
+float fbm(vec2 p) {
+	float sum = 0.0;
+	float amp = 0.5;
+	for(int i = 0; i < 4; i++) {
+		sum += noise2(p) * amp;
+		p = p * 2.02 + 11.0;
+		amp *= 0.5;
+	}
+	return sum;
+}
+
+// 2-octave variant for the spine and bubble fields below: both only need
+// low-frequency structure (a slow wander, fist-sized pockets), so paying for
+// fbm's two fine octaves there would buy nothing visible.
+float noiseLo(vec2 p) {
+	return noise2(p) * 0.65 + noise2(p * 2.13 + 7.31) * 0.35;
 }
 
 void main() {
-	float h = clamp(fragHeight, 0.0, 1.0);
+	float y = uv.y;
 
-	// Noise drifting slowly upward. Kept slow on purpose: the flame's actual
-	// movement is the vertex displacement in Flame.vert, and a fast scroll
-	// here would fight it, reading as a texture sliding over a still shape.
-	float n = fbm(vec2(fragUV.x * 4.0, fragUV.y * 4.0 - ubo.time * 0.45));
+	// One time base for the whole fire field, scaled up from real seconds:
+	// every motion here -- advection, spine sway, warp morph, bubbles,
+	// shimmer -- rides this one value, so the flame's overall tempo is a
+	// single knob instead of five rates to re-balance against each other.
+	// 1.3 makes it burn visibly livelier without turning frantic.
+	float ft = gubo.time * 1.3;
 
-	// Heat: hottest at the base where the fuel is, cooling toward the tip,
-	// with the noise breaking that gradient up so it is not a clean band.
-	// The falloff is gentle (0.45, not 1.0) because the sculpt already tapers
-	// to a point: cooling as sharply as a real flame does would land the whole
-	// tapered part down at the black end of fireColor and simply erase the tip
-	// the mesh went to the trouble of having.
-	float heat = (1.0 - h * 0.45) * (0.65 + 0.7 * n);
-	// Global pulse, the candle beat. Spatially uniform, so it brightens and
-	// dims the whole flame together the way a real one does when it gutters.
-	heat *= 0.88 + 0.12 * sin(ubo.time * 7.3 + n * 3.0);
-	heat = clamp(heat, 0.0, 1.0);
+	// WANDERING SPINE. The centreline itself sways: the sample x is shifted
+	// by slow noise advected down the flame axis, zero at the wick (a flame
+	// is pinned to its fuel) and strongest at the tip (y*y, same reasoning
+	// as the lean's h*h in Flame.vert). Everything downstream -- the profile
+	// mask, the advection, the bubbles -- works in this spine-relative x, so
+	// the WHOLE field curls, silhouette and internal structure together,
+	// instead of the texture sliding around inside a static cutout. This is
+	// the single biggest difference between "pulsing in place" and burning:
+	// without it the flame's outline never travels at all.
+	// Worst case |offset| at the tip is 0.35 and the tip half-width is well
+	// under that from 1.0, so the swayed field always stays inside the card.
+	vec2 spineP = vec2(seed * 7.0 + layer * 1.7, y * 1.6 - ft * 0.9);
+	float sway = (noiseLo(spineP) - 0.5) * 2.0;	// ~[-1,1], low frequency
+	float x = uv.x - sway * 0.35 * y * y;
 
-	// Soft silhouette. A convex volume is thickest where you look straight
-	// into it and thins to nothing at the edges, so opacity follows how
-	// square-on the surface is to the eye. Without this the mesh keeps a hard
-	// outline and still looks solid however it is coloured.
+	// Flame profile mask: half-width w(y), necked at the wick, widest just
+	// above it, tapering to a point at the tip.
 	//
-	// Floored at 0.5 rather than reaching 0: the tip is a thin cone, so nearly
-	// all of it is grazing-angle surface, and an unfloored term would fade out
-	// exactly the part of the flame that should be brightest.
-	vec3 N = normalize(fragNorm);
-	vec3 V = normalize(gubo.eyePos - fragPos);
-	float facing = abs(dot(N, V));
-	float edge = mix(0.5, 1.0, smoothstep(0.0, 0.5, facing));
+	// wFall is a POWER curve rather than a smoothstep, and that is the whole
+	// difference between a flame and a kite. A linear or smoothstep taper
+	// gives straight sides meeting the widest point at an angle, which reads
+	// as a diamond no matter what colour it is; pow(1-y, 0.65) falls slowly
+	// at first and then increasingly fast, so the sides bow outward low down
+	// and draw in to a point at the top. Floored just above 0, never 0, so
+	// the division below can't blow up.
+	float wRise = smoothstep(0.0, 0.16, y);
+	float wFall = pow(max(1.0 - y, 0.0), 0.65);
+	float w = max(mix(0.30, 1.0, wRise) * wFall, 0.015);
 
-	// Softens toward the tip so the top dissolves into licking tongues instead
-	// of ending on a hard line. The smoothstep deliberately ends past h = 1,
-	// so even the topmost vertex keeps some opacity -- ending it AT 1 is what
-	// made the tip vanish entirely.
-	float alpha = heat * edge * (1.0 - smoothstep(0.85, 1.35, h));
-	alpha = clamp(alpha * 1.6, 0.0, 1.0);
+	// Parabolic rather than linear across the width: keeps the core full while
+	// dropping off faster as it approaches the edge, so the body reads as
+	// rounded instead of as a wedge with a bright crease down the middle.
+	float r = abs(x) / w;
+	float shape = clamp(1.0 - r * r, 0.0, 1.0);
 
-	// Written straight, with no tone map: this is a light source, and the
-	// swapchain does the linear-to-sRGB encode on write as it does everywhere
-	// else. The colour is not premultiplied -- the pipeline blends with
-	// SRC_ALPHA / ONE_MINUS_SRC_ALPHA (Starter.hpp), which expects it straight.
-	outColor = vec4(fireColor(heat), alpha);
+	// Extra fade right at the wick and right at the very tip, on top of the
+	// width falloff: without it the base has a visible hard seam where it
+	// meets the torch head, and the tip -- where w is already tiny -- can
+	// still show a flat-topped sliver instead of narrowing to nothing.
+	float baseFade = smoothstep(0.0, 0.06, y);
+	float tipFade = 1.0 - smoothstep(0.90, 1.0, y);
+	shape *= baseFade * tipFade;
+
+	// Advect upward: each layer gets its own scroll speed and phase (from
+	// `layer` and `seed`) so the three cards never sync into one flat
+	// pulsing sheet. Subtracting time from the sample's y coordinate (not
+	// adding) is what makes the PATTERN travel up the card instead of
+	// merely pulsing in place: a fixed screen point sees, as time advances,
+	// the noise value that previously sat lower down -- i.e. fuel visibly
+	// rising through the flame.
+	float scrollSpeed = 0.55 + layer * 0.18;
+	float scrollPhase = seed * 9.0 + layer * 3.1;
+	vec2 p = vec2(x * 2.2, y * 3.4 - ft * scrollSpeed - scrollPhase);
+
+	// Domain warp: offset the FBM lookup by a second, lower-frequency FBM
+	// (itself slowly advected) instead of sampling the first FBM directly.
+	// This is the actual difference between "licking tongues" and a fizzy
+	// gradient -- without it, brightness just varies smoothly in place;
+	// warping the SAMPLE POINT makes the bright regions themselves curl and
+	// travel sideways as they rise, which is what a real flame's turbulent
+	// tongues look like.
+	// The warp coordinate has a LATERAL time term too, so the warp field
+	// morphs as well as translates: a tongue changes shape as it rises
+	// instead of the same frozen curl riding up the card unchanged. And the
+	// warp's bite grows with height -- near-laminar at the wick, where a
+	// real flame is a smooth cone, fully turbulent by the tip.
+	vec2 warpCoord = p * 0.4 + vec2(ft * 0.16, -ft * scrollSpeed * 0.5);
+	vec2 warp = vec2(fbm(warpCoord), fbm(warpCoord + 19.3)) - 0.5;
+	float heatNoise = fbm(p + warp * mix(0.85, 1.55, y));
+
+	// How hard the noise is allowed to bite into the silhouette, as a function
+	// of height. This is what stops the mask above from reading as a solid
+	// cutout shape: near the wick a flame is dense and steady, so the noise
+	// barely perturbs it, but toward the tip it is thin and fully turbulent,
+	// so up there the noise is allowed to swing the field far enough negative
+	// to tear pieces off the silhouette entirely -- which is exactly how wisps
+	// come to detach and float free of the body.
+	//
+	// Centred on 0.55 rather than 0.5 because a 4-octave fbm sum sits slightly
+	// above the midpoint; centring on its true mean is what keeps the carving
+	// symmetric instead of biased toward eroding everything.
+	float carve = mix(0.35, 1.30, y);
+	float noiseTerm = clamp(1.0 + (heatNoise - 0.55) * 2.0 * carve, 0.0, 1.5);
+
+	float heat = shape * noiseTerm;
+
+	// BUBBLING: pockets of extra-hot gas that form low in the flame, ride the
+	// advection up, and die out toward the tip where `shape` pinches away.
+	// A thresholded low-frequency field rather than more fbm detail: the
+	// smoothstep turns noise into distinct blobs with in-between gaps, which
+	// is what "bubbles" are -- fbm octaves alone only ever make the existing
+	// texture busier. The field scrolls ~35% FASTER than the body field, so
+	// the pockets visibly overtake the texture they ride through, reading as
+	// buoyant volumes rather than painted-on brightness. Sharing `warp` (at
+	// reduced strength) keeps them curling with the same turbulence as the
+	// tongues around them. Added to heat, a pocket both brightens (the
+	// temperature ramp below) and locally bulges the silhouette (the alpha
+	// window reads heat too).
+	vec2 bp = vec2(x * 3.0, y * 2.2 - ft * scrollSpeed * 1.35 - scrollPhase * 1.3);
+	float bubbles = smoothstep(0.58, 0.80, noiseLo(bp + warp * 0.6));
+	heat += bubbles * shape * mix(0.55, 0.20, y);
+
+	// Outer fringe genuinely translucent, not just dim. The window starts
+	// well above 0 so that the fringe is a real gradient several pixels
+	// wide rather than saturating to opaque almost immediately.
+	float alpha = smoothstep(0.15, 0.50, heat);
+
+	// The framework hardcodes depthWriteEnable = VK_TRUE on every pipeline,
+	// transparent ones included (Starter.hpp is not touched, see notes.md),
+	// so a low-alpha fringe that isn't discarded still writes depth and
+	// punches a silhouette-shaped hole through whatever's behind it -- the
+	// other two flame layers and the sparks included. Discarding is not an
+	// optimization here, it's required for correctness.
+	if(alpha < 0.04) {
+		discard;
+	}
+
+	// Temperature ramp keyed on `heat` (the noise-carved fire field), not on
+	// mesh height -- the hottest, whitest pixels are wherever the noise says
+	// the core currently is, which drifts and licks upward instead of
+	// always sitting at a fixed height on the card.
+	vec3 cCold   = vec3(0.55, 0.06, 0.02);   // deep red, coolest visible edge
+	vec3 cOrange = vec3(1.00, 0.42, 0.05);
+	vec3 cYellow = vec3(1.00, 0.78, 0.25);
+	vec3 cCore   = vec3(1.00, 0.97, 0.88);   // near-white, hottest
+
+	vec3 color;
+	if(heat < 0.35) {
+		color = mix(cCold, cOrange, smoothstep(0.05, 0.35, heat));
+	} else if(heat < 0.65) {
+		color = mix(cOrange, cYellow, (heat - 0.35) / 0.30);
+	} else {
+		color = mix(cYellow, cCore, smoothstep(0.65, 1.0, heat));
+	}
+
+	// Push the hot end well above 1.0 so the bloom pass downstream has real
+	// energy to find; the fringe stays near unit brightness so it doesn't
+	// also blow out to white and lose the red/orange color entirely.
+	float hdrBoost = mix(1.0, 6.0, smoothstep(0.3, 1.0, heat));
+	color *= hdrBoost;
+
+	// SHIMMER: a fast per-pixel flicker that varies ALONG the flame --
+	// different heights twitch at different moments, which reads as
+	// combustion rather than a brightness dial being wiggled. The CPU
+	// envelope (`intensity`) only carries the slower breathing/guttering,
+	// because the point light must ride that same signal (see main.cpp),
+	// and a light can't flicker per-pixel anyway.
+	float shimmer = 0.88 + 0.24 * noise2(vec2(y * 2.0 + seed * 31.0 + layer,
+	                                          ft * 7.0));
+
+	// intensity is the same CPU-driven envelope that drives the torch's own
+	// point light, so flame and light dim together; glare is the stare-at
+	// boost (1.0 unless this torch is being looked at dead-on), which
+	// overdrives the HDR output so bloom flares exactly when the player
+	// stares into the flame.
+	color *= intensity * shimmer * glare;
+
+	outColor = vec4(color, alpha);
 }
