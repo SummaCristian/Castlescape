@@ -15,6 +15,7 @@
 #include "custom/SceneMaterials.hpp"
 #include "custom/SceneLights.hpp"
 #include "custom/Flame.hpp"
+#include "custom/CubeShadowMap.hpp"
 
 // Our own files, and where to start reading.
 //
@@ -88,15 +89,28 @@ struct GlobalUniformBufferObject {
 };
 
 // Set 2: the shadow-sampling data, bound once and read by CookTorrance.frag.
-// One matrix per shadow-casting light (NUM_SHADOW_LIGHTS, LightConstants.glsl
-// -- the sun plus the six torches), each the SAME view-projection its own
-// shadow pass rendered with (see computeShadowMatrices()). Static for the
-// life of the program, since none of those lights move, but still re-mapped
-// every frame in updateUniformBuffer() rather than once at startup: map()
-// writes into a per-swapchain-image buffer slot, and mapping only slot 0
-// would leave the others holding whatever was there at allocation time.
+// One matrix per 2D-shadow light (NUM_SHADOW_MAPS_2D, LightConstants.glsl --
+// just the sun today), the SAME view-projection its own shadow pass rendered
+// with (see computeShadowMatrices()). The torches don't need a matrix here
+// any more: a cube map is sampled by direction, not by transforming into its
+// clip space, so their light-space math never leaves computeShadowMatrices()/
+// populateCommandBuffer(). Static for the life of the program, since the sun
+// doesn't move, but still re-mapped every frame in updateUniformBuffer()
+// rather than once at startup: map() writes into a per-swapchain-image
+// buffer slot, and mapping only slot 0 would leave the others holding
+// whatever was there at allocation time.
 struct ShadowUniformBufferObject {
-	alignas(16) glm::mat4 lightSpace[NUM_SHADOW_LIGHTS];
+	alignas(16) glm::mat4 lightSpace[NUM_SHADOW_MAPS_2D];
+};
+
+// Push constant for one face of one torch's cube shadow pass
+// (ShadowCube.vert/frag, PShadowCube). Field-for-field the same layout those
+// two shader stages declare. lightPos.w is unused padding, kept so the
+// struct's size (80 bytes) matches a whole number of the 16-byte chunks
+// std430/push-constant rules expect.
+struct ShadowCubePushConstantData {
+	glm::mat4 lightViewProj;
+	glm::vec4 lightPos;
 };
 
 // Vertex format "VDposNormUV". Starter.hpp fills the normal from the glTF/MGCG
@@ -186,41 +200,93 @@ class Skeleton26ReplaceName : public BaseProject {
 	RenderPass RP;
 	Pipeline P;
 
-	// Shadow mapping: one depth-only render pass per shadow-casting light
-	// (NUM_SHADOW_LIGHTS = the sun plus the six torches, LightConstants.glsl)
-	// and ONE pipeline shared across all of them. Reusing PShadow instead of
-	// one pipeline per pass relies on Vulkan's render-pass-compatibility
-	// rule: RPShadow[i] all use the identical AT_DEPTH_ONLY attachment
-	// configuration, so a pipeline created against one of them works with any
-	// of the others. Unlike RP/P, both are created once in localInit() and
-	// never touched by a resize: an offscreen depth target doesn't depend on
-	// the window, so there's no reason to tear it down and rebuild it the way
-	// the swapchain-sized resources are.
+	// Shadow mapping, 2D branch: one depth-only render pass per 2D
+	// shadow-casting light (NUM_SHADOW_MAPS_2D, LightConstants.glsl -- just
+	// the sun today) and ONE pipeline shared across all of them. Reusing
+	// PShadow instead of one pipeline per pass relies on Vulkan's
+	// render-pass-compatibility rule: RPShadow2D[i] all use the identical
+	// AT_DEPTH_ONLY attachment configuration, so a pipeline created against
+	// one of them works with any of the others. Unlike RP/P, both are
+	// created once in localInit() and never touched by a resize: an
+	// offscreen depth target doesn't depend on the window, so there's no
+	// reason to tear it down and rebuild it the way the swapchain-sized
+	// resources are.
 	//
 	// Only the CookTorrance technique is drawn into these (see
 	// populateCommandBuffer()) -- the flames aren't occluders and shouldn't
 	// occlude either, being translucent, so they're skipped rather than given
-	// their own shadow logic.
-	RenderPass RPShadow[NUM_SHADOW_LIGHTS];
+	// their own shadow logic. Same for the cube branch below.
+	RenderPass RPShadow2D[NUM_SHADOW_MAPS_2D];
 	Pipeline PShadow;
-	// set 2 for the main pass's shadow sampling: one UBO (the light-space
-	// matrices) plus one sampler binding per shadow map, read by
-	// CookTorrance.frag's shadowFactor(). DSLlocal/DSLglobal stay set 1/0.
+
+	// Shadow mapping, CUBE branch (the torches): a real 6-face cube map per
+	// point light instead of the old two-perspective-map workaround -- see
+	// CubeShadowMap.hpp for why (linear-distance storage, one flat bias).
+	//
+	// RPShadowCubeCompat exists ONLY to mint a VkRenderPass compatible with
+	// every face framebuffer below: RenderPass::createRenderPass() is
+	// private, so the sole way to obtain a spec-compatible VkRenderPass
+	// through this class's public surface is to let a full RenderPass build
+	// one for itself and read its .renderPass back out. Its own attachment
+	// image/framebuffer (1-layer, SHADOW_MAP_RES sized) are never rendered
+	// into or read -- unavoidable bookkeeping to stay inside RenderPass's
+	// public API instead of duplicating vkCreateRenderPass by hand.
+	//
+	// The 36 real per-face framebuffers (one per torch per cube face) are
+	// built manually in createCubeShadowMaps() against
+	// RPShadowCubeCompat.renderPass, because they attach single-layer views
+	// into a 6-layer cube image -- something FrameBufferAttachment has no
+	// support for (it always creates a plain VK_IMAGE_VIEW_TYPE_2D, 1 layer).
+	RenderPass RPShadowCubeCompat;
+	Pipeline PShadowCube;
+	CubeShadowMap torchCube[NUM_SHADOW_CUBES];
+	// Shared by every torch's cube view: all render into R32_SFLOAT images at
+	// the same resolution, so one CLAMP_TO_EDGE/linear sampler suffices.
+	// Starter.hpp's own TextureSampler, same class FrameBufferAttachment
+	// uses internally, rather than a raw VkSampler -- public API, no need to
+	// hand-roll vkCreateSampler.
+	TextureSampler cubeShadowSampler;
+
+	// set 2 for the main pass's shadow sampling: one UBO (the 2D light-space
+	// matrices) plus one sampler binding per shadow map (2D then cube), read
+	// by CookTorrance.frag's shadowFactor(). DSLlocal/DSLglobal stay set 1/0.
 	//
 	// No DescriptorSet member of its own: unlike DSglobal, this one goes
 	// through Scene's ordinary per-instance machinery instead (P is given
 	// this as a third layout below, so every CookTorrance instance gets its
-	// own copy, same as its DSLlocal one). That means NUM_SHADOW_LIGHTS+1
-	// redundant, identical descriptor sets per instance -- wasteful, but
-	// cheap at this instance count, and it avoids hand-rolling a THIRD way to
-	// bind a descriptor set alongside Scene's existing one.
+	// own copy, same as its DSLlocal one). That means
+	// NUM_SHADOW_MAPS_2D+NUM_SHADOW_CUBES+1 redundant, identical descriptor
+	// sets per instance -- wasteful, but cheap at this instance count, and it
+	// avoids hand-rolling a THIRD way to bind a descriptor set alongside
+	// Scene's existing one.
 	DescriptorSetLayout DSLshadowSample;
-	// View-projection matrix each shadow pass rendered with, index-matched to
-	// LightData::shadowIndex. Computed once in computeShadowMatrices() (the
-	// sun and the torches are static) and reused both as the push constant
-	// Shadow.vert takes and as the UBO CookTorrance.frag samples against.
-	glm::mat4 shadowLightSpace[NUM_SHADOW_LIGHTS];
+	// View-projection matrix each 2D shadow pass rendered with, index-matched
+	// to LightData::shadowIndex for a direct/spot light. Computed once in
+	// computeShadowMatrices() (the sun is static) and reused both as the push
+	// constant Shadow.vert takes and as the UBO CookTorrance.frag samples
+	// against.
+	glm::mat4 shadowLightSpace2D[NUM_SHADOW_MAPS_2D];
+	// The six face view-projection matrices for each torch's cube map,
+	// index-matched [LightData::shadowIndex][face] (face order: see
+	// CUBE_FACE_DIR in CubeShadowMap.hpp). Computed once, same reasoning.
+	glm::mat4 torchFaceMatrices[NUM_SHADOW_CUBES][6];
+	// World position of each cube-mapped torch, index-matched to
+	// LightData::shadowIndex -- ShadowCube.frag needs it (the light to
+	// measure distance from) and so does shadowFromCube() in
+	// CookTorrance.frag, which reads it via gubo.lights[i].pos instead; this
+	// copy is what populateCommandBuffer() hands to the push constant.
+	glm::vec3 torchLightPos[NUM_SHADOW_CUBES];
+	// How many of torchFaceMatrices/torchLightPos are actually populated --
+	// fewer than NUM_SHADOW_CUBES if lights.json authors fewer shadow-casting
+	// point lights than there are slots. Set once by computeShadowMatrices().
+	int activeCubeShadows = 0;
 	static constexpr int SHADOW_MAP_RES = 1024;
+	// Far clip for every torch's cube map (computeShadowMatrices()) and the
+	// clear value ShadowCube.frag's output gets reset to before each face
+	// pass: with nothing drawn a fragment's "distance" should read as
+	// infinity/unlit, and any value >= this far plane does that, since
+	// shadowFromCube() (CookTorrance.frag) never queries beyond it either.
+	static constexpr float TORCH_SHADOW_FAR_CONST = 15.0f;
 
 	// Models, textures and Descriptors (values assigned to the uniforms)
 	DescriptorSet DSglobal;
@@ -930,21 +996,27 @@ class Skeleton26ReplaceName : public BaseProject {
 		// not one array binding. linkSize on the samplers is their own index
 		// into the flat VkDescriptorImageInfo list Scene builds per instance
 		// (see the texDefs passed to PRs[0].init below), the same role it plays
-		// for DSLlocal's single texture, just NUM_SHADOW_LIGHTS-wide here.
+		// for DSLlocal's single texture.
 		//
-		// Built in a loop rather than written out: at NUM_SHADOW_LIGHTS = 13
-		// the literal list was getting long enough to hide a typo, and this
-		// way the count lives in exactly one place. Binding 0 is the UBO, so
-		// map i sits at binding i+1 -- the same numbering CookTorrance.frag
-		// declares its shadowMap0..12 with, which nothing but agreement here
-		// keeps true.
+		// Built in a loop rather than written out, so the count lives in
+		// exactly one place. Binding 0 is the UBO, then NUM_SHADOW_MAPS_2D
+		// sampler2D bindings, then NUM_SHADOW_CUBES samplerCube bindings --
+		// the same order and numbering CookTorrance.frag declares its
+		// shadowMap2D_*/shadowCube* with, which nothing but agreement here
+		// keeps true. linkSize follows the same 2D-then-cube order (see
+		// shadowMapDefs below).
 		std::vector<DescriptorSetLayoutBinding> shadowSampleBindings = {
 					{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(ShadowUniformBufferObject), 1}
 				  };
-		for(int i = 0; i < NUM_SHADOW_LIGHTS; i++) {
+		for(int i = 0; i < NUM_SHADOW_MAPS_2D; i++) {
 			shadowSampleBindings.push_back({(uint32_t)(i + 1),
 											VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
 											VK_SHADER_STAGE_FRAGMENT_BIT, i, 1});
+		}
+		for(int i = 0; i < NUM_SHADOW_CUBES; i++) {
+			shadowSampleBindings.push_back({(uint32_t)(NUM_SHADOW_MAPS_2D + i + 1),
+											VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+											VK_SHADER_STAGE_FRAGMENT_BIT, NUM_SHADOW_MAPS_2D + i, 1});
 		}
 		DSLshadowSample.init(this, shadowSampleBindings);
 		VD.init(this, {
@@ -1003,7 +1075,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		RPcomposite.init(this, -1, -1, -1, &compositeAtt,
 						 RenderPass::getStandardDependencies(ATDEP_SURFACE_ONLY), false);
 
-		// The shadow render passes -- the sun's and each torch's, in
+		// The 2D shadow render passes -- the sun's today, in
 		// LightData::shadowIndex order (see SceneLights::init). AT_DEPTH_ONLY
 		// is a stock configuration built for exactly this: a D32_SFLOAT
 		// attachment usable both as a depth target and, after
@@ -1017,13 +1089,72 @@ class Skeleton26ReplaceName : public BaseProject {
 		// swapchain-sized passes do, and PRs[0].init() below needs the actual
 		// VkImageView+sampler to exist already, to bind them into every
 		// CookTorrance instance's shadow-sampling descriptor set.
-		for(int i = 0; i < NUM_SHADOW_LIGHTS; i++) {
-			RPShadow[i].init(this, SHADOW_MAP_RES, SHADOW_MAP_RES, -1,
+		for(int i = 0; i < NUM_SHADOW_MAPS_2D; i++) {
+			RPShadow2D[i].init(this, SHADOW_MAP_RES, SHADOW_MAP_RES, -1,
 							  RenderPass::getStandardAttchmentsProperties(AT_DEPTH_ONLY, this),
 							  RenderPass::getStandardDependencies(ATDEP_DEPTH_TRANS),
 							  true);
-			RPShadow[i].create();
+			RPShadow2D[i].create();
 		}
+
+		// The cube shadow render pass (torches) -- see the RPShadowCubeCompat
+		// member comment for why this is built once, shared, and only its
+		// .renderPass field is used. createCubeShadowMaps() below builds the
+		// 36 real per-face framebuffers against it.
+		std::vector<AttachmentProperties> cubeShadowAtt = {
+			{COLOR_AT, VK_FORMAT_R32_SFLOAT,
+				VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+				VK_IMAGE_ASPECT_COLOR_BIT, false, false,
+				{.color = {.float32 = {TORCH_SHADOW_FAR_CONST, 0.0f, 0.0f, 0.0f}}},
+				VK_SAMPLE_COUNT_1_BIT,
+				VK_ATTACHMENT_LOAD_OP_CLEAR,
+				VK_ATTACHMENT_STORE_OP_STORE,
+				VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+				VK_ATTACHMENT_STORE_OP_DONT_CARE,
+				VK_IMAGE_LAYOUT_UNDEFINED,
+				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+				VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+			{DEPTH_AT, findDepthFormat(),
+				VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+				VK_IMAGE_ASPECT_DEPTH_BIT, true, false,
+				{.depthStencil = {1.0f, 0}},
+				VK_SAMPLE_COUNT_1_BIT,
+				VK_ATTACHMENT_LOAD_OP_CLEAR,
+				VK_ATTACHMENT_STORE_OP_DONT_CARE,
+				VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+				VK_ATTACHMENT_STORE_OP_DONT_CARE,
+				VK_IMAGE_LAYOUT_UNDEFINED,
+				VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+				VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL}
+		};
+		// Mirrors ATDEP_DEPTH_TRANS (Starter.hpp), but for a COLOR attachment
+		// going to COLOR_ATTACHMENT_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL
+		// instead of a depth one: external->0 waits for nothing but puts the
+		// image into COLOR_ATTACHMENT_OPTIMAL before the subpass writes it,
+		// 0->external makes the main pass's fragment-shader read wait for
+		// that write to finish.
+		std::vector<VkSubpassDependency> cubeShadowDeps = {
+			{
+				VK_SUBPASS_EXTERNAL, 0,
+				VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+				VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+				VK_ACCESS_SHADER_READ_BIT,
+				VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+				VK_DEPENDENCY_BY_REGION_BIT
+			},
+			{
+				0, VK_SUBPASS_EXTERNAL,
+				VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+				VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+				VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+				VK_ACCESS_SHADER_READ_BIT,
+				VK_DEPENDENCY_BY_REGION_BIT
+			}
+		};
+		RPShadowCubeCompat.init(this, SHADOW_MAP_RES, SHADOW_MAP_RES, -1, &cubeShadowAtt, &cubeShadowDeps, true);
+		RPShadowCubeCompat.create();
+
+		createCubeShadowMaps();
 
 		// Pipelines [Shader couples]
 		// The last array, is a vector of pointer to the layouts of the sets that will
@@ -1103,12 +1234,29 @@ class Skeleton26ReplaceName : public BaseProject {
 		PShadow.init(this, &VD, "shaders/Shadow.vert.spv",
 								"shaders/Shadow.frag.spv",
 								{&DSLlocal}, {shadowPushConstant});
-		// Created against RPShadow[0], but usable with all of them: they share the
-		// identical AT_DEPTH_ONLY attachment layout, and Vulkan only requires
+		// Created against RPShadow2D[0], but usable with all of them: they share
+		// the identical AT_DEPTH_ONLY attachment layout, and Vulkan only requires
 		// render-pass COMPATIBILITY (same attachment formats/samples/layouts)
 		// between the render pass a pipeline was created with and the one
 		// it's bound under at draw time, not the exact same object.
-		PShadow.create(&RPShadow[0]);
+		PShadow.create(&RPShadow2D[0]);
+
+		// The cube shadow pass's pipeline (torches). Same DSLlocal reuse as
+		// PShadow, see Shadow.vert's header; the push constant additionally
+		// carries the light's world position (read by ShadowCube.frag) so
+		// both stages need it in their stage flags.
+		VkPushConstantRange shadowCubePushConstant{};
+		shadowCubePushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+		shadowCubePushConstant.offset = 0;
+		shadowCubePushConstant.size = sizeof(ShadowCubePushConstantData);
+		PShadowCube.init(this, &VD, "shaders/ShadowCube.vert.spv",
+								"shaders/ShadowCube.frag.spv",
+								{&DSLlocal}, {shadowCubePushConstant});
+		// Created against RPShadowCubeCompat -- see that member's comment for
+		// why it exists purely to be render-pass-compatible with the 36
+		// manually built per-face framebuffers this pipeline actually draws
+		// into.
+		PShadowCube.create(&RPShadowCubeCompat);
 
 		// sets the size of the Descriptor Set Pool (it MUST be done before loading the scene)
 		// The four post-processing sets are counted in here too: one uniform
@@ -1126,10 +1274,15 @@ class Skeleton26ReplaceName : public BaseProject {
 		// are the same fixed images for every instance, not per-instance
 		// textures like DSLlocal's albedo map. pos is unused on a
 		// non-fromInstance entry. In a loop for the same reason the layout
-		// above is.
+		// above is. 2D maps first, then cube maps -- same order the binding
+		// list above and CookTorrance.frag's declarations use.
 		std::vector<TextureDefs> shadowMapDefs;
-		for(int i = 0; i < NUM_SHADOW_LIGHTS; i++) {
-			shadowMapDefs.push_back({false, 0, RPShadow[i].attachments[0].getViewAndSampler()});
+		for(int i = 0; i < NUM_SHADOW_MAPS_2D; i++) {
+			shadowMapDefs.push_back({false, 0, RPShadow2D[i].attachments[0].getViewAndSampler()});
+		}
+		for(int i = 0; i < NUM_SHADOW_CUBES; i++) {
+			shadowMapDefs.push_back({false, 0,
+				{cubeShadowSampler.getSampler(), torchCube[i].cubeView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}});
 		}
 
 		PRs.resize(1);
@@ -1342,98 +1495,19 @@ class Skeleton26ReplaceName : public BaseProject {
 	// SceneLights::init), and re-deriving that here would be a second copy of
 	// logic that already lives in exactly one place.
 	void computeShadowMatrices() {
-		// Torch aim, hand-picked per wall side rather than read from
-		// anywhere: point lights carry no direction (SceneLights.hpp), so
-		// nothing already knows which way a torch should look. Aimed
-		// horizontally INTO the room the torch is mounted on (matching the
-		// +-X sign already used for the flame/light offsets in scene.json
-		// and lights.json) with a slight downward tilt, so the shadow map
-		// actually covers the floor and the opposite wall -- the case that
-		// motivated this feature (see notes.md) was light bleeding through
-		// exactly that wall.
-		//
-		// Index-matched to the SIX torches in the order they appear in
-		// lights.json (torchW1, torchW2, torchE1, torchE2, torchDC, torchDV),
-		// i.e. shadowIndex 1..6 once the sun takes 0.
-		//
-		// Each torch gets TWO maps, this direction and its exact opposite (see
-		// SHADOW_MAPS_PER_LIGHT and shadowFactor() in CookTorrance.frag), so
-		// the pair between them covers the whole sphere bar a band around the
-		// plane square with the aim. The sign matters twice over: it says which
-		// map is the wide one (the rear, see the two FOVs below), and it puts
-		// the uncovered band flat along the mounting wall, where the geometry
-		// it could leak through is furthest away. Pointing INTO the room is
-		// the same +-X sign already used for the flame and light offsets in
-		// scene.json and lights.json.
-		//
-		// DEAD horizontal, no downward tilt: the band should lie in the plane
-		// of the wall, and any tilt rotates it to slice diagonally through the
-		// room instead.
-		static const glm::vec3 TORCH_SHADOW_DIR[6] = {
-			glm::vec3( 1.0f, 0.0f, 0.0f),	// torchW1: west wall, aims +X into the room
-			glm::vec3( 1.0f, 0.0f, 0.0f),	// torchW2
-			glm::vec3(-1.0f, 0.0f, 0.0f),	// torchE1: east wall, aims -X into the room
-			glm::vec3(-1.0f, 0.0f, 0.0f),	// torchE2
-			glm::vec3(-1.0f, 0.0f, 0.0f),	// torchDC
-			glm::vec3(-1.0f, 0.0f, 0.0f),	// torchDV: east wall of the dv alcove
-		};
+		// Near plane for a torch's cube map. Unlike the old front/back
+		// perspective hack, precision no longer depends on this (the cube
+		// stores LINEAR distance, see CubeShadowMap.hpp), so it's just a
+		// clip plane: close enough that only the torch fixture itself (not
+		// an occluder, Material::castsShadow) falls inside it.
+		const float TORCH_SHADOW_NEAR = 0.05f;
 
-		// The two maps get DIFFERENT fields of view, because they look at two
-		// very different things.
-		//
-		// The front one looks down the room: everything it has to shadow is
-		// metres away, so a moderate angle already covers it and the texels are
-		// better spent on resolution than on reach.
-		//
-		// The rear one looks at the wall the torch is bolted to, and that wall
-		// is only 0.47 away -- the flame's bracket offset (lights.json). At
-		// that range a frustum covers a disappointing patch of it: 140 degrees
-		// reaches 0.47 * tan(70) = 1.29m around the flame, so the wall below
-		// about chest height fell outside BOTH maps and, being outside, came
-		// out lit and unshadowed. That is why the stones set into the wall cast
-		// shadows above and to the sides of a torch but not down to the floor.
-		// 168 degrees reaches 0.47 * tan(84) = 4.5m instead, which takes the
-		// wall from floor to ceiling.
-		//
-		// Widening usually costs resolution, but barely does here: a flat wall
-		// parallel to the image plane projects LINEARLY, so those texels land
-		// on it evenly rather than bunching in the middle, and 1024 of them
-		// across 9m of wall is still about 1cm each -- fine for stones that
-		// stick out 5-10cm. What it does cost is the near-180 blowup in the
-		// projection, which is why only the map that needs the reach gets it.
-		//
-		// Between the two there is still an uncovered band, now the directions
-		// running 70-95 degrees off the aim. On the floor that is everything
-		// within 1.4m of the torch's base, where nothing stands between the
-		// flame and the ground to cast a shadow anyway.
-		const float TORCH_SHADOW_FOV_FRONT = 140.0f;
-		const float TORCH_SHADOW_FOV_BACK  = 168.0f;
-
-		// Near plane, and it is the single most important number here for how
-		// much shadow DETAIL survives. A perspective depth buffer packs most of
-		// its precision into the first slice in front of the near plane, so
-		// pushing that plane out flattens the distribution and buys precision
-		// everywhere else -- going 0.1 -> 0.3 makes a given depth bias worth
-		// three times fewer centimetres out in the room, which is the
-		// difference between the stones jutting out of the walls casting
-		// shadows and being swallowed whole by the bias.
-		//
-		// The ceiling on it is the 0.47 the flame sits in front of the wall it
-		// hangs on (the "offset" in lights.json): push the near plane past that
-		// and the mounting wall stops being drawn into the torch's rear map,
-		// which is the one thing stopping that torch lighting straight through
-		// the wall into the next room. 0.3 keeps a margin under it.
-		//
-		// Nothing is lost at the near end: the only geometry within 30cm of a
-		// flame is the torch that holds it, and that is not an occluder anyway
-		// (Material::castsShadow in SceneMaterials.hpp).
-		const float TORCH_SHADOW_NEAR = 0.3f;
-
-		// Past this a torch contributes almost nothing anyway: with g = 3.0 and
-		// beta = 1.4 (lights.json) it is down to about 8% of its stated colour.
-		// Kept tight for the same reason the near plane is pushed out -- the
-		// near/far ratio is what sets the depth precision.
-		const float TORCH_SHADOW_FAR = 15.0f;
+		// Past this a torch contributes almost nothing anyway: with g = 3.0
+		// and beta = 1.4 (lights.json) it is down to about 8% of its stated
+		// colour. TORCH_SHADOW_FAR_CONST (member) rather than a local here:
+		// createCubeShadowMaps() needs the same number for the color
+		// attachment's clear value.
+		const float TORCH_SHADOW_FAR = TORCH_SHADOW_FAR_CONST;
 
 		// The sun has no position, only a travel direction (SceneLights.hpp),
 		// so its shadow camera needs a stand-in position: back away from a
@@ -1447,7 +1521,6 @@ class Skeleton26ReplaceName : public BaseProject {
 		const float SUN_ORTHO_HALF_EXTENT = 55.0f;
 		const float SUN_DISTANCE = 80.0f;
 
-		int torchSlot = 0;
 		for(const LightData &L : sceneLights.all()) {
 			if(L.shadowIndex < 0) {
 				continue;
@@ -1463,45 +1536,151 @@ class Skeleton26ReplaceName : public BaseProject {
 				// View/ViewPrj in GameLogic()); GLM assumes an OpenGL-handed
 				// NDC otherwise.
 				proj[1][1] *= -1;
-				shadowLightSpace[L.shadowIndex] = proj * view;
+				shadowLightSpace2D[L.shadowIndex] = proj * view;
 				continue;
 			}
 
-			// A point light's two maps: the aim, then its opposite. Same
-			// order SceneLights::init reserved the slots in and the same
-			// order shadowFactor() tries them.
+			// A point light's cube map: six 90-degree perspective faces,
+			// axis-aligned on world X/Y/Z (CUBE_FACE_DIR/CUBE_FACE_UP,
+			// CubeShadowMap.hpp), covering the WHOLE sphere with no seam and
+			// no hand-tuned aim per torch -- unlike the old two-map
+			// front/back workaround, this needs no per-torch authoring at
+			// all, so it drops TORCH_SHADOW_DIR entirely.
 			//
-			// The aim table is hand-written per torch and lights.json could
-			// outgrow it (its entries are the only thing here that is not
-			// derived from the light itself), so a torch past the end takes
-			// the last direction rather than reading off the array. Wrong-
-			// looking shadows on one torch beat undefined behaviour.
-			const int aimIndex = std::min(torchSlot++,
-										  (int)(sizeof(TORCH_SHADOW_DIR) / sizeof(TORCH_SHADOW_DIR[0])) - 1);
-			const glm::vec3 aim = TORCH_SHADOW_DIR[aimIndex];
-			for(int half = 0; half < SHADOW_MAPS_PER_LIGHT; half++) {
-				const glm::vec3 dir = (half == 0) ? aim : -aim;
-
-				// lookAt degenerates if the aim is parallel to `up`, so pick
-				// an up that cannot be: world up unless the torch looks
-				// straight up or down, in which case any horizontal axis does.
-				// Every TORCH_SHADOW_DIR entry is horizontal today, so this
-				// only guards a future edit.
-				const glm::vec3 up = (std::abs(dir.y) > 0.99f)
-									 ? glm::vec3(0.0f, 0.0f, 1.0f)
-									 : glm::vec3(0.0f, 1.0f, 0.0f);
-
-				const float fov = (half == 0) ? TORCH_SHADOW_FOV_FRONT
-											  : TORCH_SHADOW_FOV_BACK;
-
-				glm::mat4 view = glm::lookAt(L.pos, L.pos + dir, up);
-				glm::mat4 proj = glm::perspective(glm::radians(fov), 1.0f,
+			// No Y-flip here: a cube map is sampled by direction
+			// (samplerCube), never rasterized to the screen, so there is no
+			// Vulkan-vs-GL NDC mismatch to correct for -- flipping would
+			// only mis-rotate which face's texels land where.
+			for(int face = 0; face < 6; face++) {
+				glm::mat4 view = glm::lookAt(L.pos, L.pos + CUBE_FACE_DIR[face], CUBE_FACE_UP[face]);
+				glm::mat4 proj = glm::perspective(glm::radians(90.0f), 1.0f,
 												  TORCH_SHADOW_NEAR, TORCH_SHADOW_FAR);
-				proj[1][1] *= -1;
+				torchFaceMatrices[L.shadowIndex][face] = proj * view;
+			}
+			torchLightPos[L.shadowIndex] = L.pos;
+			activeCubeShadows = std::max(activeCubeShadows, L.shadowIndex + 1);
+		}
+	}
 
-				shadowLightSpace[L.shadowIndex + half] = proj * view;
+	// Builds every torch's CubeShadowMap (colour cube image + face views +
+	// per-torch depth + the 36 face framebuffers), plus the one sampler they
+	// all share. Called from pipelinesAndDescriptorSetsInit(), right after
+	// RPShadowCubeCompat.create() -- these framebuffers are only valid once
+	// that render pass exists, since they're built against its .renderPass
+	// handle (see the RPShadowCubeCompat member comment for why that render
+	// pass is only used for this, never rendered into itself).
+	//
+	// Lives here rather than in CubeShadowMap.hpp because createImage/
+	// createImageView/findDepthFormat are PROTECTED members of BaseProject:
+	// only this class's own methods can call them (see CubeShadowMap.hpp's
+	// header comment), the same reason every other Vulkan resource in this
+	// file -- RPShadow2D, RP, the post chain -- is built in a method here
+	// rather than in a free-standing helper.
+	void createCubeShadowMaps() {
+		// Shared by every torch: same resolution, same format, so one
+		// CLAMP_TO_EDGE/linear sampler serves them all. No mipmaps (a shadow
+		// lookup always samples level 0), hence maxLod = 1.
+		cubeShadowSampler.init(this, VK_FILTER_LINEAR, VK_FILTER_LINEAR,
+								VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+								VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+								VK_SAMPLER_MIPMAP_MODE_LINEAR,
+								VK_FALSE, 1.0f, 1.0f);
+
+		const VkFormat colorFmt = VK_FORMAT_R32_SFLOAT;
+		const VkFormat depthFmt = findDepthFormat();
+
+		for(int i = 0; i < NUM_SHADOW_CUBES; i++) {
+			CubeShadowMap &c = torchCube[i];
+
+			// The 6-layer colour image itself: CUBE_COMPATIBLE_BIT is what
+			// lets a VK_IMAGE_VIEW_TYPE_CUBE view (below) treat its 6 layers
+			// as cube faces instead of an ordinary array.
+			createImage(SHADOW_MAP_RES, SHADOW_MAP_RES, 1, 6,
+						VK_SAMPLE_COUNT_1_BIT, colorFmt, VK_IMAGE_TILING_OPTIMAL,
+						VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+						VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT,
+						VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+						c.colorImage, c.colorMemory);
+
+			// The one view CookTorrance.frag's samplerCube reads: all 6
+			// layers, VK_IMAGE_VIEW_TYPE_CUBE. baseArrayLayer 0 (this
+			// helper's only option) is correct here since it spans every
+			// layer anyway.
+			c.cubeView = createImageView(c.colorImage, colorFmt, VK_IMAGE_ASPECT_COLOR_BIT,
+										  1, VK_IMAGE_VIEW_TYPE_CUBE, 6);
+
+			// One VK_IMAGE_VIEW_TYPE_2D view per layer, for the framebuffers
+			// below -- a full cube view cannot be a render target, and
+			// BaseProject::createImageView always fixes baseArrayLayer at 0,
+			// so these need a raw vkCreateImageView call to pick layer
+			// `face` specifically.
+			for(int face = 0; face < 6; face++) {
+				VkImageViewCreateInfo faceInfo{};
+				faceInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+				faceInfo.image = c.colorImage;
+				faceInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+				faceInfo.format = colorFmt;
+				faceInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+				faceInfo.subresourceRange.baseMipLevel = 0;
+				faceInfo.subresourceRange.levelCount = 1;
+				faceInfo.subresourceRange.baseArrayLayer = face;
+				faceInfo.subresourceRange.layerCount = 1;
+				VkResult result = vkCreateImageView(device, &faceInfo, nullptr, &c.faceViews[face]);
+				if(result != VK_SUCCESS) {
+					PrintVkError(result);
+					throw std::runtime_error("failed to create cube shadow face view!");
+				}
+			}
+
+			// One depth image/view PER TORCH, reused across its 6 faces --
+			// see the CubeShadowMap::depthImage field comment for why that
+			// reuse is safe. Never sampled (only used for the rasterizer's
+			// z-test), so a single mip, single layer, plain 2D image.
+			createImage(SHADOW_MAP_RES, SHADOW_MAP_RES, 1, 1,
+						VK_SAMPLE_COUNT_1_BIT, depthFmt, VK_IMAGE_TILING_OPTIMAL,
+						VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 0,
+						VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+						c.depthImage, c.depthMemory);
+			c.depthView = createImageView(c.depthImage, depthFmt, VK_IMAGE_ASPECT_DEPTH_BIT,
+										   1, VK_IMAGE_VIEW_TYPE_2D, 1);
+
+			// The 6 real framebuffers: colour face view + the shared depth
+			// view, against RPShadowCubeCompat.renderPass.
+			for(int face = 0; face < 6; face++) {
+				VkImageView attachments[2] = {c.faceViews[face], c.depthView};
+
+				VkFramebufferCreateInfo fbInfo{};
+				fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+				fbInfo.renderPass = RPShadowCubeCompat.renderPass;
+				fbInfo.attachmentCount = 2;
+				fbInfo.pAttachments = attachments;
+				fbInfo.width = SHADOW_MAP_RES;
+				fbInfo.height = SHADOW_MAP_RES;
+				fbInfo.layers = 1;
+				VkResult result = vkCreateFramebuffer(device, &fbInfo, nullptr, &c.faceFramebuffers[face]);
+				if(result != VK_SUCCESS) {
+					PrintVkError(result);
+					throw std::runtime_error("failed to create cube shadow face framebuffer!");
+				}
 			}
 		}
+	}
+
+	void destroyCubeShadowMaps() {
+		for(int i = 0; i < NUM_SHADOW_CUBES; i++) {
+			CubeShadowMap &c = torchCube[i];
+			for(int face = 0; face < 6; face++) {
+				vkDestroyFramebuffer(device, c.faceFramebuffers[face], nullptr);
+				vkDestroyImageView(device, c.faceViews[face], nullptr);
+			}
+			vkDestroyImageView(device, c.cubeView, nullptr);
+			vkDestroyImage(device, c.colorImage, nullptr);
+			vkFreeMemory(device, c.colorMemory, nullptr);
+			vkDestroyImageView(device, c.depthView, nullptr);
+			vkDestroyImage(device, c.depthImage, nullptr);
+			vkFreeMemory(device, c.depthMemory, nullptr);
+		}
+		cubeShadowSampler.cleanup();
 	}
 
 	// Here you create your pipelines and Descriptor Sets!
@@ -1604,17 +1783,24 @@ class Skeleton26ReplaceName : public BaseProject {
 		PblurV.destroy();
 		Pcomposite.destroy();
 
-		// PShadow/RPShadow never go through pipelinesAndDescriptorSetsCleanup
+		// PShadow/RPShadow2D never go through pipelinesAndDescriptorSetsCleanup
 		// (see the member declaration for why -- they don't depend on the
 		// swapchain, so a resize never tears them down), which is where P/RP
 		// normally get their .cleanup() half. Both halves have to happen
-		// somewhere, so both happen here instead.
+		// somewhere, so both happen here instead. Same story for the cube
+		// branch (PShadowCube/RPShadowCubeCompat/torchCube[]).
 		PShadow.cleanup();
 		PShadow.destroy();
-		for(int i = 0; i < NUM_SHADOW_LIGHTS; i++) {
-			RPShadow[i].cleanup();
-			RPShadow[i].destroy();
+		for(int i = 0; i < NUM_SHADOW_MAPS_2D; i++) {
+			RPShadow2D[i].cleanup();
+			RPShadow2D[i].destroy();
 		}
+
+		PShadowCube.cleanup();
+		PShadowCube.destroy();
+		destroyCubeShadowMaps();
+		RPShadowCubeCompat.cleanup();
+		RPShadowCubeCompat.destroy();
 
 		RP.destroy();
 		RPbright.destroy();
@@ -1653,21 +1839,21 @@ class Skeleton26ReplaceName : public BaseProject {
 		// 10000 and 9000 against this one's 0), so they end up drawing on top
 		// of the composited frame.
 
-		// The shadow passes, one per shadow-casting light, all before the
-		// main pass they feed: CookTorrance.frag samples these maps, so they
-		// have to be fully rendered (and, thanks to RPShadow's
-		// ATDEP_DEPTH_TRANS dependency, transitioned to a readable layout)
-		// before that draw happens. Not Scene::populateCommandBuffer -- that
-		// walks every technique including Flame, and the flames are
-		// deliberately not occluders here (see the RPShadow member comment) --
-		// so this is its own small loop straight over the CookTorrance
-		// instances (technique 0 in scene.json).
-		for(int i = 0; i < NUM_SHADOW_LIGHTS; i++) {
-			RPShadow[i].begin(commandBuffer, currentImage);
+		// The shadow passes, all before the main pass they feed:
+		// CookTorrance.frag samples these maps, so they have to be fully
+		// rendered (and transitioned to a readable layout) before that draw
+		// happens. Not Scene::populateCommandBuffer -- that walks every
+		// technique including Flame, and the flames are deliberately not
+		// occluders here (see the RPShadow2D member comment) -- so this
+		// draws straight over the CookTorrance instances (technique 0 in
+		// scene.json) itself, twice: once per 2D map, once per torch per
+		// cube face.
+		for(int i = 0; i < NUM_SHADOW_MAPS_2D; i++) {
+			RPShadow2D[i].begin(commandBuffer, currentImage);
 			PShadow.bind(commandBuffer);
 			vkCmdPushConstants(commandBuffer, PShadow.pipelineLayout,
 							   VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4),
-							   &shadowLightSpace[i]);
+							   &shadowLightSpace2D[i]);
 			for(int j = 0; j < SC.TI[0].InstanceCount; j++) {
 				Instance &inst = SC.TI[0].I[j];
 
@@ -1688,7 +1874,62 @@ class Skeleton26ReplaceName : public BaseProject {
 				vkCmdDrawIndexed(commandBuffer,
 								 static_cast<uint32_t>(SC.M[inst.Mid]->indices.size()), 1, 0, 0, 0);
 			}
-			RPShadow[i].end(commandBuffer);
+			RPShadow2D[i].end(commandBuffer);
+		}
+
+		// One torch's cube map is 6 SEPARATE render passes, one per face,
+		// against that face's own single-layer framebuffer
+		// (createCubeShadowMaps()) -- RenderPass::begin/end can't be reused
+		// here since it indexes frameBuffers[] by SWAPCHAIN image, not by
+		// cube face, so this drives vkCmdBegin/EndRenderPass directly
+		// against RPShadowCubeCompat.renderPass (valid: every one of these
+		//36 framebuffers was built compatible with it).
+		for(int t = 0; t < NUM_SHADOW_CUBES; t++) {
+			// A torch past the end of sceneLights.all() (fewer than
+			// NUM_SHADOW_CUBES point lights actually cast a shadow) has no
+			// light position to render with -- skip it rather than draw
+			// into a cube map nothing will ever sample (shadowIndex on the
+			// GPU side never points past the lights that exist).
+			if(t >= activeCubeShadows) {
+				break;
+			}
+
+			for(int face = 0; face < 6; face++) {
+				VkClearValue clearValues[2];
+				clearValues[0].color = {{TORCH_SHADOW_FAR_CONST, 0.0f, 0.0f, 0.0f}};
+				clearValues[1].depthStencil = {1.0f, 0};
+
+				VkRenderPassBeginInfo rpInfo{};
+				rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+				rpInfo.renderPass = RPShadowCubeCompat.renderPass;
+				rpInfo.framebuffer = torchCube[t].faceFramebuffers[face];
+				rpInfo.renderArea.offset = {0, 0};
+				rpInfo.renderArea.extent = {(uint32_t)SHADOW_MAP_RES, (uint32_t)SHADOW_MAP_RES};
+				rpInfo.clearValueCount = 2;
+				rpInfo.pClearValues = clearValues;
+				vkCmdBeginRenderPass(commandBuffer, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+				PShadowCube.bind(commandBuffer);
+				ShadowCubePushConstantData pc{};
+				pc.lightViewProj = torchFaceMatrices[t][face];
+				pc.lightPos = glm::vec4(torchLightPos[t], 0.0f);
+				vkCmdPushConstants(commandBuffer, PShadowCube.pipelineLayout,
+								   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+								   sizeof(ShadowCubePushConstantData), &pc);
+
+				for(int j = 0; j < SC.TI[0].InstanceCount; j++) {
+					Instance &inst = SC.TI[0].I[j];
+					if(!materials.forModel(inst.Mid).castsShadow) {
+						continue;
+					}
+					inst.DS[0][1]->bind(commandBuffer, PShadowCube, 0, currentImage);
+					SC.M[inst.Mid]->bind(commandBuffer);
+					vkCmdDrawIndexed(commandBuffer,
+									 static_cast<uint32_t>(SC.M[inst.Mid]->indices.size()), 1, 0, 0, 0);
+				}
+
+				vkCmdEndRenderPass(commandBuffer);
+			}
 		}
 
 		// Offscreen pass - always required
@@ -2157,8 +2398,8 @@ class Skeleton26ReplaceName : public BaseProject {
 		// slot for image 0 would leave the others holding whatever was there
 		// at allocation time.
 		ShadowUniformBufferObject shadowUbo{};
-		for(int i = 0; i < NUM_SHADOW_LIGHTS; i++) {
-			shadowUbo.lightSpace[i] = shadowLightSpace[i];
+		for(int i = 0; i < NUM_SHADOW_MAPS_2D; i++) {
+			shadowUbo.lightSpace[i] = shadowLightSpace2D[i];
 		}
 
 		// Over every technique, not just the first: instances need the same

@@ -125,10 +125,10 @@
 		},
 
 		// The dv alcove's torch. Shadow-casting like the other five: without a
-		// map of its own shadowFactor() returns 1 for every fragment it
+		// cube map of its own shadowFactor() returns 1 for every fragment it
 		// reaches, so this one lit the dl room straight through the wall
-		// between them. NUM_SHADOW_LIGHTS went 6 -> 7 to give it a slot; the
-		// aim of its shadow camera is TORCH_SHADOW_DIR's last entry.
+		// between them. Gets its own real 6-face cube map like every other
+		// torch (CubeShadowMap.hpp), one of NUM_SHADOW_CUBES slots.
 		{
 			"id": "torchDV",
 			"type": "point",
