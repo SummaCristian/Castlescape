@@ -72,6 +72,23 @@
 		"dungeonTable":   { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
 		"dungeonChair":   { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
 		"dungeonCarpet":  { "roughness": 0.95, "F0": 0.03, "k": 0.97 },
-		"dungeonBanner":  { "roughness": 0.90, "F0": 0.03, "k": 0.95 }
+		"dungeonBanner":  { "roughness": 0.90, "F0": 0.03, "k": 0.95 },
+
+		// No "flame" entry: the flames run on their own pipeline and their own
+		// shader pair (Flame.vert/frag), which generates their colour
+		// procedurally and reads nothing from here. See scene.json.
+		//
+		// The two pieces of a wall torch, and the only models in the scene with
+		// castsShadow off. Each one sits within centimetres of the point light
+		// it carries -- the bracket between the wall and the flame, the skull
+		// just above it -- and an occluder that close blocks a huge cone of the
+		// light's sphere, which is why the torches appeared to light only a
+		// wedge in front of them. See Material::castsShadow in
+		// SceneMaterials.hpp for why this is not solvable with bias instead.
+		// They are still lit and drawn normally; they just aren't occluders.
+		//
+		// Bone: rough, fully diffuse, no visible highlight.
+		"torchSkull":   { "roughness": 0.85, "F0": 0.04, "k": 0.95, "castsShadow": false },
+		"dungeonTorch": { "castsShadow": false }
 	}
 }

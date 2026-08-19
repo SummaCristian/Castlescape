@@ -2,21 +2,6 @@
 	"models": [
 		{"id": "floor", "VD": "VDposNormUV", "model": "assets/models/Plane.gltf",  "format":"GLTF", "collider": "AABB"},
 
-		{"id": "castleWall01", "VD": "VDposNormUV", "model": "assets/models/Castle/SPW_Medieval_Castle_Wall_01.mgcg", "format":"MGCG", "collider": "AABB"},
-		{"id": "castleWall02", "VD": "VDposNormUV", "model": "assets/models/Castle/SPW_Medieval_Castle_Wall_02.mgcg", "format":"MGCG", "collider": "AABB"},
-		{"id": "castleTower",  "VD": "VDposNormUV", "model": "assets/models/Castle/SPW_Medieval_Castle_Tower.mgcg",  "format":"MGCG", "collider": "AABB"},
-		{"id": "castleGate",   "VD": "VDposNormUV", "model": "assets/models/Castle/SPW_Medieval_Castle_02.mgcg",     "format":"MGCG"},
-		{"id": "castleKeep",   "VD": "VDposNormUV", "model": "assets/models/Castle/SPW_Medieval_Castle_01.mgcg",     "format":"MGCG", "collider": "AABB"},
-		{"id": "castleSteps",  "VD": "VDposNormUV", "model": "assets/models/Castle/SPW_Medieval_Castle_Steps.mgcg",  "format":"MGCG"},
-
-		{"id": "road",   "VD": "VDposNormUV", "model": "assets/models/Castle/SPW_Medieval_Road_01.mgcg", "format":"MGCG"},
-		{"id": "flag",   "VD": "VDposNormUV", "model": "assets/models/Castle/SPW_Medieval_Flag.mgcg",    "format":"MGCG"},
-		{"id": "light",  "VD": "VDposNormUV", "model": "assets/models/Castle/SPW_Medieval_Light.mgcg",   "format":"MGCG"},
-		{"id": "barrel", "VD": "VDposNormUV", "model": "assets/models/Castle/SPW_Medieval_Barrel.mgcg",  "format":"MGCG"},
-		{"id": "box01",  "VD": "VDposNormUV", "model": "assets/models/Castle/SPW_Medieval_Box_01.mgcg",  "format":"MGCG"},
-		{"id": "box02",  "VD": "VDposNormUV", "model": "assets/models/Castle/SPW_Medieval_Box_02.mgcg",  "format":"MGCG"},
-		{"id": "box03",  "VD": "VDposNormUV", "model": "assets/models/Castle/SPW_Medieval_Box_03.mgcg",  "format":"MGCG"},
-
 		{"id": "dungeonFloor", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_StoneFloor_01.gltf", "format": "GLTF"},
 		{"id": "dungeonWall", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_WallStraight_01.gltf", "format": "GLTF", "collider": "AABB"},
 		{"id": "dungeonCorner", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_WallCorner_01.gltf", "format": "GLTF"},
@@ -30,12 +15,12 @@
 		{"id": "dungeonSkull", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_Skull_01.gltf", "format": "GLTF"},
 		{"id": "dungeonBarrel", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_Barrel_01.gltf", "format": "GLTF"},
 		{"id": "dungeonTorch", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_Torch_01.gltf", "format": "GLTF"},
+		{"id": "dungeonBanner", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_CastleBanners_01.gltf", "format": "GLTF"},
 		{"id": "dungeonTorchHeld", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_Torch_Held_01.gltf", "format": "GLTF"},
-		{"id": "dungeonBanner", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_CastleBanners_01.gltf", "format": "GLTF"}
+		{"id": "torchSkull", "VD": "VDposNormUV", "model": "assets/models/Dracula/TorchSkull_01.gltf", "format": "GLTF"}
 	],
 	"textures": [
 		{"id": "tex",          "texture": "assets/textures/toChange.jpg",         "format": "C"},
-		{"id": "medievalTex",  "texture": "assets/textures/Castle/SPW_Medieval.png", "format": "C"},
 
 		{"id": "dungeonFloorTex", "texture": "assets/textures/Dracula/SM_StoneFloor_01.png", "format": "C"},
 		{"id": "dungeonWallTex", "texture": "assets/textures/Dracula/SM_WallStraight_01.png", "format": "C"},
@@ -50,41 +35,13 @@
 		{"id": "dungeonSkullTex", "texture": "assets/textures/Dracula/SM_Skull_01.png", "format": "C"},
 		{"id": "dungeonBarrelTex", "texture": "assets/textures/Dracula/SM_Barrel_01.png", "format": "C"},
 		{"id": "dungeonTorchTex", "texture": "assets/textures/Dracula/SM_Torch_01.png", "format": "C"},
-		{"id": "dungeonBannerTex", "texture": "assets/textures/Dracula/SM_CastleBanners_01.png", "format": "C"}
+		{"id": "dungeonBannerTex", "texture": "assets/textures/Dracula/SM_CastleBanners_01.png", "format": "C"},
+
+		{"id": "torchSkullTex", "texture": "assets/textures/Dracula/T_TorchSkull_01_BaseColor.png", "format": "C"}
 	],
 	"instances": [
 		{"technique": "CookTorrance", "elements": [
 			{"id": "floor", "model": "floor", "texture": ["tex"], "scale": [100.0, 100.0, 100.0]},
-
-			{"id": "towerNW", "model": "castleTower", "texture": ["medievalTex"], "translate": [-21.0, 0.0, -16.0], "eulerAngles": [90.0, 0.0, 0.0]},
-			{"id": "towerNE", "model": "castleTower", "texture": ["medievalTex"], "translate": [21.0, 0.0, -16.0], "eulerAngles": [90.0, 0.0, 0.0]},
-			{"id": "towerSW", "model": "castleTower", "texture": ["medievalTex"], "translate": [-21.0, 0.0, 16.0], "eulerAngles": [90.0, 0.0, 0.0]},
-			{"id": "towerSE", "model": "castleTower", "texture": ["medievalTex"], "translate": [21.0, 0.0, 16.0], "eulerAngles": [90.0, 0.0, 0.0]},
-
-			{"id": "wallN1", "model": "castleWall02", "texture": ["medievalTex"], "translate": [-10.0, 0.0, -16.0], "eulerAngles": [90.0, 0.0, 0.0]},
-			{"id": "wallN2", "model": "castleWall02", "texture": ["medievalTex"], "translate": [10.0, 0.0, -16.0], "eulerAngles": [90.0, 0.0, 0.0]},
-
-			{"id": "wallS1", "model": "castleWall01", "texture": ["medievalTex"], "translate": [-12.44, 0.0, 16.0], "eulerAngles": [90.0, 0.0, 0.0]},
-			{"id": "wallS2", "model": "castleWall01", "texture": ["medievalTex"], "translate": [12.44, 0.0, 16.0], "eulerAngles": [90.0, 0.0, 0.0]},
-			{"id": "gate",   "model": "castleGate",   "texture": ["medievalTex"], "translate": [0.0, 0.0, 16.0], "eulerAngles": [90.0, 0.0, 0.0]},
-
-			{"id": "wallE1", "model": "castleWall02", "texture": ["medievalTex"], "translate": [21.0, 0.0, 0.0], "eulerAngles": [90.0, 90.0, 0.0]},
-			{"id": "wallW1", "model": "castleWall02", "texture": ["medievalTex"], "translate": [-21.0, 0.0, 0.0], "eulerAngles": [90.0, 90.0, 0.0]},
-
-			{"id": "keep",  "model": "castleKeep",  "texture": ["medievalTex"], "translate": [0.0, 0.0, -2.0], "eulerAngles": [90.0, 0.0, 0.0]},
-			{"id": "steps", "model": "castleSteps", "texture": ["medievalTex"], "translate": [-17.8, 0.0, 0.0], "eulerAngles": [90.0, 90.0, 0.0]},
-			{"id": "road",  "model": "road",        "texture": ["medievalTex"], "translate": [0.0, 0.02, 36.0], "scale": [1.0, 4.0, 1.0], "eulerAngles": [90.0, 0.0, 0.0]},
-
-			{"id": "flagSW", "model": "flag", "texture": ["medievalTex"], "translate": [-21.0, 16.2, 16.0], "eulerAngles": [90.0, 0.0, 0.0]},
-			{"id": "flagSE", "model": "flag", "texture": ["medievalTex"], "translate": [21.0, 16.2, 16.0], "eulerAngles": [90.0, 0.0, 0.0]},
-
-			{"id": "lightGateL", "model": "light", "texture": ["medievalTex"], "translate": [-5.0, 0.0, 13.0], "eulerAngles": [90.0, 0.0, 0.0]},
-			{"id": "lightGateR", "model": "light", "texture": ["medievalTex"], "translate": [5.0, 0.0, 13.0], "eulerAngles": [90.0, 0.0, 0.0]},
-
-			{"id": "barrel1", "model": "barrel", "texture": ["medievalTex"], "translate": [6.0, 0.0, 4.0], "eulerAngles": [90.0, 20.0, 0.0]},
-			{"id": "box1",    "model": "box01",  "texture": ["medievalTex"], "translate": [-6.0, 0.0, 4.0], "eulerAngles": [90.0, -15.0, 0.0]},
-			{"id": "box2",    "model": "box02",  "texture": ["medievalTex"], "translate": [-8.0, 0.0, 6.0], "eulerAngles": [90.0, 40.0, 0.0]},
-			{"id": "box3",    "model": "box03",  "texture": ["medievalTex"], "translate": [8.0, 0.0, 7.0], "eulerAngles": [90.0, -60.0, 0.0]},
 
 			{"id": "dhFloor00", "model": "dungeonFloor", "texture": ["dungeonFloorTex"], "translate": [-30.4, 0.02, 19.2]},
 			{"id": "dhFloor01", "model": "dungeonFloor", "texture": ["dungeonFloorTex"], "translate": [-30.4, 0.02, 26.4]},
@@ -107,10 +64,10 @@
 			{"id": "dcFloor31", "model": "dungeonFloor", "texture": ["dungeonFloorTex"], "translate": [-8.8, 0.02, 26.4]},
 			{"id": "dcFloor40", "model": "dungeonFloor", "texture": ["dungeonFloorTex"], "translate": [-1.6, 0.02, 19.2]},
 			{"id": "dcFloor41", "model": "dungeonFloor", "texture": ["dungeonFloorTex"], "translate": [-1.6, 0.02, 26.4]},
-			{"id": "dcCornNE", "model": "dungeonCorner", "texture": ["dungeonCornerTex"], "translate": [-1.6, 0.02, 19.2], "eulerAngles": [0.0, 90.0, 0.0]},
-			{"id": "dcCornSE", "model": "dungeonCorner", "texture": ["dungeonCornerTex"], "translate": [-1.6, 0.02, 33.6]},
 			{"id": "dcWallN", "model": "dungeonWall", "texture": ["dungeonWallTex"], "translate": [-16.0, 0.02, 19.2], "eulerAngles": [0.0, 90.0, 0.0]},
+			{"id": "dcWallN2", "model": "dungeonWall", "texture": ["dungeonWallTex"], "translate": [-8.8, 0.02, 19.2], "eulerAngles": [0.0, 90.0, 0.0]},
 			{"id": "dcWallS", "model": "dungeonWall", "texture": ["dungeonWallTex"], "translate": [-8.8, 0.02, 33.6], "eulerAngles": [0.0, 270.0, 0.0]},
+			{"id": "dcWallS2", "model": "dungeonWall", "texture": ["dungeonWallTex"], "translate": [-1.6, 0.02, 33.6], "eulerAngles": [0.0, 270.0, 0.0]},
 			{"id": "dhCarpet", "model": "dungeonCarpet", "texture": ["dungeonCarpetTex"], "translate": [-26.8, 0.03, 30.0]},
 			{"id": "dhTable", "model": "dungeonTable", "texture": ["dungeonTableTex"], "translate": [-26.8, 0.26, 30.0], "scale": [0.6, 0.6, 0.6]},
 			{"id": "dhChairW", "model": "dungeonChair", "texture": ["dungeonChairTex"], "translate": [-30.6, 0.02, 30.0], "eulerAngles": [0.0, 90.0, 0.0], "scale": [0.86, 0.86, 0.86]},
@@ -123,9 +80,13 @@
 			{"id": "dhBarrel3", "model": "dungeonBarrel", "texture": ["dungeonBarrelTex"], "translate": [-19.5, 0.02, 22.5], "eulerAngles": [0.0, -40.0, 0.0], "scale": [0.48, 0.48, 0.48]},
 			{"id": "dhSkull", "model": "dungeonSkull", "texture": ["dungeonSkullTex"], "translate": [-33.0, 0.02, 34.5], "eulerAngles": [0.0, -35.0, 0.0], "scale": [0.46, 0.46, 0.46]},
 			{"id": "dhTorchW1", "model": "dungeonTorch", "texture": ["dungeonTorchTex"], "translate": [-36.36, 3.5, 24.0], "eulerAngles": [0.0, 180.0, 0.0]},
+			{"id": "dhSkullTorchW1", "model": "torchSkull", "texture": ["torchSkullTex"], "translate": [-35.89, 4.12, 24.0]},
 			{"id": "dhTorchW2", "model": "dungeonTorch", "texture": ["dungeonTorchTex"], "translate": [-36.36, 3.5, 36.0], "eulerAngles": [0.0, 180.0, 0.0]},
+			{"id": "dhSkullTorchW2", "model": "torchSkull", "texture": ["torchSkullTex"], "translate": [-35.89, 4.12, 36.0]},
 			{"id": "dhTorchE1", "model": "dungeonTorch", "texture": ["dungeonTorchTex"], "translate": [-17.24, 3.5, 24.0]},
+			{"id": "dhSkullTorchE1", "model": "torchSkull", "texture": ["torchSkullTex"], "translate": [-17.71, 4.12, 24.0]},
 			{"id": "dhTorchE2", "model": "dungeonTorch", "texture": ["dungeonTorchTex"], "translate": [-17.24, 3.5, 36.0]},
+			{"id": "dhSkullTorchE2", "model": "torchSkull", "texture": ["torchSkullTex"], "translate": [-17.71, 4.12, 36.0]},
 			{"id": "dhBanner1", "model": "dungeonBanner", "texture": ["dungeonBannerTex"], "translate": [-36.36, 0.02, 26.0], "eulerAngles": [0.0, 180.0, 0.0]},
 			{"id": "dhBanner2", "model": "dungeonBanner", "texture": ["dungeonBannerTex"], "translate": [-36.36, 0.02, 34.0], "eulerAngles": [0.0, 180.0, 0.0]},
 			{"id": "dcCarpet", "model": "dungeonCarpet", "texture": ["dungeonCarpetTex"], "translate": [-9.42, 0.03, 26.4]},
@@ -135,7 +96,29 @@
 			{"id": "dcChair", "model": "dungeonChair", "texture": ["dungeonChairTex"], "translate": [-6.0, 0.02, 29.5], "eulerAngles": [0.0, 200.0, 0.0], "scale": [0.86, 0.86, 0.86]},
 			{"id": "dcSkull", "model": "dungeonSkull", "texture": ["dungeonSkullTex"], "translate": [-13.0, 0.02, 22.5], "eulerAngles": [0.0, 20.0, 0.0], "scale": [0.46, 0.46, 0.46]},
 			{"id": "dcTorchE", "model": "dungeonTorch", "texture": ["dungeonTorchTex"], "translate": [-2.84, 3.5, 26.4]},
-			{"id": "dcBanner", "model": "dungeonBanner", "texture": ["dungeonBannerTex"], "translate": [-2.84, 0.02, 23.0]},
+			{"id": "dcSkullTorchE", "model": "torchSkull", "texture": ["torchSkullTex"], "translate": [-3.31, 4.12, 26.4]},
+
+			{"id": "dlDoor2", "model": "dungeonDoorWall", "texture": ["dungeonDoorWallTex"], "translate": [-1.6, 0.02, 33.6], "eulerAngles": [0.0, 180.0, 0.0]},
+			{"id": "dlDoorPanel2", "model": "dungeonDoorPanel", "texture": ["dungeonDoorPanelTex"], "translate": [-0.883, 0.02, 28.779], "eulerAngles": [0.0, 180.0, 0.0]},
+
+			{"id": "dlFloor50", "model": "dungeonFloor", "texture": ["dungeonFloorTex"], "translate": [5.6, 0.02, 19.2]},
+			{"id": "dlFloor51", "model": "dungeonFloor", "texture": ["dungeonFloorTex"], "translate": [5.6, 0.02, 26.4]},
+			{"id": "dlFloor60", "model": "dungeonFloor", "texture": ["dungeonFloorTex"], "translate": [12.8, 0.02, 19.2]},
+			{"id": "dlFloor61", "model": "dungeonFloor", "texture": ["dungeonFloorTex"], "translate": [12.8, 0.02, 26.4]},
+			{"id": "dlWallN1", "model": "dungeonWall", "texture": ["dungeonWallTex"], "translate": [-1.6, 0.02, 19.2], "eulerAngles": [0.0, 90.0, 0.0]},
+			{"id": "dlWallN2", "model": "dungeonWall", "texture": ["dungeonWallTex"], "translate": [5.6, 0.02, 19.2], "eulerAngles": [0.0, 90.0, 0.0]},
+			{"id": "dlWallS1", "model": "dungeonWall", "texture": ["dungeonWallTex"], "translate": [5.6, 0.02, 33.6], "eulerAngles": [0.0, 270.0, 0.0]},
+			{"id": "dlWallS2", "model": "dungeonWall", "texture": ["dungeonWallTex"], "translate": [12.8, 0.02, 33.6], "eulerAngles": [0.0, 270.0, 0.0]},
+			{"id": "dlDoor", "model": "dungeonDoorWall", "texture": ["dungeonDoorWallTex"], "translate": [-1.6, 0.02, 26.4], "eulerAngles": [0.0, 180.0, 0.0]},
+			{"id": "dlDoorPanel", "model": "dungeonDoorPanel", "texture": ["dungeonDoorPanelTex"], "translate": [-0.883, 0.02, 21.579], "eulerAngles": [0.0, 180.0, 0.0]},
+
+			{"id": "dvFloor70", "model": "dungeonFloor", "texture": ["dungeonFloorTex"], "translate": [20.0, 0.02, 19.2]},
+			{"id": "dvFloor71", "model": "dungeonFloor", "texture": ["dungeonFloorTex"], "translate": [20.0, 0.02, 26.4]},
+			{"id": "dvCornNE", "model": "dungeonCorner", "texture": ["dungeonCornerTex"], "translate": [20.0, 0.02, 19.2], "eulerAngles": [0.0, 90.0, 0.0]},
+			{"id": "dvCornSE", "model": "dungeonCorner", "texture": ["dungeonCornerTex"], "translate": [20.0, 0.02, 33.6]},
+			{"id": "dvTorch", "model": "dungeonTorch", "texture": ["dungeonTorchTex"], "translate": [18.76, 3.5, 26.4]},
+			{"id": "dvBarrel", "model": "dungeonBarrel", "texture": ["dungeonBarrelTex"], "translate": [15.5, 0.02, 22.5], "eulerAngles": [0.0, 20.0, 0.0], "scale": [0.48, 0.48, 0.48]},
+			{"id": "dvSkull", "model": "dungeonSkull", "texture": ["dungeonSkullTex"], "translate": [15.5, 0.02, 30.5], "eulerAngles": [0.0, -20.0, 0.0], "scale": [0.46, 0.46, 0.46]},
 
 			{"id": "handTorch", "model": "dungeonTorchHeld", "texture": ["dungeonTorchTex"]}
 		]}

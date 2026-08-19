@@ -46,55 +46,100 @@
 			"type": "direct",
 			"direction": [0.25, -0.82, -0.52],
 			"color": [1.0, 0.98, 0.92],
-			"orbitSpeed": 0.0
+			"orbitSpeed": 0.0,
+			"castsShadow": true
 		},
 
-		// The two lanterns flanking the gate. The lantern mesh is 3.80 units
-		// tall (measured off its auto-fit box), so 3.5 puts the light in the
-		// lamp head rather than at the foot of the post. Offsets are in world
-		// units and the instances sit at y = 0, so this reads directly.
+		// The dungeon wall torches (five here, plus torchDV at the end of this
+		// file, six in all). Offset is the flame's position relative
+		// to its torch instance's own origin -- NOT rotated by the instance's
+		// eulerAngles (SceneLights adds it in world space), which is why the two
+		// walls need opposite-signed X: the west-wall torches are rotated 180 on
+		// Y so their cup points +X into the room, the east-wall ones are
+		// unrotated and point -X. See Flame_01/TorchSkull_01 placement in
+		// scene.json for the matching mesh offsets.
 		//
-		// Warm colour, because a flame is not white. g = 5 means the light is at
-		// full strength 5 units out and dims past that; beta = 1.4 sits between
-		// inverse-linear and inverse-square, the usual compromise from L09 slide
-		// 21 (the physically correct 2 goes too dark with no indirect light).
+		// flicker enables the per-frame sine-sum jitter in SceneLights::update
+		// (no data here beyond the switch -- amplitude defaults to
+		// flickerStrength below). g/beta close to the lanterns': same kind of
+		// small warm source.
 		{
-			"id": "lanternGateL",
+			"id": "torchW1",
 			"type": "point",
-			"instance": "lightGateL",
-			"offset": [0.0, 3.5, 0.0],
-			"color": [1.0, 0.72, 0.36],
-			"g": 5.0,
-			"beta": 1.4
+			"instance": "dhTorchW1",
+			"offset": [0.47, 0.40, 0.0],
+			"color": [1.0, 0.55, 0.20],
+			"g": 3.0,
+			"beta": 1.4,
+			"flicker": true,
+			"flickerStrength": 0.35,
+			"castsShadow": true
 		},
 		{
-			"id": "lanternGateR",
+			"id": "torchW2",
 			"type": "point",
-			"instance": "lightGateR",
-			"offset": [0.0, 3.5, 0.0],
-			"color": [1.0, 0.72, 0.36],
-			"g": 5.0,
-			"beta": 1.4
+			"instance": "dhTorchW2",
+			"offset": [0.47, 0.40, 0.0],
+			"color": [1.0, 0.55, 0.20],
+			"g": 3.0,
+			"beta": 1.4,
+			"flicker": true,
+			"flickerStrength": 0.35,
+			"castsShadow": true
+		},
+		{
+			"id": "torchE1",
+			"type": "point",
+			"instance": "dhTorchE1",
+			"offset": [-0.47, 0.40, 0.0],
+			"color": [1.0, 0.55, 0.20],
+			"g": 3.0,
+			"beta": 1.4,
+			"flicker": true,
+			"flickerStrength": 0.35,
+			"castsShadow": true
+		},
+		{
+			"id": "torchE2",
+			"type": "point",
+			"instance": "dhTorchE2",
+			"offset": [-0.47, 0.40, 0.0],
+			"color": [1.0, 0.55, 0.20],
+			"g": 3.0,
+			"beta": 1.4,
+			"flicker": true,
+			"flickerStrength": 0.35,
+			"castsShadow": true
+		},
+		{
+			"id": "torchDC",
+			"type": "point",
+			"instance": "dcTorchE",
+			"offset": [-0.47, 0.40, 0.0],
+			"color": [1.0, 0.55, 0.20],
+			"g": 3.0,
+			"beta": 1.4,
+			"flicker": true,
+			"flickerStrength": 0.35,
+			"castsShadow": true
 		},
 
-		// A spotlight on the keep's facade, mounted high on the north wall and
-		// aimed down into the courtyard. Its job here is to exercise the third
-		// light type: it is the only source in the scene with a visible edge to
-		// its pool of light, which is what makes a spot recognisable at a glance.
-		// Move it or drop it freely, nothing else depends on it.
-		//
-		// The cone angles are full angles in degrees: light is at full strength
-		// inside 34 degrees and fades to nothing by 60.
+		// The dv alcove's torch. Shadow-casting like the other five: without a
+		// map of its own shadowFactor() returns 1 for every fragment it
+		// reaches, so this one lit the dl room straight through the wall
+		// between them. NUM_SHADOW_LIGHTS went 6 -> 7 to give it a slot; the
+		// aim of its shadow camera is TORCH_SHADOW_DIR's last entry.
 		{
-			"id": "courtyardSpot",
-			"type": "spot",
-			"position": [0.0, 13.0, 4.0],
-			"direction": [0.0, -1.0, 0.35],
-			"color": [0.85, 0.88, 1.0],
-			"g": 12.0,
-			"beta": 1.2,
-			"innerAngle": 34.0,
-			"outerAngle": 60.0
+			"id": "torchDV",
+			"type": "point",
+			"instance": "dvTorch",
+			"offset": [-0.47, 0.40, 0.0],
+			"color": [1.0, 0.55, 0.20],
+			"g": 3.0,
+			"beta": 1.4,
+			"flicker": true,
+			"flickerStrength": 0.35,
+			"castsShadow": true
 		}
 	]
 }

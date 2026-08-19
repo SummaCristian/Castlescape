@@ -53,6 +53,22 @@ struct Material {
 	// the shader derives the face normal itself. Leave it off for genuinely
 	// curved surfaces (the towers), which the averaged normals suit.
 	int flatNormals = 0;
+
+	// Whether this model is drawn into the shadow maps at all. On for
+	// everything except the fixtures that HOLD a light: the torch bracket sits
+	// between the wall and its own flame and the skull hangs 22cm above it, and
+	// an occluder that close to a point light subtends a huge solid angle -- the
+	// pair of them threw a cone of shadow across most of the room, which read as
+	// the torch not lighting anything. There is no bias or resolution that fixes
+	// an occluder practically touching the light; the fix is not to treat it as
+	// one. Not a BRDF parameter like the rest of this struct, but it is per
+	// model and this is the one per-model table the render loop already has in
+	// hand (see the forModel() call in populateCommandBuffer).
+	//
+	// The cost is that the bracket casts no little shadow of its own downwards.
+	// Getting that honestly needs the light moved out of the fixture, or the
+	// fixture's own shadow faked separately.
+	bool castsShadow = true;
 };
 
 class SceneMaterials {
@@ -95,6 +111,7 @@ void SceneMaterials::readInto(const nlohmann::json &js, Material &m) {
 	if(js.contains("F0"))        m.F0 = js["F0"].get<float>();
 	if(js.contains("k"))         m.k = js["k"].get<float>();
 	if(js.contains("flatNormals")) m.flatNormals = js["flatNormals"].get<bool>() ? 1 : 0;
+	if(js.contains("castsShadow")) m.castsShadow = js["castsShadow"].get<bool>();
 
 	// roughness 0 divides by zero in GGX. Caught here rather than guarded per
 	// fragment: it's a data error.

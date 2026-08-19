@@ -15,12 +15,33 @@
 	"nodes":[
 		{
 			"mesh":0,
-			"name":"SM_WallDoor_Hole_01"
+			"name":"Flame_01"
+		}
+	],
+	"materials":[
+		{
+			"doubleSided":true,
+			"emissiveFactor":[
+				1,
+				0.44999998807907104,
+				0.07999999821186066
+			],
+			"name":"M_Flame",
+			"pbrMetallicRoughness":{
+				"baseColorFactor":[
+					1,
+					0.44999998807907104,
+					0.07999999821186066,
+					1
+				],
+				"metallicFactor":0,
+				"roughnessFactor":0.5
+			}
 		}
 	],
 	"meshes":[
 		{
-			"name":"SM_WallDoor_01.004",
+			"name":"Flame_01_mesh",
 			"primitives":[
 				{
 					"attributes":{
@@ -28,7 +49,8 @@
 						"NORMAL":1,
 						"TEXCOORD_0":2
 					},
-					"indices":3
+					"indices":3,
+					"material":0
 				}
 			]
 		}
@@ -37,68 +59,68 @@
 		{
 			"bufferView":0,
 			"componentType":5126,
-			"count":5873,
+			"count":261,
 			"max":[
-				0,
-				6.1929521560668945,
-				7.200000286102295
+				0.07938623428344727,
+				0.30000001192092896,
+				0.06608934700489044
 			],
 			"min":[
-				-1.2421382665634155,
-				-3.6887847443267674e-08,
-				0
+				-0.10328647494316101,
+				0,
+				-0.10180716216564178
 			],
 			"type":"VEC3"
 		},
 		{
 			"bufferView":1,
 			"componentType":5126,
-			"count":5873,
+			"count":261,
 			"type":"VEC3"
 		},
 		{
 			"bufferView":2,
 			"componentType":5126,
-			"count":5873,
+			"count":261,
 			"type":"VEC2"
 		},
 		{
 			"bufferView":3,
 			"componentType":5123,
-			"count":16359,
+			"count":1344,
 			"type":"SCALAR"
 		}
 	],
 	"bufferViews":[
 		{
 			"buffer":0,
-			"byteLength":70476,
+			"byteLength":3132,
 			"byteOffset":0,
 			"target":34962
 		},
 		{
 			"buffer":0,
-			"byteLength":70476,
-			"byteOffset":70476,
+			"byteLength":3132,
+			"byteOffset":3132,
 			"target":34962
 		},
 		{
 			"buffer":0,
-			"byteLength":46984,
-			"byteOffset":140952,
+			"byteLength":2088,
+			"byteOffset":6264,
 			"target":34962
 		},
 		{
 			"buffer":0,
-			"byteLength":32718,
-			"byteOffset":187936,
+			"byteLength":2688,
+			"byteOffset":8352,
 			"target":34963
 		}
 	],
 	"buffers":[
 		{
-			"byteLength":220656,
-			"uri":"SM_WallDoor_Hole_01.bin"
+			"byteLength":11040,
+			"uri":"Flame_01.bin"
 		}
 	]
 }
