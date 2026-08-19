@@ -1,21 +1,25 @@
-// VERTEX SHADER for the low-poly flame (see custom/Flame.hpp). The mesh is a
-// small hand-shaped stack of jittered rings, built once on the CPU; all the
-// motion (turbulence, flicker) is added here every frame from gubo.time, so
-// the GPU animates a completely static vertex/index buffer.
-//
-// The motion is driven by real value noise (turbulence() below), not a sum
-// of sines: sines, however many are layered, all repeat on a beat a viewer's
-// eye locks onto within a couple of seconds, which reads as a rigid shape
-// swinging rather than something fluid. Noise doesn't repeat on any beat
-// short enough to notice, which is the actual difference between "swaying"
-// and "flowing".
+// VERTEX SHADER for the flame body (see custom/Flame.hpp). This REPLACES the
+// old low-poly faceted mesh -- a small hand-built stack of jittered rings,
+// animated per-vertex by scrolling noise -- with three camera-facing
+// billboard quads. The old mesh could only ever read as a solid, hard-edged
+// wobbling shape: however much noise you feed a fixed vertex count, the
+// silhouette is still a closed polygon with no way to fray at the edges or
+// let a wisp actually detach. A billboard punches its silhouette per pixel
+// instead (see Flame.frag), which is the only way to get that. All this
+// shader does is place three flat cards in the flame's own local space and
+// let intensity/lean bend them; every bit of the actual look lives in the
+// fragment shader.
 //
 // set 0 is the SAME global uniform the main pass uses (DSglobal in main.cpp,
-// extended with a "time" field); a flame doesn't need eyePos or the light
+// extended with a "time" field); the flame doesn't need eyePos or the light
 // array, but binding the very same descriptor set means it doesn't need its
-// own copy of eyePos/lightCount/etc. kept in step.
-// set 1 is one small per-instance block (its own mvp and a seed so several
-// flames don't move in lockstep).
+// own copy of eyePos/lightCount/etc kept in step.
+// set 1 is one small per-torch block: an mvp built CPU-side from the
+// camera's own right/up/forward vectors (a billboard has to face the camera,
+// it can't ride the torch's own orientation), plus a seed so several torches
+// don't flicker in lockstep, a CPU-driven intensity envelope for flicker and
+// guttering, and a lean the CPU derives from hand motion so the flame visibly
+// responds to the torch being swung rather than just sitting there.
 
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
@@ -32,103 +36,70 @@ layout(binding = 0, set = 0) uniform GlobalUniformBufferObject {
 } gubo;
 
 layout(binding = 0, set = 1) uniform FlameUniformBufferObject {
-	mat4 mvpMat;
-	float seed;
+	mat4  mvpMat;     // billboard basis * ViewPrj, built CPU-side per frame
+	float seed;       // per-torch phase offset so torches don't move in lockstep
+	float intensity;  // CPU-driven flicker/guttering envelope, ~0.55 .. 1.35
+	vec2  lean;       // billboard-LOCAL lean from hand motion: x = along the
+	                   // billboard's right axis, y = along its forward axis
 } fubo;
 
-layout(location = 0) in vec3 inPosition;
-// 0 at the flame's base (anchored to the torch head) to 1 at its tip.
-layout(location = 1) in float inTier;
-// Fixed per-vertex random in [0,1), baked in at mesh-build time (Flame.hpp).
-// Offsets this vertex's own noise coordinate, so the crown's individual tips
-// (and the body's own rings) move independently instead of the whole flame
-// as one rigid unit.
-layout(location = 2) in float inSwaySeed;
+// Quad corner in the billboard's own local units, NOT yet placed: x spans
+// the flame's width, y spans 0 (wick) to 1 (the flame's natural full-height
+// tip) before intensity scales it down for guttering.
+layout(location = 0) in vec2 inCorner;
+// Which of the three depth-offset cards this vertex belongs to: 0 (farthest)
+// to 2 (nearest). A float, not an int, purely so it interpolates/flat-outs
+// the same way every other per-instance value here does.
+layout(location = 1) in float inLayer;
 
-// flat: no interpolation, so each triangle (built from mesh vertices that
-// never smoothly blend into each other) reads one tier/seed and shades as
-// one hard-edged facet, the low-poly look, without duplicating a vertex.
-layout(location = 0) flat out float tier;
-layout(location = 1) flat out float swaySeed;
-// NOT flat: Flame.frag needs this one to vary smoothly across the triangle
-// so dFdx/dFdy give it a real derivative to build a face normal from (the
-// same trick CookTorrance.frag uses for flatNormals -- see notes.md). Local
-// space rather than world space: this is a fake, stylized "which way does
-// this facet catch the light" shade, not real lighting, so there's no need
-// to also pass a model matrix just to get world coordinates for it.
-layout(location = 2) out vec3 fragLocalPos;
-
-// Cheap 2D value noise: hash the four corners of the cell p falls in, blend
-// with a smoothstep so there's no visible grid, no texture lookups needed.
-float hash21(vec2 p) {
-	p = fract(p * vec2(123.34, 456.21));
-	p += dot(p, p + 45.32);
-	return fract(p.x * p.y);
-}
-
-float noise2(vec2 p) {
-	vec2 i = floor(p);
-	vec2 f = fract(p);
-	float a = hash21(i);
-	float b = hash21(i + vec2(1.0, 0.0));
-	float c = hash21(i + vec2(0.0, 1.0));
-	float d = hash21(i + vec2(1.0, 1.0));
-	vec2 u = f * f * (3.0 - 2.0 * f);
-	return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
-}
-
-// Two octaves is enough detail at this triangle count -- a third would just
-// add high-frequency wobble finer than the mesh itself can resolve.
-float turbulence(vec2 p) {
-	return noise2(p) * 0.65 + noise2(p * 2.3 + 11.0) * 0.35;
-}
+// x in [-1,1] across the card, y in [0,1] up it -- the SAME normalized space
+// Flame.frag's shape function works in, regardless of how this vertex shader
+// actually scales/skews the card in world space below.
+layout(location = 0) out vec2 uv;
+// flat: one value per card, so the fragment shader can tell which of the
+// three layers a pixel belongs to without a fourth attribute.
+layout(location = 1) flat out float layer;
+layout(location = 2) flat out float intensity;
+layout(location = 3) flat out float seed;
 
 void main() {
-	float t = inTier;
-	// Per-vertex amplitude variance (0.7..1.3), not just a coordinate
-	// offset: without this every vertex still moves through the same range,
-	// just decorrelated in time, which alone still reads as mechanical --
-	// some tongues need to move further than others, not just differently.
-	float ampVar = 0.7 + 0.6 * inSwaySeed;
+	// h=0 at the wick (pinned to the torch head), h=1 at the untouched tip.
+	// Kept separate from the intensity-scaled height below because the lean
+	// formula and the fragment shader's shape mask both want the RAW
+	// fraction up the card, not the guttered one.
+	float h = inCorner.y;
 
-	// t alone (not t*t) pins only the very base (t=0, sitting in the torch
-	// cup) motionless while still giving the BODY real motion: t*t made
-	// anything below the crown all but rigid, which read as "only the top
-	// spikes move". The extra 0.55*t term keeps the curve short of fully
-	// linear, so the tip still moves hardest.
-	float sway = t * (0.45 + 0.55 * t) * ampVar;
-	vec3 p = inPosition;
+	// The three cards aren't identical rectangles stacked on the same spot:
+	// a little size variance keeps them from perfectly overlapping, which
+	// would read as one flat card face-on instead of a volume with depth.
+	// The far layer (0) is drawn slightly larger, the near one (2) slightly
+	// smaller -- for a flame that's mostly convex, that's the direction that
+	// actually looks like thickness rather than a cutout stack.
+	float layerT = inLayer / 2.0;               // 0, 0.5, 1
+	float widthScale  = mix(1.12, 0.88, layerT);
+	float heightScale = mix(1.06, 0.94, layerT);
 
-	// Each vertex gets its own noise coordinate: height (t) along one axis,
-	// a scrolling time coordinate along the other, offset per-vertex by
-	// inSwaySeed so the whole flame isn't reading the same noise field at
-	// the same point. Scrolling the SAME field for x and z (offset by a
-	// large constant so they don't correlate) rather than two unrelated
-	// fields is what keeps the motion coherent instead of jittery -- a real
-	// flame's whole cross-section drifts together, it doesn't shimmer
-	// independently per axis.
-	float tScroll = gubo.time * 0.9 + fubo.seed * 4.0 + inSwaySeed * 7.0;
-	float nx = turbulence(vec2(t * 3.2, tScroll)) - 0.5;
-	float nz = turbulence(vec2(t * 3.2 + 41.0, tScroll)) - 0.5;
-	p.x += nx * 0.30 * sway;
-	p.z += nz * 0.30 * sway;
+	vec3 pos;
+	pos.x = inCorner.x * widthScale;
+	// intensity scales the WHOLE height, not just the color/alpha: a
+	// guttering flame is visibly shorter, not just dimmer, exactly like a
+	// real one starved of fuel or caught by a draft.
+	pos.y = h * fubo.intensity * heightScale;
+	// Depth-separate the three cards along local z so they aren't coplanar;
+	// 0.10 units is small next to the flame's own ~1-unit half-width, just
+	// enough for parallax as the camera moves around the torch.
+	pos.z = (inLayer - 1.0) * 0.10;
 
-	// Flow: the noise coordinate along t runs BACKWARD against time (t*5.0
-	// minus, not plus, gubo.time), so the turbulence pattern itself travels
-	// up the flame instead of every ring just pulsing in place -- fuel
-	// visibly rising through it, which is what actually reads as "liquid"
-	// rather than a shape that merely sways and breathes as a whole.
-	float flow = turbulence(vec2(t * 5.0 - gubo.time * 3.2, inSwaySeed * 13.0 + fubo.seed)) - 0.5;
-	p.xz *= 1.0 + flow * 0.55 * sway;
-	p.y += flow * 0.05 * sway;
+	// Lean is pinned at the base and swings hardest at the tip -- h*h rather
+	// than h keeps the lower two-thirds of the flame nearly upright and
+	// concentrates the sway exactly where a real flame's is, at the loose
+	// end away from the wick.
+	pos.xz += fubo.lean * h * h;
 
-	// Flicker: a width pulse from the same kind of noise (more felt near
-	// the tip) plus a small vertical breathing.
-	float flicker = 1.0 + (turbulence(vec2(inSwaySeed * 9.0, gubo.time * 3.5)) - 0.5) * 0.4 * t;
-	p.xz *= flicker;
+	gl_Position = fubo.mvpMat * vec4(pos, 1.0);
 
-	gl_Position = fubo.mvpMat * vec4(p, 1.0);
-	tier = t;
-	swaySeed = inSwaySeed;
-	fragLocalPos = p;
+	uv = vec2(inCorner.x, h);
+	layer = inLayer;
+	intensity = fubo.intensity;
+	seed = fubo.seed;
 }

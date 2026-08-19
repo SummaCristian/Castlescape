@@ -7,10 +7,20 @@
   "configurePresets": [
     {
       "name": "default",
-      "displayName": "Default Build",
+      "displayName": "Default Build (Release)",
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug Build",
+      "binaryDir": "${sourceDir}/build-debug",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_BUILD_TYPE": "Debug"
       }
     }
   ],
@@ -18,6 +28,10 @@
     {
       "name": "default",
       "configurePreset": "default"
+    },
+    {
+      "name": "debug",
+      "configurePreset": "debug"
     }
   ]
 }

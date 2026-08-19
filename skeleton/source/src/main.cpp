@@ -88,6 +88,67 @@ struct Vertex {
 	glm::vec2 UV;
 };
 
+// Shared by all four post-processing passes (bright pass, the two blur
+// directions, composite), matching PostUniformBufferObject in BloomBright.frag
+// / BloomBlur.frag / Composite.frag field for field. Each pass gets its own
+// copy with the fields it cares about filled in; the rest are simply unread,
+// which is cheaper than maintaining four nearly identical blocks.
+//
+// No alignas() needed anywhere here: two vec2s then six 4-byte scalars is
+// already exactly what std140 lays out, with nothing to pad.
+struct PostUniformBufferObject {
+	glm::vec2 texelSize;	// 1/width, 1/height of the SOURCE texture
+	glm::vec2 blurDir;		// (1,0) or (0,1); read by BloomBlur.frag only
+	float threshold;		// bright pass: luminance above which anything blooms
+	float knee;				// bright pass: how soft the threshold's shoulder is
+	float bloomIntensity;	// composite: how much bloom is added back
+	float exposure;			// composite
+	int debugFlags;			// composite: LIGHT_DEBUG_NO_TONEMAP
+	float time;
+};
+
+// A full-screen quad vertex for those passes. Only a position: Post.vert
+// derives its UV from it.
+struct PostVertex {
+	glm::vec2 pos;
+};
+
+// Cheap 1D value noise, for the torch fire envelope in updateUniformBuffer().
+// The same shape as the noise the flame shaders use, just on the CPU: the
+// flicker has to be computed once and shared by the flame, its sparks and the
+// point light it casts (see TorchFlame), and only the CPU sees all three.
+//
+// Integer hash rather than the usual fract(sin(x)*43758.5) trick: that one is
+// famously driver-dependent in GLSL and, in C++ at double precision, simply
+// does not decorrelate well enough at the small inputs used here.
+static float fireHash(int32_t n) {
+	uint32_t h = (uint32_t)n;
+	h = (h ^ 61u) ^ (h >> 16);
+	h *= 9u;
+	h = h ^ (h >> 4);
+	h *= 0x27d4eb2du;
+	h = h ^ (h >> 15);
+	return (float)(h & 0xFFFFFFu) / (float)0xFFFFFF;	// [0, 1]
+}
+
+static float fireNoise(float x) {
+	float fi = std::floor(x);
+	float f = x - fi;
+	int32_t i = (int32_t)fi;
+	// Smoothstep between the two lattice points, so the result is C1 and the
+	// flame's brightness never steps.
+	float u = f * f * (3.0f - 2.0f * f);
+	return fireHash(i) * (1.0f - u) + fireHash(i + 1) * u;
+}
+
+// Three octaves: enough that no single frequency is audible in the result,
+// few enough that this stays a rounding error next to the rest of the frame.
+static float fireFbm(float x) {
+	return fireNoise(x) * 0.55f
+		 + fireNoise(x * 2.3f + 17.0f) * 0.30f
+		 + fireNoise(x * 4.9f + 53.0f) * 0.15f;
+}
+
 // MAIN !
 
 class Skeleton26ReplaceName : public BaseProject {
@@ -99,11 +160,68 @@ class Skeleton26ReplaceName : public BaseProject {
 
 	// Vertex formants, Pipelines [Shader couples] and Render passes
 	VertexDescriptor VD;
+	// The scene pass. No longer draws to the swapchain: it now renders into an
+	// offscreen FLOATING-POINT colour attachment, which is what makes bloom
+	// possible at all. See buildHdrAttachments() and the render graph comment
+	// on populateCommandBuffer().
 	RenderPass RP;
 	Pipeline P;
 
 	// Models, textures and Descriptors (values assigned to the uniforms)
 	DescriptorSet DSglobal;
+
+	// ---- HDR post-processing chain ----
+	//
+	// scene (RGBA16F, MSAA + resolve)
+	//   -> bright pass  (quarter res: threshold + downsample)
+	//   -> blur H       (quarter res: separable gaussian)
+	//   -> blur V       (quarter res: separable gaussian)
+	//   -> composite    (swapchain: scene + bloom, then tone map)
+	//
+	// All five are recorded into the same "main" command buffer in that order,
+	// and every offscreen pass uses ATDEP_SIMPLE, whose second dependency
+	// (subpass 0 -> EXTERNAL, COLOR_ATTACHMENT_OUTPUT -> FRAGMENT_SHADER) is
+	// exactly the barrier that makes each pass's writes visible to the next
+	// pass's texture reads. Its FIRST dependency matters just as much and is
+	// easier to miss: it is a write-after-read barrier against the PREVIOUS
+	// frame, which is what keeps frame N+1 from overwriting an offscreen
+	// target while frame N is still sampling it. There are two frames in
+	// flight and only one image per offscreen attachment, so without it that
+	// race is real.
+	RenderPass RPbright, RPblurH, RPblurV, RPcomposite;
+	VertexDescriptor VDpost;
+	// One layout for the passes that read a single texture, one for the
+	// composite, which reads the scene and the bloom result.
+	DescriptorSetLayout DSLpost1, DSLpost2;
+	Pipeline Pbright, PblurH, PblurV, Pcomposite;
+	DescriptorSet DSbright, DSblurH, DSblurV, DScomposite;
+	Model *Mpost = nullptr;
+
+	// The attachment descriptions each of the four passes is built from. Held
+	// as members rather than locals because RenderPass::init copies the vector
+	// but the per-attachment code then points back at the copy for the whole
+	// pass's lifetime -- and because onWindowResize() has to rebuild them at
+	// the new size.
+	std::vector<AttachmentProperties> hdrAtt, brightAtt, blurHAtt, blurVAtt, compositeAtt;
+
+	// The bloom chain runs at 1/BLOOM_DIV of the screen in each axis. A quarter
+	// is the usual choice and it is not only about cost: a fixed-width gaussian
+	// on a quarter-res image covers four times as much of the final picture, so
+	// downsampling is how you get a WIDE soft halo out of a cheap 9-tap kernel
+	// instead of a tight one.
+	static constexpr int BLOOM_DIV = 4;
+
+	// Bright-pass threshold and knee, in luminance. Set high enough to clear
+	// the SCENE's own peak radiance, not just 1.0: a sunlit wall with a pale
+	// albedo lands a little either side of 1.0 once the sun and the ambient
+	// term are added, so a threshold of 1.0 put a halo on every bright surface
+	// in the castle and left the whole frame looking fogged. The flame writes
+	// up to about 6, and the sparks higher, so there is a wide gap to sit in
+	// and only things that are genuinely emissive get into the bloom buffer.
+	static constexpr float BLOOM_THRESHOLD = 1.55f;
+	static constexpr float BLOOM_KNEE = 0.45f;
+	static constexpr float BLOOM_INTENSITY = 0.65f;
+	static constexpr float SCENE_EXPOSURE = 1.0f;
 
 	// To support loading assets from a scene.json file
 	Scene SC;
@@ -274,24 +392,72 @@ class Skeleton26ReplaceName : public BaseProject {
 	// right at arm's length.
 	static constexpr float HAND_TORCH_SCALE = 0.35f;
 
-	// The flame at a torch's head. See custom/Flame.hpp: a low-poly mesh,
-	// entirely GPU-animated, drawn as one more object inside the main pass.
-	// One Flame instance drives every torch in the scene (Flame::spawn),
-	// held one included -- that's what the reusable design was for.
+	// The flame at a torch's head. See custom/Flame.hpp: camera-facing
+	// billboard layers shaded by a procedural fire field, drawn as one more
+	// object inside the main pass. One Flame instance drives every torch in
+	// the scene (Flame::spawn), held one included -- that's what the reusable
+	// design was for.
 	Flame flame;
 
 	// One entry per torch that got a flame, filled once in localInit() (see
 	// addTorchFlame there) and walked every frame in updateUniformBuffer()
-	// to update that flame's transform, its glow billboard and its point
-	// light. `anchor` is in the TORCH MODEL's own local space (i.e. before
-	// whatever instance transform places it in the world); `inst->Wm *
-	// vec4(anchor,1)` gives the flame's world POSITION, but not its
-	// orientation -- see FLAME_WORLD_SCALE below for why the flame doesn't
-	// otherwise ride the instance's Wm the way the torch mesh itself does.
+	// to update that flame's transform, its sparks and its point light.
+	// `anchor` is in the TORCH MODEL's own local space (i.e. before whatever
+	// instance transform places it in the world); `inst->Wm * vec4(anchor,1)`
+	// gives the flame's world POSITION.
+	//
+	// The rest is this torch's live fire state, simulated on the CPU. It is
+	// deliberately computed HERE rather than in the shader, because three
+	// separate consumers have to agree on it: the flame billboards, the
+	// sparks, and the point light the torch casts into the scene. A flame
+	// that gutters while the light it throws on the wall holds perfectly
+	// steady reads as broken, and the light is by far the more convincing
+	// half of the effect -- so there is exactly one signal, produced once,
+	// and everything downstream reads it.
 	struct TorchFlame {
 		Instance *inst;
 		int flameId;
 		glm::vec3 anchor;
+
+		// True only for the held torch. Every wall-mounted torch stays put in
+		// world space, so its flame should billboard the ordinary CYLINDRICAL
+		// way: spin about world up to face the camera, but stay upright
+		// however the camera pitches, same as a real flame would.
+		//
+		// The held torch breaks that assumption: it is not a world object the
+		// camera walks past, it is rigidly anchored in CAMERA space
+		// (HAND_TORCH_OFFSET/HAND_TORCH_TILT_DEG, rebuilt from the camera's
+		// own front/right/up every frame in GameLogic) and visibly tilts as
+		// the camera pitches, exactly like a weapon viewmodel. A
+		// world-vertical flame sitting on top of a shaft that tilts with your
+		// view swings out of alignment with that shaft -- at enough pitch it
+		// reads as sticking out sideways from the torch instead of burning at
+		// its tip. Its flame needs to tilt WITH the torch, i.e. ride the
+		// camera's actual up/right axes (pitch included) instead of the
+		// flattened, pitch-independent ones the wall torches use.
+		bool heldByCamera = false;
+
+		// Phase offset into the noise field, so no two torches flicker or
+		// gutter together.
+		float phase = 0.0f;
+
+		// Flicker/guttering envelope, ~0.30 (mid-gutter) to ~1.40 (a flare).
+		// Scales the flame's height and brightness, its spark output, and the
+		// point light's colour and reach.
+		float intensity = 1.0f;
+
+		// Where the anchor was last frame, and a low-passed velocity derived
+		// from it. A flame is dragged by the air it moves through, so it
+		// leans AGAINST its own motion -- lagging when you turn, streaming
+		// backwards when you sprint, overshooting when you stop.
+		glm::vec3 prevPos = glm::vec3(0.0f);
+		glm::vec3 smoothedVel = glm::vec3(0.0f);
+		bool velPrimed = false;
+
+		// That lean, resolved into the billboard's own axes (x = the
+		// billboard's right, y = its forward) and expressed in the same units
+		// the flame's local geometry uses. Uploaded straight to the shader.
+		glm::vec2 lean = glm::vec2(0.0f);
 	};
 	std::vector<TorchFlame> torchFlames;
 
@@ -308,17 +474,19 @@ class Skeleton26ReplaceName : public BaseProject {
 	// as rooted instead.
 	static constexpr glm::vec3 TORCH_FLAME_ANCHOR = glm::vec3(-0.384f, 0.38f, 0.0f);
 
-	// The flame's own local geometry (Flame.hpp's H[]/Rr[] arrays) was
-	// authored by eye directly against this SAME model's proportions (it's
-	// about 1.1 units tall unscaled), so riding each instance's own uniform
-	// scale -- extracted below, since the render matrix otherwise carries
-	// NO rotation (a flame stays vertical from its own buoyancy regardless
-	// of how the torch holding it is tilted) and so carries no scale either
-	// by default -- reproduces that proportion on every torch: full size on
-	// the wall-mounted ones, shrunk to match on the held one (whose instance
-	// is scaled down to arm's-length size, HAND_TORCH_SCALE). A single fixed
-	// world-space size instead made the flame look right on the (small)
-	// held torch and comically undersized on the (full-size) wall ones.
+	// The flame's size, in the torch model's own local units, so it rides
+	// each instance's uniform scale: full size on the wall-mounted torches,
+	// shrunk to match on the held one (whose instance is scaled down to
+	// arm's-length size, HAND_TORCH_SCALE). A single fixed world-space size
+	// instead made the flame look right on the (small) held torch and
+	// comically undersized on the (full-size) wall ones.
+	//
+	// HALF_WIDTH is deliberately wider than the old mesh's widest ring: the
+	// billboard's noise field eats into its own silhouette from the edges in,
+	// so the quad has to be bigger than the fire that ends up drawn inside it
+	// or the flame gets visibly clipped to a rectangle.
+	static constexpr float FLAME_HEIGHT = 0.95f;
+	static constexpr float FLAME_HALF_WIDTH = 0.20f;
 
 	// The torch flame's point light. One color/falloff for every torch in
 	// the scene (held and wall-mounted alike): they're all the same kind of
@@ -329,12 +497,50 @@ class Skeleton26ReplaceName : public BaseProject {
 	static constexpr float TORCH_LIGHT_G = 1.6f;
 	static constexpr float TORCH_LIGHT_BETA = 1.4f;
 
-	// The glow billboard (see Flame.hpp/FlameGlow.*): world-space half-size
-	// of the quad, and how far above the flame's own anchor point its center
-	// sits, so the haze is centered on the flame's visual mass (the crown)
-	// rather than its base.
-	static constexpr float TORCH_GLOW_RADIUS = 0.3f;
-	static constexpr float TORCH_GLOW_HEIGHT_OFFSET = 0.12f;
+	// How far a torch light still gets uploaded, and how many may be live at
+	// once. CookTorrance.frag loops over every light for every fragment (times
+	// the sample count, since Starter.hpp forces per-sample shading), so an
+	// uploaded light costs a full GGX evaluation across the whole screen
+	// whether or not it can be seen.
+	//
+	// The radius is set generously on purpose: at g = 1.6 and beta = 1.4 a
+	// torch 25 units out contributes about 2% of its colour, which is already
+	// below what the ambient term hides, so nothing you could actually notice
+	// goes dark. This is headroom, not the fix -- the MSAA change in
+	// localInit() is what actually bought the frame budget back, and all six
+	// torches fit comfortably inside these limits in the current scene.
+	static constexpr float TORCH_LIGHT_CULL_DIST = 25.0f;
+	static constexpr int TORCH_LIGHT_MAX_LIVE = 8;
+
+	// Fire envelope. Real flames flicker in a band around 10-15 Hz, so the
+	// fast term is sampled at 12; the slower terms underneath it stop the
+	// result from reading as uniform hash. A plain sine was what the first
+	// version used, and the ear-equivalent problem applies to the eye: a pure
+	// period is a metronome you lock onto within about two seconds.
+	static constexpr float FLAME_FLICKER_HZ = 12.0f;
+	// Guttering: brief, irregular collapses where the flame ducks and dims
+	// almost to nothing. Driven by its own slow noise crossing a high
+	// threshold, so it happens rarely and never on a schedule.
+	static constexpr float FLAME_GUTTER_SPEED = 0.85f;
+	static constexpr float FLAME_GUTTER_LO = 0.66f;	// noise below this: no gutter
+	static constexpr float FLAME_GUTTER_HI = 0.82f;	// above this: full gutter
+	static constexpr float FLAME_GUTTER_DEPTH = 0.48f;	// how far it ducks
+
+	// Lean. TAU is how fast the smoothed velocity chases the real one: too
+	// short and the flame snaps about as rigidly as it did before, too long
+	// and it keeps leaning after you've stopped. GAIN converts world units/
+	// second into flame half-widths of lean, and MAX caps it so sprinting
+	// can't fold the flame flat onto its side.
+	static constexpr float TORCH_LEAN_TAU = 0.14f;
+	// Half-widths of tip offset per world-unit/second of hand speed. A brisk
+	// walk is around 3 units/s, so this puts the tip over by well under a
+	// fifth of the flame's own half-width -- a lean you notice as the flame
+	// reacting, not as the flame being knocked sideways.
+	static constexpr float TORCH_LEAN_PER_SPEED = 0.055f;
+	// Hard cap, in the same units. A flame that trails much further than this
+	// stops reading as fire being dragged and starts reading as a rigid object
+	// bolted to the top of the stick at an angle.
+	static constexpr float TORCH_LEAN_MAX = 0.30f;
 
 	// Seconds since startup, uploaded as gubo.time and read by Flame.vert/
 	// .frag and FlameGlow.frag. A free-running accumulator rather than a
@@ -407,9 +613,17 @@ class Skeleton26ReplaceName : public BaseProject {
 	void onWindowResize(int w, int h) {
 		std::cout << "Window resized to: " << w << " x " << h << "\n";
 		Ar = (float)w / (float)h;
-		// Update Render Pass
+		// Update Render Passes. Every one of them: the scene and the composite
+		// follow the window, the three bloom targets follow it divided down.
+		// Their attachment images are torn down and rebuilt around this by
+		// pipelinesAndDescriptorSetsCleanup()/Init(), which Starter.hpp calls
+		// on either side of a resize.
 		RP.width = w;
 		RP.height = h;
+		RPcomposite.width = w;
+		RPcomposite.height = h;
+		RPbright.width = RPblurH.width = RPblurV.width = std::max(1, w / BLOOM_DIV);
+		RPbright.height = RPblurH.height = RPblurV.height = std::max(1, h / BLOOM_DIV);
 
 		// windowWidth/windowHeight are otherwise only set once in
 		// setWindowParameters() and never refreshed here; the cheat HUD
@@ -420,8 +634,137 @@ class Skeleton26ReplaceName : public BaseProject {
 		// updates the textual output
 		txt.resizeScreen(w, h);
 		uiQuad.resizeScreen(w, h);
+		// The collider visualizer owns a swapchain-attached render pass too
+		// (Colliders.hpp), and it was never being told about resizes -- its own
+		// resizeScreen() carries a comment saying it is called when the window
+		// changes size, but nothing called it. Shrinking the window below its
+		// starting size therefore rebuilt that pass's framebuffers at the
+		// original dimensions around the new, smaller swapchain images, which
+		// the validation layer flags (VUID-VkFramebufferCreateInfo-flags-04533).
+		// Unrelated to the flame work; found while testing this path.
+		SC.ColShow.resizeScreen(w, h);
 	}
 	
+	// Fills in the attachment descriptions for all four passes of the HDR
+	// chain, at the current swapchain size. Called once from localInit() and
+	// again from onWindowResize(), since three of the five render targets are
+	// sized in pixels and have to be rebuilt when the window changes.
+	//
+	// These are spelled out here rather than taken from
+	// RenderPass::getStandardAttchmentsProperties() because none of the stock
+	// configurations is floating-point: AT_SURFACE_AA_DEPTH renders straight
+	// into the 8-bit sRGB swapchain, which caps every pixel at 1.0. That cap is
+	// precisely the thing that makes bloom impossible -- there is no such thing
+	// as "brighter than white" to find and bleed. Everything else here follows
+	// from wanting a 16-bit float target instead.
+	void buildPostAttachments() {
+		const VkFormat HDR = VK_FORMAT_R16G16B16A16_SFLOAT;
+		const VkClearValue SKY = {.color = {.float32 = {0.0f, 0.9f, 1.0f, 1.0f}}};
+		const VkClearValue BLACK = {.color = {.float32 = {0.0f, 0.0f, 0.0f, 1.0f}}};
+
+		// --- the scene pass: multisampled HDR colour, depth, and a resolve
+		// target the bloom chain and the composite can both sample.
+		hdrAtt = {
+			// Multisampled colour. storeOp DONT_CARE on purpose: nothing ever
+			// reads the multisampled image itself, only the resolve below, so
+			// writing it out to memory would be pure bandwidth -- which is the
+			// scarcest thing on the integrated GPU this runs on.
+			{COLOR_AT, HDR,
+				VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+				VK_IMAGE_ASPECT_COLOR_BIT, false, false,
+				SKY,
+				msaaSamples,
+				VK_ATTACHMENT_LOAD_OP_CLEAR,
+				VK_ATTACHMENT_STORE_OP_DONT_CARE,
+				VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+				VK_ATTACHMENT_STORE_OP_DONT_CARE,
+				VK_IMAGE_LAYOUT_UNDEFINED,
+				VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+				VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+			{DEPTH_AT, findDepthFormat(),
+				VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+				VK_IMAGE_ASPECT_DEPTH_BIT, true, false,
+				{.depthStencil = {1.0f, 0}},
+				msaaSamples,
+				VK_ATTACHMENT_LOAD_OP_CLEAR,
+				VK_ATTACHMENT_STORE_OP_STORE,
+				VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+				VK_ATTACHMENT_STORE_OP_DONT_CARE,
+				VK_IMAGE_LAYOUT_UNDEFINED,
+				VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+				VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL},
+			// The resolve. Unlike the stock AA config's, this one is NOT the
+			// swapchain image (swapChain = false): it is an ordinary sampled
+			// texture, which is what lets the passes below read the scene back.
+			{RESOLVE_AT, HDR,
+				VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+				VK_IMAGE_ASPECT_COLOR_BIT, false, false,
+				BLACK,
+				VK_SAMPLE_COUNT_1_BIT,
+				VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+				VK_ATTACHMENT_STORE_OP_STORE,
+				VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+				VK_ATTACHMENT_STORE_OP_DONT_CARE,
+				VK_IMAGE_LAYOUT_UNDEFINED,
+				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+				VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}
+		};
+
+		// --- the three bloom-chain targets. All identical: one single-sampled
+		// HDR colour attachment, no depth (a full-screen quad has nothing to
+		// depth-test against, and Vulkan simply ignores a pipeline's depth
+		// state when its subpass declares no depth attachment).
+		//
+		// loadOp DONT_CARE, not CLEAR: the quad covers every pixel, so clearing
+		// first would be writing the whole target twice.
+		std::vector<AttachmentProperties> bloomTarget = {
+			{COLOR_AT, HDR,
+				VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+				VK_IMAGE_ASPECT_COLOR_BIT, false, false,
+				BLACK,
+				VK_SAMPLE_COUNT_1_BIT,
+				VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+				VK_ATTACHMENT_STORE_OP_STORE,
+				VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+				VK_ATTACHMENT_STORE_OP_DONT_CARE,
+				VK_IMAGE_LAYOUT_UNDEFINED,
+				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+				VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}
+		};
+		brightAtt = bloomTarget;
+		blurHAtt = bloomTarget;
+		blurVAtt = bloomTarget;
+
+		// --- the composite, straight onto the swapchain image. finalLayout
+		// PRESENT_SRC_KHR because the text and HUD passes that run after this
+		// one both declare PRESENT_SRC_KHR as their initialLayout and load what
+		// is already there.
+		compositeAtt = {
+			{COLOR_AT, swapChainImageFormat,
+				VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+				VK_IMAGE_ASPECT_COLOR_BIT, false, true,
+				BLACK,
+				VK_SAMPLE_COUNT_1_BIT,
+				VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+				VK_ATTACHMENT_STORE_OP_STORE,
+				VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+				VK_ATTACHMENT_STORE_OP_DONT_CARE,
+				VK_IMAGE_LAYOUT_UNDEFINED,
+				VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+				VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}
+		};
+	}
+
+	// Width/height of the bloom chain's targets, derived from the swapchain.
+	// Clamped at 1 so a minimised or absurdly narrow window can't ask for a
+	// zero-sized image.
+	int bloomWidth() const {
+		return std::max(1, (int)swapChainExtent.width / BLOOM_DIV);
+	}
+	int bloomHeight() const {
+		return std::max(1, (int)swapChainExtent.height / BLOOM_DIV);
+	}
+
 	// Here you load and setup all your Vulkan Models and Textures.
 	// Here you also create your Descriptor set layouts and load the shaders for the pipelines
 	void localInit() {
@@ -454,24 +797,122 @@ class Skeleton26ReplaceName : public BaseProject {
 				         sizeof(glm::vec2), UV}
 				});
 
-		// initializes the render passes
-		RP.init(this);
-		// sets the blue sky
-		RP.properties[0].clearValue = {0.0f,0.9f,1.0f,1.0f};
+		// Anti-aliasing level, set BEFORE RP.init() below reads it.
+		//
+		// Starter.hpp's default is getMaxUsableSampleCount(), i.e. as many
+		// samples as the GPU will admit to supporting -- 16 on this machine.
+		// That would be merely wasteful on its own, but Starter.hpp also
+		// builds every pipeline with sampleShadingEnable = VK_TRUE and
+		// minSampleShading = 1.0f, which turns MSAA into full supersampling:
+		// the fragment shader runs once per SAMPLE, not once per pixel. At 16
+		// samples CookTorrance.frag was running 16 times per pixel, each time
+		// looping over every light with a full GGX evaluation. Measured on the
+		// Iris Xe this machine has: 25 FPS at 16 samples, 94 at 4, 175+ at 2.
+		//
+		// 4 is the compromise: still genuinely good antialiasing (and, with
+		// per-sample shading forced on, better than 4x MSAA normally is),
+		// for a bit under a quarter of the fragment cost.
+		//
+		// Assigning it here is legal without touching Starter.hpp: msaaSamples
+		// is a protected member of BaseProject, and pickPhysicalDevice() (which
+		// sets the default) runs earlier in initVulkan() than localInit() does.
+		msaaSamples = VK_SAMPLE_COUNT_4_BIT;
+
+		// initializes the render passes. The scene one no longer draws to the
+		// screen: it renders into an offscreen floating-point target which the
+		// bloom chain and the composite then read back. See
+		// buildPostAttachments() for what each attachment is and why.
+		buildPostAttachments();
+
+		// ATDEP_SIMPLE rather than the default ATDEP_SURFACE_ONLY: the scene's
+		// output is now sampled by a later pass, so it needs the dependency
+		// pair that orders a colour write against a subsequent shader read
+		// (and, in the other direction, against the NEXT frame overwriting it).
+		RP.init(this, -1, -1, -1, &hdrAtt,
+				RenderPass::getStandardDependencies(ATDEP_SIMPLE), true);
+
+		RPbright.init(this, bloomWidth(), bloomHeight(), -1, &brightAtt,
+					  RenderPass::getStandardDependencies(ATDEP_SIMPLE), true);
+		RPblurH.init(this, bloomWidth(), bloomHeight(), -1, &blurHAtt,
+					 RenderPass::getStandardDependencies(ATDEP_SIMPLE), true);
+		RPblurV.init(this, bloomWidth(), bloomHeight(), -1, &blurVAtt,
+					 RenderPass::getStandardDependencies(ATDEP_SIMPLE), true);
+		// The composite writes the swapchain and is read by nobody, so the
+		// plain surface dependency the main pass always used is right here.
+		RPcomposite.init(this, -1, -1, -1, &compositeAtt,
+						 RenderPass::getStandardDependencies(ATDEP_SURFACE_ONLY), false);
 
 		// Pipelines [Shader couples]
 		// The last array, is a vector of pointer to the layouts of the sets that will
 		// be used in this pipeline. The first element will be set 0, and so on..
-		
+
 		P.init(this, &VD, "shaders/PosNormUV.vert.spv",
 						  "shaders/CookTorrance.frag.spv",
 						  {&DSLglobal, &DSLlocal});
 
+		// The post-processing passes. Two set layouts, differing only in how
+		// many textures they read: one for the passes that transform a single
+		// image, one for the composite, which has to mix two.
+		//
+		// NOTE on the second number in a sampler binding: Starter.hpp reuses
+		// `linkSize` as the INDEX into the image-info vector handed to
+		// DescriptorSet::init, not as a byte size (see DescriptorSetLayout::
+		// init). So binding 1 reads image 0 and binding 2 reads image 1.
+		DSLpost1.init(this, {
+					{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_ALL_GRAPHICS,
+						sizeof(PostUniformBufferObject), 1},
+					{1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 1}
+				  });
+		DSLpost2.init(this, {
+					{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_ALL_GRAPHICS,
+						sizeof(PostUniformBufferObject), 1},
+					{1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 1},
+					{2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 1, 1}
+				  });
+
+		VDpost.init(this, {
+					  {0, sizeof(PostVertex), VK_VERTEX_INPUT_RATE_VERTEX}
+					}, {
+					  {0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(PostVertex, pos),
+							 sizeof(glm::vec2), OTHER}
+					});
+
+		// All four share Post.vert, which is nothing but a pass-through of the
+		// quad's own corners; only the fragment stage differs.
+		Pbright.init(this, &VDpost, "shaders/Post.vert.spv", "shaders/BloomBright.frag.spv",
+					 {&DSLpost1});
+		PblurH.init(this, &VDpost, "shaders/Post.vert.spv", "shaders/BloomBlur.frag.spv",
+					{&DSLpost1});
+		PblurV.init(this, &VDpost, "shaders/Post.vert.spv", "shaders/BloomBlur.frag.spv",
+					{&DSLpost1});
+		Pcomposite.init(this, &VDpost, "shaders/Post.vert.spv", "shaders/Composite.frag.spv",
+						{&DSLpost2});
+		// A screen-filling quad has no meaningful facing and nothing to depth
+		// test against, so culling it is one more way to end up with a black
+		// screen for no benefit.
+		Pbright.setCullMode(VK_CULL_MODE_NONE);
+		PblurH.setCullMode(VK_CULL_MODE_NONE);
+		PblurV.setCullMode(VK_CULL_MODE_NONE);
+		Pcomposite.setCullMode(VK_CULL_MODE_NONE);
+
+		// The quad itself, in NDC: Post.vert maps it straight through and
+		// derives the UV from the same corners.
+		static const PostVertex postCorners[4] = {
+			{{-1.0f, -1.0f}}, {{1.0f, -1.0f}}, {{1.0f, 1.0f}}, {{-1.0f, 1.0f}}
+		};
+		Mpost = new Model();
+		Mpost->indices = {0, 1, 2, 0, 2, 3};
+		Mpost->vertices.resize(sizeof(postCorners));
+		memcpy(Mpost->vertices.data(), postCorners, sizeof(postCorners));
+		Mpost->initMesh(this, &VDpost, false);
 
 		// sets the size of the Descriptor Set Pool (it MUST be done before loading the scene)
-		DPSZs.uniformBlocksInPool = 2;
-		DPSZs.texturesInPool = 1;
-		DPSZs.setsInPool = 2;
+		// The four post-processing sets are counted in here too: one uniform
+		// block each, and five sampled textures between them (one apiece for
+		// the bright pass and the two blurs, two for the composite).
+		DPSZs.uniformBlocksInPool = 2 + 4;
+		DPSZs.texturesInPool = 1 + 5;
+		DPSZs.setsInPool = 2 + 4;
 
 		// to support scene
 		VDRs.resize(1);
@@ -556,22 +997,36 @@ class Skeleton26ReplaceName : public BaseProject {
 		// seed just spreads each flame's sway/flicker phase (see Flame.hpp),
 		// not a real RNG: index * a large-ish irrational-ish constant keeps
 		// them decorrelated without needing a seeded generator for one call.
-		auto addTorchFlame = [&](const char *id, glm::vec3 anchor) {
+		auto addTorchFlame = [&](const char *id, glm::vec3 anchor, bool heldByCamera = false) {
 			auto it = SC.InstanceIds.find(id);
 			if(it == SC.InstanceIds.end()) {
 				std::cout << "Torch instance '" << id << "' not found, skipping its flame\n";
 				return;
 			}
 			Instance *inst = SC.I[it->second];
-			int flameId = flame.spawn((float)torchFlames.size() * 2.3971f);
+			// An irrational-ish stride rather than a round number, so the
+			// per-torch phases never land on a common multiple and start
+			// flickering in step.
+			float seed = (float)torchFlames.size() * 2.3971f;
+			int flameId = flame.spawn(seed);
 			if(flameId < 0) {
 				return;
 			}
-			torchFlames.push_back({inst, flameId, anchor});
+			TorchFlame tf{};
+			tf.inst = inst;
+			tf.flameId = flameId;
+			tf.anchor = anchor;
+			tf.heldByCamera = heldByCamera;
+			// Offsets this torch into a different part of the CPU noise field,
+			// so no two gutter at the same moment. Scaled up because fireNoise
+			// hashes on the integer lattice: a fractional offset would leave
+			// neighbouring torches sampling the same two lattice points.
+			tf.phase = seed * 37.0f;
+			torchFlames.push_back(tf);
 		};
 
 		if(handTorchInst != nullptr) {
-			addTorchFlame("handTorch", TORCH_FLAME_ANCHOR);
+			addTorchFlame("handTorch", TORCH_FLAME_ANCHOR, true);
 		}
 		// The wall-mounted dungeonTorch instances (see scene.json): two pairs
 		// flanking the hall's doorway plus one in the corridor.
@@ -625,14 +1080,44 @@ class Skeleton26ReplaceName : public BaseProject {
 	
 	// Here you create your pipelines and Descriptor Sets!
 	void pipelinesAndDescriptorSetsInit() {
-		// creates the render passes
+		// creates the render passes. All of them first: RenderPass::create()
+		// is what actually allocates each attachment's image and sampler, and
+		// the descriptor sets below have to point at those, so nothing may be
+		// bound until every pass exists.
 		RP.create();
-		
+		RPbright.create();
+		RPblurH.create();
+		RPblurV.create();
+		RPcomposite.create();
+
 		// This creates a new pipeline (with the current surface), using its shaders for the provided render pass
 		P.create(&RP);
-		
+		Pbright.create(&RPbright);
+		PblurH.create(&RPblurH);
+		PblurV.create(&RPblurV);
+		Pcomposite.create(&RPcomposite);
+
 		DSglobal.init(this, &DSLglobal, {});
-		
+
+		// Wire the chain together. Each pass reads the previous pass's colour
+		// attachment as an ordinary texture; getViewAndSampler() hands back the
+		// VkDescriptorImageInfo for it, already carrying the finalLayout the
+		// render pass leaves the image in (SHADER_READ_ONLY_OPTIMAL).
+		//
+		// RP's own sampled output is its RESOLVE attachment, not its colour
+		// one -- the colour attachment is multisampled and is discarded.
+		VkDescriptorImageInfo sceneTex = RP.attachments[RP.resolveAttIdx].getViewAndSampler();
+		VkDescriptorImageInfo brightTex = RPbright.attachments[0].getViewAndSampler();
+		VkDescriptorImageInfo blurHTex = RPblurH.attachments[0].getViewAndSampler();
+		VkDescriptorImageInfo blurVTex = RPblurV.attachments[0].getViewAndSampler();
+
+		DSbright.init(this, &DSLpost1, {sceneTex});
+		DSblurH.init(this, &DSLpost1, {brightTex});
+		DSblurV.init(this, &DSLpost1, {blurHTex});
+		// The composite is the only pass that needs two: the scene at full
+		// brightness, and the blurred bloom to add on top of it.
+		DScomposite.init(this, &DSLpost2, {sceneTex, blurVTex});
+
 		// Here you define the data set
 		// If the scene has textures coming from a render pass, the corresponding element of the technique must be
 		// updated before calling SC.pipelinesAndDescriptorSetsInit();
@@ -640,20 +1125,34 @@ class Skeleton26ReplaceName : public BaseProject {
 		SC.pipelinesAndDescriptorSetsInit();
 		txt.pipelinesAndDescriptorSetsInit();
 		uiQuad.pipelinesAndDescriptorSetsInit();
-		// Same RP as the main pass: the flame draws inside it, right after
-		// the scene, so it shares the depth buffer instead of needing its
-		// own render pass the way UiQuad's 2D overlay does.
+		// Same RP as the scene: the flame draws inside it, right after the
+		// scene geometry, so it shares the depth buffer instead of needing its
+		// own render pass the way UiQuad's 2D overlay does -- and so its
+		// over-1.0 colours land in the HDR attachment where bloom can find
+		// them.
 		flame.pipelinesAndDescriptorSetsInit(&RP);
 	}
 
 	// Here you destroy your pipelines and Descriptor Sets!
 	void pipelinesAndDescriptorSetsCleanup() {
 		P.cleanup();
+		Pbright.cleanup();
+		PblurH.cleanup();
+		PblurV.cleanup();
+		Pcomposite.cleanup();
 
 		RP.cleanup();
-		
+		RPbright.cleanup();
+		RPblurH.cleanup();
+		RPblurV.cleanup();
+		RPcomposite.cleanup();
+
 		DSglobal.cleanup();
-		
+		DSbright.cleanup();
+		DSblurH.cleanup();
+		DSblurV.cleanup();
+		DScomposite.cleanup();
+
 		SC.pipelinesAndDescriptorSetsCleanup();
 		txt.pipelinesAndDescriptorSetsCleanup();
 		uiQuad.pipelinesAndDescriptorSetsCleanup();
@@ -665,10 +1164,24 @@ class Skeleton26ReplaceName : public BaseProject {
 	void localCleanup() {
 		DSLlocal.cleanup();
 		DSLglobal.cleanup();
+		DSLpost1.cleanup();
+		DSLpost2.cleanup();
+
+		if(Mpost != nullptr) {
+			Mpost->cleanup();
+		}
 
 		P.destroy();
+		Pbright.destroy();
+		PblurH.destroy();
+		PblurV.destroy();
+		Pcomposite.destroy();
 
 		RP.destroy();
+		RPbright.destroy();
+		RPblurH.destroy();
+		RPblurV.destroy();
+		RPcomposite.destroy();
 
 		// Before SC.localCleanup(): that frees the colliders scene.json created, which
 		// colliderSet also points at. It only deletes the ones it allocated itself, but
@@ -693,15 +1206,35 @@ class Skeleton26ReplaceName : public BaseProject {
 	}
 
 	void populateCommandBuffer(VkCommandBuffer commandBuffer, int currentImage) {
-		
-		// Offscreen pass - always required
-		// begin standard pass
-		RP.begin(commandBuffer, currentImage);
+		// The whole HDR chain goes into this one command buffer, in order.
+		// Ordering between the passes is handled by their render pass
+		// dependencies rather than by explicit barriers -- see the comment on
+		// the RPbright/RPblurH/RPblurV members. The text and HUD passes are
+		// separate command buffers submitted after this one (submit orders
+		// 10000 and 9000 against this one's 0), so they end up drawing on top
+		// of the composited frame.
 
+		// 1. The scene, into the offscreen HDR target.
+		RP.begin(commandBuffer, currentImage);
 		SC.populateCommandBuffer(commandBuffer, 0, currentImage);
 		flame.populateCommandBuffer(commandBuffer, currentImage);
-
 		RP.end(commandBuffer);
+
+		// 2-5. Four full-screen quads: threshold, blur across, blur down,
+		// then mix the result back over the scene and tone map.
+		auto fullScreenPass = [&](RenderPass &pass, Pipeline &pipe, DescriptorSet &ds) {
+			pass.begin(commandBuffer, currentImage);
+			pipe.bind(commandBuffer);
+			Mpost->bind(commandBuffer);
+			ds.bind(commandBuffer, pipe, 0, currentImage);
+			vkCmdDrawIndexed(commandBuffer, (uint32_t)Mpost->indices.size(), 1, 0, 0, 0);
+			pass.end(commandBuffer);
+		};
+
+		fullScreenPass(RPbright, Pbright, DSbright);
+		fullScreenPass(RPblurH, PblurH, DSblurH);
+		fullScreenPass(RPblurV, PblurV, DSblurV);
+		fullScreenPass(RPcomposite, Pcomposite, DScomposite);
 	}
 
 	// Here is where you update the uniforms.
@@ -730,6 +1263,154 @@ class Skeleton26ReplaceName : public BaseProject {
 			gubo.lights[i] = lights[i];
 		}
 
+		// The camera's world position, needed below to cull torch lights by
+		// distance, and again by the flame billboards to work out which way to
+		// face. Pulled up here from where it used to sit (just before the
+		// DSglobal.map() call) so both have it.
+		const glm::mat4 camToWorld = glm::inverse(View);
+		const glm::vec3 eyePos = glm::vec3(camToWorld[3]);
+
+		// The cylindrical billboard basis every flame uses this frame, taken
+		// from the CAMERA's own right axis rather than from each flame's
+		// individual eye->anchor direction.
+		//
+		// Deriving it per-flame as cross(worldUp, eyePos - anchor) is the
+		// textbook cylindrical billboard, and it behaves for a torch bolted to
+		// a wall a few units away. It falls apart for the torch held in the
+		// player's own hand. That anchor sits barely a unit from the eye and is
+		// placed in CAMERA space (HAND_TORCH_OFFSET), so pitching up or down
+		// swings it bodily around the eye: its HORIZONTAL offset from the eye
+		// shrinks toward zero, and at the pitch where the torch passes directly
+		// over (or under) the camera it changes sign. The yaw derived from it
+		// therefore whips through 180 degrees -- which is the flame visibly
+		// spinning when you look up or down -- and just either side of the
+		// crossing that horizontal vector is near zero length, so its direction
+		// is numerical noise before it even flips.
+		//
+		// The camera's right axis has neither problem. This camera is built
+		// yaw-then-pitch with no roll (right = cross(front, worldUp) in
+		// GameLogic), so it is exactly horizontal at every pitch, never
+		// degenerates, and turns only with yaw -- which is the one rotation a
+		// standing flame should follow. Facing the view PLANE rather than the
+		// view POINT is the standard billboard choice anyway: it is what stops
+		// a billboard from slowly rotating as it slides across the screen, and
+		// at torch distances the two are visually indistinguishable.
+		glm::vec3 bbRight = glm::vec3(camToWorld[0]);
+		bbRight.y = 0.0f;
+		if(glm::dot(bbRight, bbRight) > 1e-8f) {
+			bbRight = glm::normalize(bbRight);
+		} else {
+			// Unreachable while pitch is clamped to +/-89 degrees, but a
+			// billboard with a zero-length basis vector collapses to a line,
+			// so it gets an arbitrary valid axis rather than a NaN.
+			bbRight = glm::vec3(1.0f, 0.0f, 0.0f);
+		}
+		const glm::vec3 bbUp = glm::vec3(0.0f, 1.0f, 0.0f);
+		// Points back toward the eye, so the flame's local +z is "toward the
+		// camera" exactly as Flame.vert's layer offset assumes.
+		const glm::vec3 bbFwd = glm::cross(bbRight, bbUp);
+
+		// A second basis for the HELD torch only (TorchFlame::heldByCamera):
+		// the camera's ACTUAL up/right/forward, pitch included, straight off
+		// camToWorld's columns (View is built with no roll, so these are
+		// already orthonormal: column 0 is the camera's right, column 1 its
+		// up, column 2 the local +Z axis, which points from the scene back
+		// toward the eye -- the same "toward camera" sense bbFwd above has).
+		//
+		// The held torch is not a world object the camera walks past, it is
+		// welded to the camera itself (see TorchFlame::heldByCamera), and
+		// visibly tilts as the camera pitches. A flame that stays
+		// world-vertical on top of a shaft that tilts with the view swings out
+		// of alignment with it -- past a fairly small pitch it reads as
+		// sticking out sideways from the torch instead of burning at its tip,
+		// which is worse than the spin the cylindrical basis was built to fix.
+		// Tying the flame to the SAME basis the torch mesh itself rides
+		// (camera-local, pitch included) keeps the two rigidly aligned at
+		// every pitch, and since this basis is read directly off the view
+		// matrix it can't degenerate or flip the way a per-flame eye-vector
+		// could.
+		const glm::vec3 handBbRight = glm::normalize(glm::vec3(camToWorld[0]));
+		const glm::vec3 handBbUp    = glm::normalize(glm::vec3(camToWorld[1]));
+		const glm::vec3 handBbFwd   = glm::normalize(glm::vec3(camToWorld[2]));
+
+		animTime += deltaT;
+
+		// Advance every torch's fire state before anything reads it, so the
+		// flame, its sparks and its light are all driven by the same envelope
+		// within the same frame (see the TorchFlame struct).
+		for(TorchFlame &tf : torchFlames) {
+			// Flicker: a fast ~12 Hz term for the visible dance, a slow term
+			// under it so the flame also breathes over seconds, and a middle
+			// one to stop the two from reading as separate layers.
+			float t = animTime + tf.phase;
+			float fast   = fireFbm(t * FLAME_FLICKER_HZ);
+			float middle = fireFbm(t * 3.1f + 7.0f);
+			float slow   = fireFbm(t * 0.6f + 91.0f);
+			float n = 0.50f * fast + 0.15f * middle + 0.35f * slow;	// [0,1]
+
+			// Guttering, applied on top: a separate slow noise crossing a high
+			// threshold, so a flame occasionally ducks hard and recovers
+			// rather than dipping on any regular beat.
+			float gut = fireFbm(t * FLAME_GUTTER_SPEED + 311.0f);
+			float gutter = glm::smoothstep(FLAME_GUTTER_LO, FLAME_GUTTER_HI, gut);
+
+			tf.intensity = glm::clamp((0.72f + 0.62f * n) * (1.0f - FLAME_GUTTER_DEPTH * gutter),
+									  0.30f, 1.40f);
+
+			// Lean. A flame is dragged by the air it moves through, so it
+			// leans AGAINST its own velocity: the world-space lean vector is
+			// just the smoothed velocity negated. Only the horizontal part --
+			// riding a lift up or down doesn't bend a flame sideways.
+			glm::vec3 pos = glm::vec3(tf.inst->Wm * glm::vec4(tf.anchor, 1.0f));
+			if(!tf.velPrimed) {
+				// First frame: no previous position to difference against, and
+				// the instance may still be sitting at its scene.json
+				// placeholder, which would read as an enormous velocity.
+				tf.prevPos = pos;
+				tf.velPrimed = true;
+			}
+			glm::vec3 vel = (pos - tf.prevPos) / std::max(deltaT, 1e-4f);
+			tf.prevPos = pos;
+
+			// Exponential smoothing, framerate-independent: without it the
+			// flame would twitch on every single-frame jolt in the walking bob
+			// rather than swinging through it.
+			float a = 1.0f - std::exp(-deltaT / TORCH_LEAN_TAU);
+			tf.smoothedVel += (vel - tf.smoothedVel) * a;
+
+			// Against its own motion: a flame is bent by the air it is being
+			// dragged through, so it trails behind the hand carrying it.
+			glm::vec3 leanWorld = -tf.smoothedVel;
+			leanWorld.y = 0.0f;
+
+			// Resolve into the billboard's own axes -- the SAME basis this
+			// torch's quads are actually built with below (cylindrical for a
+			// wall torch, camera-locked for the held one via heldByCamera),
+			// not a second per-flame copy. The lean is uploaded in
+			// billboard-local units, so resolving it against a different
+			// basis than the one the quads use would make it lean in the
+			// wrong direction.
+			const glm::vec3 &leanRight = tf.heldByCamera ? handBbRight : bbRight;
+			const glm::vec3 &leanFwd   = tf.heldByCamera ? handBbFwd   : bbFwd;
+
+			// Straight from speed to half-widths of tip offset.
+			//
+			// This deliberately does NOT divide by the flame's world half-width,
+			// which is what the first attempt did and why the flame ended up
+			// permanently folded over. The held torch's half-width is about
+			// 0.07 world units, so dividing by it multiplied every velocity by
+			// ~14: merely turning on the spot swings the torch through roughly
+			// 2 units/s, which saturated the lean to its cap and pinned it
+			// there. It also made the effect scale-dependent in the wrong
+			// direction -- the small held torch reacted three times harder than
+			// a full-size wall one, when they should behave identically.
+			tf.lean = glm::vec2(glm::dot(leanWorld, leanRight), glm::dot(leanWorld, leanFwd))
+					  * TORCH_LEAN_PER_SPEED;
+			if(glm::length(tf.lean) > TORCH_LEAN_MAX) {
+				tf.lean = glm::normalize(tf.lean) * TORCH_LEAN_MAX;
+			}
+		}
+
 		// Torch flames' point lights. NOT going through SceneLights/
 		// lights.json's own "instance"+"offset" anchoring: that reads the
 		// instance's Wm once, at SceneLights::init() time, which is exactly
@@ -739,23 +1420,52 @@ class Skeleton26ReplaceName : public BaseProject {
 		// placeholder scene.json transform happened to be, typically the
 		// origin). So instead: appended straight into gubo here, every
 		// frame, from the same Wm the flame itself now rides.
-		for(const TorchFlame &tf : torchFlames) {
-			if(gubo.lightCount >= MAX_LIGHTS) {
-				break;
+		//
+		// Culled by distance and capped in count, nearest first: every light
+		// in gubo costs a full BRDF evaluation for every fragment of every
+		// object, multiplied by the sample count. See TORCH_LIGHT_CULL_DIST
+		// on why dropping the far ones is invisible.
+		{
+			// Index + squared distance, so the sort doesn't pay for a sqrt it
+			// does not need.
+			std::vector<std::pair<float, const TorchFlame *>> nearest;
+			nearest.reserve(torchFlames.size());
+			const float cullSq = TORCH_LIGHT_CULL_DIST * TORCH_LIGHT_CULL_DIST;
+			for(const TorchFlame &tf : torchFlames) {
+				glm::vec3 worldPos = glm::vec3(tf.inst->Wm * glm::vec4(tf.anchor, 1.0f));
+				glm::vec3 d = worldPos - eyePos;
+				float dSq = glm::dot(d, d);
+				if(dSq <= cullSq) {
+					nearest.push_back({dSq, &tf});
+				}
 			}
-			glm::vec3 worldPos = glm::vec3(tf.inst->Wm * glm::vec4(tf.anchor, 1.0f));
+			std::sort(nearest.begin(), nearest.end(),
+					  [](const auto &a, const auto &b) { return a.first < b.first; });
 
-			LightData L{};
-			L.pos = worldPos;
-			L.dir = glm::vec3(0.0f, -1.0f, 0.0f);	// unused for a point light
-			L.color = TORCH_LIGHT_COLOR;
-			L.g = TORCH_LIGHT_G;
-			L.beta = TORCH_LIGHT_BETA;
-			L.cosIn = 1.0f;
-			L.cosOut = 0.0f;
-			L.type = LIGHT_POINT;
+			int live = 0;
+			for(const auto &entry : nearest) {
+				if(gubo.lightCount >= MAX_LIGHTS || live >= TORCH_LIGHT_MAX_LIVE) {
+					break;
+				}
+				const TorchFlame &tf = *entry.second;
 
-			gubo.lights[gubo.lightCount++] = L;
+				LightData L{};
+				L.pos = glm::vec3(tf.inst->Wm * glm::vec4(tf.anchor, 1.0f));
+				L.dir = glm::vec3(0.0f, -1.0f, 0.0f);	// unused for a point light
+				// The same envelope the flame itself is drawn with. Brightness
+				// rides on colour and reach rides on g, and both are needed:
+				// colour alone makes the lit area pulse in place, g alone makes
+				// it grow and shrink without changing how hot it looks.
+				L.color = TORCH_LIGHT_COLOR * tf.intensity;
+				L.g = TORCH_LIGHT_G * (0.88f + 0.12f * tf.intensity);
+				L.beta = TORCH_LIGHT_BETA;
+				L.cosIn = 1.0f;
+				L.cosOut = 0.0f;
+				L.type = LIGHT_POINT;
+
+				gubo.lights[gubo.lightCount++] = L;
+				live++;
+			}
 		}
 
 		// By value: with the Ambient Light cheat off there is no stored ambient
@@ -774,31 +1484,86 @@ class Skeleton26ReplaceName : public BaseProject {
 		if(!cheats.specularEnabled) gubo.debugFlags |= LIGHT_DEBUG_NO_SPECULAR;
 		if(!cheats.toneMapEnabled)  gubo.debugFlags |= LIGHT_DEBUG_NO_TONEMAP;
 
-		gubo.eyePos = glm::vec3(glm::inverse(View)[3]);
-
-		animTime += deltaT;
+		// Both computed further up, before the torch fire state that needs them.
+		gubo.eyePos = eyePos;
 		gubo.time = animTime;
 
 		DSglobal.map(currentImage, &gubo, 0);
 
-		// Each flame's render matrix uses only its torch's WORLD POSITION
-		// (inst->Wm * anchor), never its rotation: a flame stands upright
-		// from its own buoyancy no matter how the torch holding it is tilted
-		// or held, so inheriting the instance's full Wm here (as the flame
-		// used to) dragged it sideways with the torch, most visibly on the
-		// wall sconces (mounted at an angle) and the held one (grip tilt +
-		// walking bob roll). FLAME_WORLD_SCALE stands in for the scale that
-		// rotation-inheriting matrix would otherwise have carried.
-		//
-		// The glow billboard needs its own basis on top of that: it has to
-		// face the camera rather than stand upright, so its right/up come
-		// from View's own rotation (row 0/1 of a lookAt matrix are the
-		// camera's world-space right/up -- glm is column-major, so that's
-		// View[col][row] with row/col swapped from the usual read).
-		glm::vec3 worldRight = glm::vec3(View[0][0], View[1][0], View[2][0]);
-		glm::vec3 worldUp    = glm::vec3(View[0][1], View[1][1], View[2][1]);
-		glm::vec3 worldFwd   = glm::vec3(View[0][2], View[1][2], View[2][2]);
+		// The four post-processing passes. Each one's texelSize is that of the
+		// texture it READS, not the one it writes, since it is used to step
+		// from one source texel to the next.
+		{
+			const glm::vec2 fullTexel = glm::vec2(1.0f / (float)swapChainExtent.width,
+												  1.0f / (float)swapChainExtent.height);
+			const glm::vec2 bloomTexel = glm::vec2(1.0f / (float)bloomWidth(),
+												   1.0f / (float)bloomHeight());
 
+			PostUniformBufferObject post{};
+			post.time = animTime;
+			post.threshold = BLOOM_THRESHOLD;
+			post.knee = BLOOM_KNEE;
+			post.bloomIntensity = BLOOM_INTENSITY;
+			post.exposure = SCENE_EXPOSURE;
+			post.debugFlags = gubo.debugFlags;
+
+			// Bright pass: reads the full-resolution scene and writes the
+			// quarter-res bloom target, so it steps in full-res texels.
+			post.texelSize = fullTexel;
+			post.blurDir = glm::vec2(0.0f);
+			DSbright.map(currentImage, &post, 0);
+
+			// The two blur directions. Same shader, same kernel; the only
+			// difference between them is this vector, which is why there is one
+			// BloomBlur.frag rather than two nearly identical ones.
+			post.texelSize = bloomTexel;
+			post.blurDir = glm::vec2(1.0f, 0.0f);
+			DSblurH.map(currentImage, &post, 0);
+
+			post.blurDir = glm::vec2(0.0f, 1.0f);
+			DSblurV.map(currentImage, &post, 0);
+
+			// Composite: samples both textures with plain normalised UVs, so
+			// the texel size is not read at all. The tone map that used to live
+			// at the end of CookTorrance.frag now happens here instead, which
+			// is why debugFlags has to reach this pass -- the Tone Mapping
+			// cheat toggles it.
+			post.texelSize = fullTexel;
+			post.blurDir = glm::vec2(0.0f);
+			DScomposite.map(currentImage, &post, 0);
+		}
+
+		// Each flame's render matrix is one of the two billboard bases built
+		// once near the top of this function, translated and scaled to that
+		// flame's anchor:
+		//
+		//   - Wall torches (heldByCamera == false) get the CYLINDRICAL basis
+		//     (bbRight/bbUp/bbFwd): it spins about world up so the quads
+		//     always face the camera, but stays upright regardless of the
+		//     camera's pitch, because a torch bolted to a wall doesn't tilt
+		//     just because the player looks up or down.
+		//   - The held torch (heldByCamera == true) gets the CAMERA-LOCKED
+		//     basis (handBbRight/handBbUp/handBbFwd) instead: that torch tilts
+		//     WITH the camera's pitch (it's anchored in camera-local space),
+		//     so its flame has to ride the camera's actual up/right axes to
+		//     stay lined up with the shaft it's burning on top of -- a
+		//     world-vertical flame there swings out of alignment with the
+		//     torch at exactly the pitch angles that made this worth splitting
+		//     out. See TorchFlame::heldByCamera.
+		//
+		// This is also what fixes the flame not following the player's
+		// orientation at all. The old matrix was translate * scale with NO
+		// rotation at all, so the mesh's local axes stayed welded to world
+		// X/Z: turning on the spot swung the flame's own asymmetric crown
+		// around relative to the torch holding it. A camera-facing billboard
+		// has no such orientation to get wrong -- it presents the same face
+		// from every angle by construction -- so the problem stops existing
+		// rather than being corrected. What is left is the part that SHOULD
+		// respond to movement, and that now goes in deliberately as tf.lean.
+		//
+		// Local space for the shaders: x is +/-1 across the flame's half-width,
+		// y is 0 at the wick and 1 at the natural tip, z is toward the camera
+		// (used only to separate the three depth layers).
 		for(const TorchFlame &tf : torchFlames) {
 			glm::vec3 anchorWorld = glm::vec3(tf.inst->Wm * glm::vec4(tf.anchor, 1.0f));
 			// Every torch instance here uses a uniform scale (none has a
@@ -807,19 +1572,21 @@ class Skeleton26ReplaceName : public BaseProject {
 			// the scale factor, with no need to fully decompose Wm.
 			float instScale = glm::length(glm::vec3(tf.inst->Wm[0]));
 
-			glm::mat4 flameWm = glm::translate(glm::mat4(1.0f), anchorWorld)
-				* glm::scale(glm::mat4(1.0f), glm::vec3(instScale));
-			flame.update(tf.flameId, ViewPrj * flameWm, currentImage);
+			float halfWidth = FLAME_HALF_WIDTH * instScale;
+			float height = FLAME_HEIGHT * instScale;
 
-			glm::vec3 glowCenter = anchorWorld + worldUp * (TORCH_GLOW_HEIGHT_OFFSET * instScale);
-			float glowRadius = TORCH_GLOW_RADIUS * instScale;
-			glm::mat4 glowM = glm::mat4(
-				glm::vec4(worldRight * glowRadius, 0.0f),
-				glm::vec4(worldUp * glowRadius, 0.0f),
-				glm::vec4(worldFwd, 0.0f),
-				glm::vec4(glowCenter, 1.0f)
+			const glm::vec3 &right = tf.heldByCamera ? handBbRight : bbRight;
+			const glm::vec3 &up    = tf.heldByCamera ? handBbUp    : bbUp;
+			const glm::vec3 &fwd   = tf.heldByCamera ? handBbFwd   : bbFwd;
+
+			glm::mat4 billboard = glm::mat4(
+				glm::vec4(right * halfWidth, 0.0f),
+				glm::vec4(up * height, 0.0f),
+				glm::vec4(fwd * halfWidth, 0.0f),
+				glm::vec4(anchorWorld, 1.0f)
 			);
-			flame.updateGlow(tf.flameId, ViewPrj * glowM, currentImage);
+
+			flame.update(tf.flameId, ViewPrj * billboard, tf.intensity, tf.lean, currentImage);
 		}
 
 		// defines the local parameters for the uniforms
