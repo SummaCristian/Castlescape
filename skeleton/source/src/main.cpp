@@ -558,20 +558,11 @@ class Skeleton26ReplaceName : public BaseProject {
 	// bit/blade end rather than the bow/handle. If the render shows it
 	// tip-down instead, negate this to -90.
 	static constexpr glm::vec3 HAND_KEY_TILT_DEG = glm::vec3(90.0f, -20.0f, 0.0f);
-	// Relative size adjustment for the held pose ON TOP OF keyWorldScale --
-	// 1.0 means "reads the same size in your hand as it did on the table",
-	// which is the current tuning; change only this if the held key itself
-	// should look bigger/smaller than the world one, independent of
-	// keyWorldScale.
-	static constexpr float HAND_KEY_SCALE = 1.0f;
-	// No separate raw-mesh fix lives here anymore: keyWorldScale already IS
-	// the fully-authored scene.json number (raw-export correction and
-	// gameplay sizing both folded together on that side), so the held pose
-	// just multiplies it by HAND_KEY_SCALE instead of redoing any of that
-	// arithmetic by hand. Specifying scene.json's "scale" on dhKey makes
-	// Scene.hpp use it INSTEAD of the glTF node's own baked transform (see
-	// notes.md) -- which is what makes reading the authored matrix back in
-	// localInit() give the real number rather than the node's own.
+	// No separate raw-mesh fix or hand-only size lives here: the held pose
+	// reads the same size as the table/dropped one (keyWorldScale, read once
+	// in localInit() out of dhKey's own authored matrix -- see there). If a
+	// held key ever needs to look bigger/smaller than the world one, that's
+	// a multiplier to reintroduce here, not before.
 
 	// The torch held in the player's right hand. A normal scene instance
 	// (handTorch in scene.json) whose world matrix is rebuilt every frame
@@ -3160,7 +3151,7 @@ class Skeleton26ReplaceName : public BaseProject {
 			pickups[keyPickupIdx].inst->Wm = camWm
 				* glm::translate(glm::mat4(1.0f), bobbedOffset)
 				* grip
-				* glm::scale(glm::mat4(1.0f), glm::vec3(keyWorldScale * HAND_KEY_SCALE));
+				* glm::scale(glm::mat4(1.0f), glm::vec3(keyWorldScale));
 		}
 
 		return deltaT;
