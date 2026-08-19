@@ -536,11 +536,12 @@ class Skeleton26ReplaceName : public BaseProject {
 	// Edge-detection for the drop key, same reason as interactKeyWasPressed.
 	bool dropKeyWasPressed = false;
 	// World-pose scale for the key, whether sitting on a table or just
-	// dropped: the same 0.01 (raw-mesh) * 0.32 (gameplay) = 0.0032 scene.json's
-	// dhKey "scale" uses. Kept as one named constant instead of repeating
-	// 0.0032f at every drop site, and cross-referenced from scene.json's own
-	// entry so the two don't drift apart silently.
-	static constexpr float KEY_WORLD_SCALE = 0.0032f;
+	// dropped. NOT a separate authored number: read once in localInit() out
+	// of dhKey's own instance matrix (i.e. straight from scene.json's
+	// "scale"), so scene.json stays the only place that number is written --
+	// changing it there is enough, nothing in this file needs to be kept in
+	// step by hand.
+	float keyWorldScale = 1.0f;
 	// Held pose. Negative X puts it in the LEFT hand (mirrors
 	// HAND_TORCH_OFFSET's +0.5, which is the right); the torch already owns
 	// the right hand and a torch-carrying explorer would hold a found key in
@@ -549,33 +550,28 @@ class Skeleton26ReplaceName : public BaseProject {
 	// natural-looking grip -- unverified without a render, tune alongside
 	// the offset if it looks wrong.
 	static constexpr glm::vec3 HAND_KEY_OFFSET = glm::vec3(-0.40f, -0.4f, -0.9f);
-	// X = 90: the key's long axis is local Z (see KEY_MODEL_CORRECTION's
-	// comment below), and rotating 90 deg about X swings local Z onto world
+	// X = 90: the key's long axis is local Z (see the raw-mesh-scale comment
+	// below), and rotating 90 deg about X swings local Z onto world
 	// Y -- i.e. upright, tip up. The mesh's Z range is asymmetric
 	// (-90.84..20.07, in raw units), and the longer, more-negative side is
 	// what maps to +Y at this angle, which is the assumption that it's the
 	// bit/blade end rather than the bow/handle. If the render shows it
 	// tip-down instead, negate this to -90.
 	static constexpr glm::vec3 HAND_KEY_TILT_DEG = glm::vec3(90.0f, -20.0f, 0.0f);
-	// Extra gameplay scale on top of KEY_MODEL_CORRECTION's raw-mesh fix
-	// below, same 0.32 factor scene.json's dhKey "scale" applies on top of
-	// its own 0.01 (0.01 * 0.32 = 0.0032 there). Keeping the two numbers
-	// separate, both here and in scene.json, means this one can be retuned
-	// for how the key reads at arm's length without touching the fix for
-	// the raw asset's own huge export scale.
-	static constexpr float HAND_KEY_SCALE = 0.32f;
-	// The raw mesh is authored at Blender-export scale (extents run to ~110
-	// units long before this correction -- which, uncorrected, is exactly
-	// why the key first showed up enormous). It already lies naturally along
-	// its own local axes -- an earlier version of this code also replayed
-	// the glTF node's own baked 90 deg rotation, which turned out to stand
-	// the key upright instead, so only the 0.01 scale survived, here and in
-	// scene.json's dhKey "scale". Specifying any transform field there makes
+	// Relative size adjustment for the held pose ON TOP OF keyWorldScale --
+	// 1.0 means "reads the same size in your hand as it did on the table",
+	// which is the current tuning; change only this if the held key itself
+	// should look bigger/smaller than the world one, independent of
+	// keyWorldScale.
+	static constexpr float HAND_KEY_SCALE = 1.0f;
+	// No separate raw-mesh fix lives here anymore: keyWorldScale already IS
+	// the fully-authored scene.json number (raw-export correction and
+	// gameplay sizing both folded together on that side), so the held pose
+	// just multiplies it by HAND_KEY_SCALE instead of redoing any of that
+	// arithmetic by hand. Specifying scene.json's "scale" on dhKey makes
 	// Scene.hpp use it INSTEAD of the glTF node's own baked transform (see
-	// notes.md), so the held pose -- which overwrites Wm completely every
-	// frame instead of building on the world transform -- has to redo that
-	// same 0.01 fix, not just the hand placement. HAND_KEY_SCALE above is
-	// the separate, further gameplay shrink.
+	// notes.md) -- which is what makes reading the authored matrix back in
+	// localInit() give the real number rather than the node's own.
 
 	// The torch held in the player's right hand. A normal scene instance
 	// (handTorch in scene.json) whose world matrix is rebuilt every frame
@@ -815,18 +811,18 @@ class Skeleton26ReplaceName : public BaseProject {
 
 	// Walking sway: a lateral swing once per stride plus a vertical bounce
 	// at twice that frequency (one bounce per footstep), both driven by a
-	// single accumulating phase. torchBobBlend is the 0..1 sway amplitude,
+	// single accumulating phase. walkBobBlend is the 0..1 sway amplitude,
 	// eased toward 1 while walking and back to 0 at rest.
-	float torchBobPhase = 0.0f;
-	float torchBobBlend = 0.0f;
+	float walkBobPhase = 0.0f;
+	float walkBobBlend = 0.0f;
 	// Radians/second the phase advances at normal walking speed, faster
 	// while sprinting.
-	static constexpr float TORCH_BOB_SPEED = 7.0f;
-	// Sway amplitude in world units, before torchBobBlend scales it down.
-	static constexpr float TORCH_BOB_VERTICAL = 0.035f;
-	static constexpr float TORCH_BOB_LATERAL = 0.02f;
-	// How fast torchBobBlend eases toward its target.
-	static constexpr float TORCH_BOB_BLEND_TAU = 0.15f;
+	static constexpr float WALK_BOB_SPEED = 7.0f;
+	// Sway amplitude in world units, before walkBobBlend scales it down.
+	static constexpr float WALK_BOB_VERTICAL = 0.035f;
+	static constexpr float WALK_BOB_LATERAL = 0.02f;
+	// How fast walkBobBlend eases toward its target.
+	static constexpr float WALK_BOB_BLEND_TAU = 0.15f;
 
 	// A skull sitting in a torch's flame that yaws in place to face the
 	// player, updated every frame in GameLogic() -- unlike the door's angle,
@@ -1491,7 +1487,17 @@ class Skeleton26ReplaceName : public BaseProject {
 		};
 		keyPickupIdx = (int)pickups.size();
 		addPickup("dhKey");
-		if(keyPickupIdx >= (int)pickups.size()) keyPickupIdx = -1;	// addPickup skipped it
+		if(keyPickupIdx >= (int)pickups.size()) {
+			keyPickupIdx = -1;	// addPickup skipped it
+		} else {
+			// Read the uniform scale straight out of the authored world
+			// matrix -- column 0's length, since dhKey carries no rotation
+			// (see HAND_KEY_OFFSET/TILT_DEG's declaration a few hundred
+			// lines up) so Wm[0] is exactly (scale, 0, 0, 0). This is the
+			// single read that makes scene.json's "scale" on dhKey the only
+			// place that number has to live.
+			keyWorldScale = glm::length(glm::vec3(pickups[keyPickupIdx].inst->Wm[0]));
+		}
 
 		// The ghost's patrol: a closed rectangular loop around the perimeter
 		// of the west dungeon room (the one with the table), inset from the
@@ -2917,7 +2923,7 @@ class Skeleton26ReplaceName : public BaseProject {
 				hasKey = false;
 				p.inst->Wm = glm::translate(glm::mat4(1.0f), dropPos)
 							* glm::rotate(glm::mat4(1.0f), yaw, glm::vec3(0.0f, 1.0f, 0.0f))
-							* glm::scale(glm::mat4(1.0f), glm::vec3(KEY_WORLD_SCALE));
+							* glm::scale(glm::mat4(1.0f), glm::vec3(keyWorldScale));
 			}
 			dropKeyWasPressed = dropKey;
 
@@ -3103,21 +3109,21 @@ class Skeleton26ReplaceName : public BaseProject {
 		);
 
 		// Walk-bob signal shared by both hands: one accumulating phase, eased
-		// in/out by torchBobBlend so a start/stop doesn't snap the sway.
+		// in/out by walkBobBlend so a start/stop doesn't snap the sway.
 		// Originally the torch's own state, now doubles for the key since
 		// both hands swing with the same gait -- only how each hand reads
 		// the phase (see bobLateral's sign below) differs between them.
 		bool isWalking = grounded && (std::abs(m.x) > 0.01f || std::abs(m.z) > 0.01f);
 		float bobTarget = isWalking ? 1.0f : 0.0f;
-		torchBobBlend += (bobTarget - torchBobBlend) * (1.0f - std::exp(-deltaT / TORCH_BOB_BLEND_TAU));
+		walkBobBlend += (bobTarget - walkBobBlend) * (1.0f - std::exp(-deltaT / WALK_BOB_BLEND_TAU));
 		if(isWalking) {
-			torchBobPhase += TORCH_BOB_SPEED * (sprinting ? 1.4f : 1.0f) * deltaT;
+			walkBobPhase += WALK_BOB_SPEED * (sprinting ? 1.4f : 1.0f) * deltaT;
 		}
 
 		// Held torch: sits at a fixed offset from the eye, in that camera-local space.
 		if(handTorchInst != nullptr) {
-			float bobLateral = sinf(torchBobPhase) * TORCH_BOB_LATERAL * torchBobBlend;
-			float bobVertical = sinf(torchBobPhase * 2.0f) * TORCH_BOB_VERTICAL * torchBobBlend;
+			float bobLateral = sinf(walkBobPhase) * WALK_BOB_LATERAL * walkBobBlend;
+			float bobVertical = sinf(walkBobPhase * 2.0f) * WALK_BOB_VERTICAL * walkBobBlend;
 			float bobRollDeg = bobLateral * 90.0f;
 
 			glm::mat4 grip = glm::rotate(glm::mat4(1.0f), glm::radians(HAND_TORCH_TILT_DEG.x), glm::vec3(1.0f, 0.0f, 0.0f))
@@ -3142,29 +3148,19 @@ class Skeleton26ReplaceName : public BaseProject {
 		// right together (not toward/away from center), which is what the
 		// held-key sway is meant to match here.
 		if(hasKey && keyPickupIdx >= 0) {
-			float bobLateral = sinf(torchBobPhase) * TORCH_BOB_LATERAL * torchBobBlend;
-			float bobVertical = sinf(torchBobPhase * 2.0f) * TORCH_BOB_VERTICAL * torchBobBlend;
+			float bobLateral = sinf(walkBobPhase) * WALK_BOB_LATERAL * walkBobBlend;
+			float bobVertical = sinf(walkBobPhase * 2.0f) * WALK_BOB_VERTICAL * walkBobBlend;
 			float bobRollDeg = bobLateral * 90.0f;
 
 			glm::mat4 grip = glm::rotate(glm::mat4(1.0f), glm::radians(HAND_KEY_TILT_DEG.x), glm::vec3(1.0f, 0.0f, 0.0f))
 							* glm::rotate(glm::mat4(1.0f), glm::radians(HAND_KEY_TILT_DEG.y), glm::vec3(0.0f, 1.0f, 0.0f))
 							* glm::rotate(glm::mat4(1.0f), glm::radians(HAND_KEY_TILT_DEG.z + bobRollDeg), glm::vec3(0.0f, 0.0f, 1.0f));
 			glm::vec3 bobbedOffset = HAND_KEY_OFFSET + glm::vec3(bobLateral, bobVertical, 0.0f);
-			// Reproduces the raw-mesh scale fix scene.json's dhKey "scale"
-			// applies for the world pose (see KEY_MODEL_CORRECTION comment
-			// above) -- the held pose overwrites Wm from scratch instead of
-			// building on the world transform, so it has to redo that fix
-			// rather than inherit it. No extra rotation needed here (unlike
-			// an earlier version of this code): the raw mesh already lies
-			// naturally along its own local axes, which is also why
-			// scene.json's dhKey carries no "eulerAngles" of its own either.
-			glm::mat4 modelCorrection = glm::scale(glm::mat4(1.0f), glm::vec3(0.01f));
 
 			pickups[keyPickupIdx].inst->Wm = camWm
 				* glm::translate(glm::mat4(1.0f), bobbedOffset)
 				* grip
-				* glm::scale(glm::mat4(1.0f), glm::vec3(HAND_KEY_SCALE))
-				* modelCorrection;
+				* glm::scale(glm::mat4(1.0f), glm::vec3(keyWorldScale * HAND_KEY_SCALE));
 		}
 
 		return deltaT;
