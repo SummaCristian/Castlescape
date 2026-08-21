@@ -121,6 +121,11 @@
 			{"id": "dlDoor", "model": "dungeonDoorWall", "texture": ["dungeonDoorWallTex"], "translate": [-1.6, 0.02, 26.4], "eulerAngles": [0.0, 180.0, 0.0]},
 			{"id": "dlDoorPanel", "model": "dungeonDoorPanel", "texture": ["dungeonDoorPanelTex"], "translate": [-0.883, 0.02, 21.579], "eulerAngles": [0.0, 180.0, 0.0]},
 
+			{"id": "dlTorchRed",    "model": "dungeonTorch", "texture": ["dungeonTorchTex"], "translate": [4.0, 3.5, 32.36], "eulerAngles": [0.0, 270.0, 0.0]},
+			{"id": "dlTorchGreen",  "model": "dungeonTorch", "texture": ["dungeonTorchTex"], "translate": [6.5, 3.5, 32.36], "eulerAngles": [0.0, 270.0, 0.0]},
+			{"id": "dlTorchBlue",   "model": "dungeonTorch", "texture": ["dungeonTorchTex"], "translate": [9.0, 3.5, 32.36], "eulerAngles": [0.0, 270.0, 0.0]},
+			{"id": "dlTorchPurple", "model": "dungeonTorch", "texture": ["dungeonTorchTex"], "translate": [11.5, 3.5, 32.36], "eulerAngles": [0.0, 270.0, 0.0]},
+
 			{"id": "dvFloor70", "model": "dungeonFloor", "texture": ["dungeonFloorTex"], "translate": [20.0, 0.02, 19.2]},
 			{"id": "dvFloor71", "model": "dungeonFloor", "texture": ["dungeonFloorTex"], "translate": [20.0, 0.02, 26.4]},
 			{"id": "dvCornNE", "model": "dungeonCorner", "texture": ["dungeonCornerTex"], "translate": [20.0, 0.02, 19.2], "eulerAngles": [0.0, 90.0, 0.0]},

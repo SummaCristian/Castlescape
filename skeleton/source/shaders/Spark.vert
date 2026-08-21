@@ -32,6 +32,8 @@ layout(binding = 0, set = 1) uniform FlameUniformBufferObject {
 	                   // from rides the flame's actual height, see below
 	float glareBoost;  // unused by sparks: bloom already turns them into
 	                   // pinpricks, boosting them further just makes white dots
+	vec3  color;       // this flame's target hue, passed through to Spark.frag
+	                   // so sparks recolor the same way the flame body does
 } fubo;
 
 // Quad corner in the spark's own unstretched local units, both axes in
@@ -60,6 +62,7 @@ layout(location = 2) flat out float gate;
 // Gentle brightness coupling to the flame envelope, applied in Spark.frag on
 // top of the per-spark life ramp.
 layout(location = 3) flat out float glow;
+layout(location = 4) flat out vec3 color;
 
 // Cheap 1D hash, Dave Hoskins' construction: three fract/multiply rounds are
 // enough to decorrelate the handful of quantities derived from inSeed below
@@ -167,4 +170,5 @@ void main() {
 
 	gl_Position = fubo.mvpMat * vec4(center + local, z, 1.0);
 	quv = inCorner;
+	color = fubo.color;
 }

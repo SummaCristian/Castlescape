@@ -57,10 +57,11 @@ struct SparkVertex {
 };
 
 // Matches FlameUniformBufferObject in Flame.vert/Spark.vert field for field.
-// 64 + 4 + 4 + 8 + 4 + 4 = 88 bytes: `lean` lands at offset 72, which is
-// 8-aligned as std140 requires for a vec2, and the two trailing floats sit at
-// 80/84 -- glm and std140 agree on every offset, so no alignas and no trailing
-// pad -- the same concern notes.md walks through for LightData and the main
+// 64 + 4 + 4 + 8 + 4 + 4 = 88 bytes before `color`: `lean` lands at offset 72,
+// which is 8-aligned as std140 requires for a vec2, and the two trailing
+// floats sit at 80/84. `color` then needs a 16-byte-aligned offset (std140's
+// rule for vec3), so alignas(16) pads it out to offset 96 rather than 88 --
+// the same concern notes.md walks through for LightData and the main
 // UniformBufferObject.
 struct FlameUniformBufferObject {
 	glm::mat4 mvpMat;
@@ -72,6 +73,9 @@ struct FlameUniformBufferObject {
 						// over a third of a second, it doesn't teleport
 	float glareBoost;	// 1.0 + per-flame stare-at emphasis (see main.cpp's
 						// glare block); multiplies the HDR output
+	alignas(16) glm::vec3 color;	// this flame's target hue (see Flame.frag);
+									// defaults to the realistic torch orange,
+									// same source main.cpp's cast light reads
 };
 
 class Flame {
@@ -111,11 +115,16 @@ class Flame {
 	//   glareBoost   1.0 + stare-at emphasis for THIS flame, so a torch being
 	//                looked at dead-on overdrives its own HDR output on top
 	//                of the global exposure/bloom swell.
+	//   color        this flame's target hue, hue-rotated onto the fire
+	//                gradient in Flame.frag (see main.cpp's TorchFlame::color
+	//                for how a torch picks one; the cast point light reads
+	//                the same value, so flame and light always agree).
 	//
 	// Same idea as re-mapping a scene instance's UBO: the command buffer is
 	// recorded once, only the buffer contents change per frame.
 	void update(int id, const glm::mat4 &mvpMat, float intensity, float heightScale,
-				const glm::vec2 &lean, float glareBoost, int currentImage);
+				const glm::vec2 &lean, float glareBoost, const glm::vec3 &color,
+				int currentImage);
 
 	void pipelinesAndDescriptorSetsInit(RenderPass *_RP);
 	void pipelinesAndDescriptorSetsCleanup();
@@ -336,7 +345,8 @@ int Flame::spawn(float seed) {
 }
 
 void Flame::update(int id, const glm::mat4 &mvpMat, float intensity, float heightScale,
-				   const glm::vec2 &lean, float glareBoost, int currentImage) {
+				   const glm::vec2 &lean, float glareBoost, const glm::vec3 &color,
+				   int currentImage) {
 	if(id < 0 || id >= (int)DS.size()) {
 		return;
 	}
@@ -347,6 +357,7 @@ void Flame::update(int id, const glm::mat4 &mvpMat, float intensity, float heigh
 	fubo.lean = lean;
 	fubo.heightScale = heightScale;
 	fubo.glareBoost = glareBoost;
+	fubo.color = color;
 	DS[id].map(currentImage, &fubo, 0);
 }
 

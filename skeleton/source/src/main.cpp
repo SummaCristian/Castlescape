@@ -722,6 +722,14 @@ class Skeleton26ReplaceName : public BaseProject {
 		glm::vec3 smoothedVel = glm::vec3(0.0f);
 		bool velPrimed = false;
 
+		// This torch's fire color: drives both the flame's own gradient
+		// (Flame.frag hue-rotates onto it, see recolorStop() there) and the
+		// point light it casts (see the light loop below) -- one signal for
+		// both, same reasoning as `intensity`. Defaults to the realistic
+		// torch orange, so any addTorchFlame() call that doesn't pass a
+		// color is untouched by this.
+		glm::vec3 color = TORCH_LIGHT_COLOR;
+
 		// That lean, resolved into the billboard's own axes (x = the
 		// billboard's right, y = its forward) and expressed in the same units
 		// the flame's local geometry uses. Uploaded straight to the shader.
@@ -1597,14 +1605,20 @@ class Skeleton26ReplaceName : public BaseProject {
 		// exists), but its address is stable, so capturing a pointer to it
 		// now and reading through it later is safe -- same reasoning as
 		// handTorchInst above.
-		flame.init(this, &DSLglobal, &DSglobal);
+		//
+		// maxInstances raised past the default 8: held torch + 6 wall
+		// torches + 4 colored dl torches is already 11, and spawn() past
+		// this cap fails silently (see addTorchFlame below), leaving a
+		// torch mesh with no fire and no light instead of an error.
+		flame.init(this, &DSLglobal, &DSglobal, 16);
 
 		lightDebug.init(this);
 
 		// seed just spreads each flame's sway/flicker phase (see Flame.hpp),
 		// not a real RNG: index * a large-ish irrational-ish constant keeps
 		// them decorrelated without needing a seeded generator for one call.
-		auto addTorchFlame = [&](const char *id, glm::vec3 anchor, bool heldByCamera = false) {
+		auto addTorchFlame = [&](const char *id, glm::vec3 anchor, bool heldByCamera = false,
+								 glm::vec3 color = TORCH_LIGHT_COLOR) {
 			auto it = SC.InstanceIds.find(id);
 			if(it == SC.InstanceIds.end()) {
 				std::cout << "Torch instance '" << id << "' not found, skipping its flame\n";
@@ -1624,6 +1638,7 @@ class Skeleton26ReplaceName : public BaseProject {
 			tf.flameId = flameId;
 			tf.anchor = anchor;
 			tf.heldByCamera = heldByCamera;
+			tf.color = color;
 			// Offsets this torch into a different part of the CPU noise field,
 			// so no two gutter at the same moment. Scaled up because fireNoise
 			// hashes on the integer lattice: a fractional offset would leave
@@ -1644,6 +1659,15 @@ class Skeleton26ReplaceName : public BaseProject {
 		addTorchFlame("dhTorchE2", TORCH_FLAME_ANCHOR);
 		addTorchFlame("dcTorchE", TORCH_FLAME_ANCHOR);
 		addTorchFlame("dvTorch", TORCH_FLAME_ANCHOR);
+
+		// A small cluster of decorative colored torches in the dl room (the
+		// one room along the dungeon's chain with no torches/decor of its
+		// own): a visible demo of the color parameter above, distinct from
+		// every realistic-orange torch elsewhere.
+		addTorchFlame("dlTorchRed",    TORCH_FLAME_ANCHOR, false, glm::vec3(1.00f, 0.10f, 0.05f));
+		addTorchFlame("dlTorchGreen",  TORCH_FLAME_ANCHOR, false, glm::vec3(0.15f, 1.00f, 0.20f));
+		addTorchFlame("dlTorchBlue",   TORCH_FLAME_ANCHOR, false, glm::vec3(0.15f, 0.45f, 1.00f));
+		addTorchFlame("dlTorchPurple", TORCH_FLAME_ANCHOR, false, glm::vec3(0.65f, 0.15f, 1.00f));
 
 		// Surface parameters for the BRDF, one per model.
 		materials.init(&SC, "assets/scenes/materials.json");
@@ -2448,7 +2472,7 @@ class Skeleton26ReplaceName : public BaseProject {
 				// rides on colour and reach rides on g, and both are needed:
 				// colour alone makes the lit area pulse in place, g alone makes
 				// it grow and shrink without changing how hot it looks.
-				L.color = TORCH_LIGHT_COLOR * tf.intensity;
+				L.color = tf.color * tf.intensity;
 				L.g = TORCH_LIGHT_G * (0.88f + 0.12f * tf.intensity);
 				L.beta = TORCH_LIGHT_BETA;
 				L.cosIn = 1.0f;
@@ -2646,7 +2670,7 @@ class Skeleton26ReplaceName : public BaseProject {
 			);
 
 			flame.update(tf.flameId, ViewPrj * billboard, tf.intensity, tf.heightScale,
-						 tf.lean, 1.0f + GLARE_FLAME_GAIN * tf.glare, currentImage);
+						 tf.lean, 1.0f + GLARE_FLAME_GAIN * tf.glare, tf.color, currentImage);
 		}
 
 		// defines the local parameters for the uniforms

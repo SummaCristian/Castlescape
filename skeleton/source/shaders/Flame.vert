@@ -45,6 +45,8 @@ layout(binding = 0, set = 1) uniform FlameUniformBufferObject {
 	                   // CPU chases this one much more slowly (see main.cpp's
 	                   // FLAME_HEIGHT_TAU).
 	float glareBoost;  // 1.0 + stare-at emphasis, passed through to Flame.frag
+	vec3  color;       // target hue for this flame; Flame.frag hue-rotates its
+	                   // fire gradient onto it, see custom/Flame.hpp
 } fubo;
 
 // Quad corner in the billboard's own local units, NOT yet placed: x spans
@@ -66,6 +68,7 @@ layout(location = 1) flat out float layer;
 layout(location = 2) flat out float intensity;
 layout(location = 3) flat out float seed;
 layout(location = 4) flat out float glare;
+layout(location = 5) flat out vec3 color;
 
 void main() {
 	// h=0 at the wick (pinned to the torch head), h=1 at the untouched tip.
@@ -109,4 +112,5 @@ void main() {
 	intensity = fubo.intensity;
 	seed = fubo.seed;
 	glare = fubo.glareBoost;
+	color = fubo.color;
 }

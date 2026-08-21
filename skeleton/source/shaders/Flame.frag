@@ -13,6 +13,10 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
 
+// rgb2hsv/hsv2rgb/recolorStop, shared with Spark.frag so the flame body and
+// its sparks recolor onto `color` the same way.
+#include "custom/FlameColor.glsl"
+
 // Only gubo.time is read here, but the block must be declared with every
 // field UP TO it in the same order as main.cpp's real struct: std140 offsets
 // are purely positional, so a shader can stop declaring early (the trailing
@@ -33,6 +37,7 @@ layout(location = 1) flat in float layer;
 layout(location = 2) flat in float intensity;
 layout(location = 3) flat in float seed;
 layout(location = 4) flat in float glare;
+layout(location = 5) flat in vec3 color;
 
 layout(location = 0) out vec4 outColor;
 
@@ -209,10 +214,24 @@ void main() {
 	// mesh height -- the hottest, whitest pixels are wherever the noise says
 	// the core currently is, which drifts and licks upward instead of
 	// always sitting at a fixed height on the card.
-	vec3 cCold   = vec3(0.55, 0.06, 0.02);   // deep red, coolest visible edge
-	vec3 cOrange = vec3(1.00, 0.42, 0.05);
-	vec3 cYellow = vec3(1.00, 0.78, 0.25);
-	vec3 cCore   = vec3(1.00, 0.97, 0.88);   // near-white, hottest
+	// The 4 stops below are authored for realistic orange fire. Every torch
+	// picks a `color` (main.cpp's TorchFlame::color, default = the same
+	// orange the point light casts): rather than replacing the stops
+	// wholesale per color -- which either can't reproduce today's exact look
+	// or needs fragile special-casing for the default -- each stop is
+	// hue-rotated onto `color` by the same delta, which preserves the
+	// value/saturation progression (dark -> hot-white) that makes the
+	// gradient read as fire at all, and reproduces today's palette exactly
+	// when `color` is the default orange (hueDelta == 0).
+	const vec3 REF_ORANGE = vec3(1.00, 0.42, 0.05);	// today's cOrange stop
+	vec3 targetHsv = rgb2hsv(color);
+	float hueDelta = targetHsv.x - rgb2hsv(REF_ORANGE).x;
+	float hueDist = min(abs(hueDelta), 1.0 - abs(hueDelta));
+
+	vec3 cCold   = recolorStop(vec3(0.55, 0.06, 0.02), hueDelta, hueDist, targetHsv.y, 0.25);
+	vec3 cOrange = recolorStop(vec3(1.00, 0.42, 0.05), hueDelta, hueDist, targetHsv.y, 0.0);
+	vec3 cYellow = recolorStop(vec3(1.00, 0.78, 0.25), hueDelta, hueDist, targetHsv.y, 0.45);
+	vec3 cCore   = recolorStop(vec3(1.00, 0.97, 0.88), hueDelta, hueDist, targetHsv.y, 0.60);
 
 	vec3 color;
 	if(heat < 0.35) {

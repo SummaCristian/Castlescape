@@ -7,6 +7,10 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
 
+// rgb2hsv/hsv2rgb/recolorStop, shared with Flame.frag so sparks recolor onto
+// `color` the same way the flame body does.
+#include "custom/FlameColor.glsl"
+
 // quv: the spark's raw, unstretched quad corner (see Spark.vert for why this
 // alone is enough to reconstruct an elliptical falloff without also passing
 // the streak's stretch factor).
@@ -18,6 +22,8 @@ layout(location = 1) flat in float life;
 // dying spark; glow scales brightness gently with the flame's envelope.
 layout(location = 2) flat in float gate;
 layout(location = 3) flat in float glow;
+// This flame's target hue, see Flame.frag's recolorStop() for the technique.
+layout(location = 4) flat in vec3 color;
 
 layout(location = 0) out vec4 outColor;
 
@@ -45,15 +51,24 @@ void main() {
 		discard;
 	}
 
-	// Hot yellow-white at birth, cooling to deep orange by death.
-	vec3 hot = vec3(1.00, 0.95, 0.75);
-	vec3 cool = vec3(0.95, 0.35, 0.05);
-	vec3 color = mix(hot, cool, life);
+	// Hot yellow-white at birth, cooling to deep orange by death -- hue-rotated
+	// onto this flame's `color` exactly like Flame.frag's own stops, so a
+	// spark thrown off a colored flame reads as that same color of fire
+	// rather than always the default orange regardless of the flame it came
+	// from.
+	const vec3 REF_ORANGE = vec3(1.00, 0.42, 0.05);	// same reference as Flame.frag
+	vec3 targetHsv = rgb2hsv(color);
+	float hueDelta = targetHsv.x - rgb2hsv(REF_ORANGE).x;
+	float hueDist = min(abs(hueDelta), 1.0 - abs(hueDelta));
+
+	vec3 hot  = recolorStop(vec3(1.00, 0.95, 0.75), hueDelta, hueDist, targetHsv.y, 0.55);
+	vec3 cool = recolorStop(vec3(0.95, 0.35, 0.05), hueDelta, hueDist, targetHsv.y, 0.0);
+	vec3 sparkColor = mix(hot, cool, life);
 
 	// Brightest the instant it's thrown off, dimming as it cools -- so a
 	// spark is a genuine bloom source only near birth, not for its whole
 	// short life.
 	float hdrBoost = mix(12.0, 3.0, life);
 
-	outColor = vec4(color * hdrBoost * glow, alpha);
+	outColor = vec4(sparkColor * hdrBoost * glow, alpha);
 }
