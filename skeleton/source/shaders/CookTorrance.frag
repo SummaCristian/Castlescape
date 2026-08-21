@@ -116,6 +116,7 @@ layout(binding = 5, set = 2) uniform samplerCube shadowCube2;
 layout(binding = 6, set = 2) uniform samplerCube shadowCube3;
 layout(binding = 7, set = 2) uniform samplerCube shadowCube4;
 layout(binding = 8, set = 2) uniform samplerCube shadowCube5;
+layout(binding = 9, set = 2) uniform samplerCube shadowCube6;	// the held torch
 
 // Stands in for shadowMaps2D[idx], which the separate-bindings choice above
 // rules out. NUM_SHADOW_MAPS_2D is 2 (LightConstants.glsl); if that ever
@@ -126,15 +127,16 @@ float sampleShadowMap2D(int idx, vec2 uv) {
 }
 
 // Same idea for the cube maps, sampled by direction rather than by UV.
-// NUM_SHADOW_CUBES is 6 (LightConstants.glsl, one per torch); a case has to
-// be added or removed here by hand if that changes.
+// NUM_SHADOW_CUBES is 7 (LightConstants.glsl, six wall/dv torches plus the
+// held one); a case has to be added or removed here by hand if that changes.
 float sampleShadowCube(int idx, vec3 dir) {
     if(idx == 0) return texture(shadowCube0, dir).r;
     if(idx == 1) return texture(shadowCube1, dir).r;
     if(idx == 2) return texture(shadowCube2, dir).r;
     if(idx == 3) return texture(shadowCube3, dir).r;
     if(idx == 4) return texture(shadowCube4, dir).r;
-    return texture(shadowCube5, dir).r;
+    if(idx == 5) return texture(shadowCube5, dir).r;
+    return texture(shadowCube6, dir).r;
 }
 
 // The sun/spot path: unchanged from the single-perspective-map technique,

@@ -89,6 +89,15 @@
 		//
 		// Bone: rough, fully diffuse, no visible highlight.
 		"torchSkull":   { "roughness": 0.85, "F0": 0.04, "k": 0.95, "castsShadow": false },
-		"dungeonTorch": { "castsShadow": false }
+		"dungeonTorch": { "castsShadow": false },
+		// The held torch (SM_Torch_Held_01, "dungeonTorchHeld" in scene.json)
+		// needs the exact same exemption as "dungeonTorch" above, for the exact
+		// same reason -- its own point light is anchored inside its own cup,
+		// centimetres from the mesh. It's a SEPARATE model id from the
+		// wall-mounted one, so it doesn't inherit that entry; left on "default"
+		// it fell back to castsShadow: true and, once the held torch got its own
+		// cube shadow map, self-shadowed itself every frame as it moved with
+		// the camera -- flickering shadow noise with no obvious source.
+		"dungeonTorchHeld": { "castsShadow": false }
 	}
 }

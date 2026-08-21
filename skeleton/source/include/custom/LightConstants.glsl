@@ -29,8 +29,10 @@
 #define NUM_SHADOW_MAPS_2D 2
 
 // How many point lights can cast a shadow, each through one real 6-face cube
-// shadow map (CubeShadowMap.hpp). One per torch (see lights.json:
-// torchW1/W2/E1/E2/DC/DV).
+// shadow map (CubeShadowMap.hpp). Six are handed out by SceneLights::init in
+// lights.json order (torchW1/W2/E1/E2/DC/DV); the 7th slot is reserved by
+// main.cpp for the held torch, which never goes through lights.json (it
+// moves with the camera -- see the HAND_TORCH_SHADOW_INDEX comment there).
 //
 // Adding a slot means: this number, one more samplerCube binding plus a
 // sampleShadowCube() case in CookTorrance.frag, and one more CubeShadowMap
@@ -41,7 +43,7 @@
 // NUM_SHADOW_MAPS_2D and the albedo map, against a Vulkan guaranteed minimum
 // (maxPerStageDescriptorSampledImages) of 16. Real desktop drivers allow far
 // more, but past ~16 the code stops being portable by spec.
-#define NUM_SHADOW_CUBES 6
+#define NUM_SHADOW_CUBES 7
 
 #define LIGHT_DIRECT 0
 #define LIGHT_POINT  1

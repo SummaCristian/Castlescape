@@ -15,18 +15,24 @@
 // warps differently near the center of a face than near its edge, and
 // differently again on the ADJACENT face sharing that edge).
 
+// lightPos comes from the same per-torch uniform buffer ShadowCube.vert
+// reads (set 1, binding 0) instead of a push constant -- see that file's
+// header for why: a push constant is frozen into the command buffer at
+// record time, which happens once and is then reused every frame, so it
+// can't track a torch (the held one) that keeps moving after that.
+
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
 
-layout(push_constant) uniform ShadowCubePushConstant {
-	mat4 lightViewProj;
+layout(binding = 0, set = 1) uniform ShadowCubeUniformBufferObject {
+	mat4 lightViewProj[6];
 	vec4 lightPos;
-} pc;
+} cubeData;
 
 layout(location = 0) in vec3 inWorldPos;
 
 layout(location = 0) out float outDistance;
 
 void main() {
-	outDistance = length(inWorldPos - pc.lightPos.xyz);
+	outDistance = length(inWorldPos - cubeData.lightPos.xyz);
 }

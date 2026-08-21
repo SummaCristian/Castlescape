@@ -103,14 +103,27 @@ struct ShadowUniformBufferObject {
 	alignas(16) glm::mat4 lightSpace[NUM_SHADOW_MAPS_2D];
 };
 
-// Push constant for one face of one torch's cube shadow pass
-// (ShadowCube.vert/frag, PShadowCube). Field-for-field the same layout those
-// two shader stages declare. lightPos.w is unused padding, kept so the
-// struct's size (80 bytes) matches a whole number of the 16-byte chunks
-// std430/push-constant rules expect.
-struct ShadowCubePushConstantData {
-	glm::mat4 lightViewProj;
-	glm::vec4 lightPos;
+// One torch's cube shadow CAPTURE data (ShadowCube.vert/frag, PShadowCube),
+// set 1 there. Field-for-field the same layout those two shader stages
+// declare. A uniform buffer, not a push constant, and re-mapped every frame
+// in updateUniformBuffer() for every torch, including the six static ones --
+// see ShadowCube.vert's header for why a push constant can't do this job:
+// the "main" command buffer is recorded once per swapchain image and reused
+// every frame after that (Starter.hpp's submitCommandBuffer()/
+// updateCommandBuffers()), so a push constant's value would be frozen at
+// whatever it was the moment that recording happened and never updated
+// again -- fatal for the held torch, which moves every frame.
+struct ShadowCubeUniformBufferObject {
+	alignas(16) glm::mat4 lightViewProj[6];
+	alignas(16) glm::vec4 lightPos;	// xyz used, w is padding
+};
+
+// Which of the 6 faces a draw call is for. Safe as a push constant unlike
+// the matrix/position above: it's determined by WHERE in the recorded
+// command buffer the draw sits (this loop iteration is always face i), not
+// by anything that changes after the buffer is recorded.
+struct ShadowCubeFacePushConstant {
+	int32_t face;
 };
 
 // Vertex format "VDposNormUV". Starter.hpp fills the normal from the glTF/MGCG
@@ -247,6 +260,17 @@ class Skeleton26ReplaceName : public BaseProject {
 	// hand-roll vkCreateSampler.
 	TextureSampler cubeShadowSampler;
 
+	// set 1 for the cube shadow CAPTURE pass (PShadowCube) -- one uniform
+	// buffer per torch cube slot, holding that torch's 6 current face
+	// view-projection matrices plus its world position. A DescriptorSet
+	// member of its own, same reasoning as DSglobal (not per scene
+	// instance), created/destroyed alongside it in
+	// pipelinesAndDescriptorSetsInit()/Cleanup(). See ShadowCube.vert's
+	// header for why this has to be a uniform buffer, re-mapped every frame,
+	// rather than the push constant it replaced.
+	DescriptorSetLayout DSLshadowCubeCapture;
+	DescriptorSet DSshadowCube[NUM_SHADOW_CUBES];
+
 	// set 2 for the main pass's shadow sampling: one UBO (the 2D light-space
 	// matrices) plus one sampler binding per shadow map (2D then cube), read
 	// by CookTorrance.frag's shadowFactor(). DSLlocal/DSLglobal stay set 1/0.
@@ -278,7 +302,9 @@ class Skeleton26ReplaceName : public BaseProject {
 	glm::vec3 torchLightPos[NUM_SHADOW_CUBES];
 	// How many of torchFaceMatrices/torchLightPos are actually populated --
 	// fewer than NUM_SHADOW_CUBES if lights.json authors fewer shadow-casting
-	// point lights than there are slots. Set once by computeShadowMatrices().
+	// point lights than there are slots. Set once by computeShadowMatrices(),
+	// then bumped once more in localInit() if the held torch exists, to also
+	// cover HAND_TORCH_SHADOW_INDEX.
 	int activeCubeShadows = 0;
 	static constexpr int SHADOW_MAP_RES = 1024;
 	// Far clip for every torch's cube map (computeShadowMatrices()) and the
@@ -287,6 +313,21 @@ class Skeleton26ReplaceName : public BaseProject {
 	// infinity/unlit, and any value >= this far plane does that, since
 	// shadowFromCube() (CookTorrance.frag) never queries beyond it either.
 	static constexpr float TORCH_SHADOW_FAR_CONST = 15.0f;
+	// Near clip for every torch's cube map -- close enough that only the
+	// torch fixture itself (not an occluder, Material::castsShadow) falls
+	// inside it. A member (not a computeShadowMatrices() local) because
+	// updateHandTorchShadow() needs the same number every frame.
+	static constexpr float TORCH_SHADOW_NEAR_CONST = 0.05f;
+	// The cube slot reserved for the held torch, one past the six lights.json
+	// hands out (SceneLights::init, nextShadowIndexCube, torchW1/W2/E1/E2/DC/
+	// DV): the held torch never goes through lights.json -- its Wm doesn't
+	// exist in a meaningful form until GameLogic() starts overwriting it
+	// every frame, so unlike the static torches it can't get a fixed
+	// shadowIndex at SceneLights::init() time or fixed face matrices at
+	// computeShadowMatrices() time. Instead updateHandTorchShadow() recomputes
+	// torchFaceMatrices[HAND_TORCH_SHADOW_INDEX]/torchLightPos[..] every frame
+	// in updateUniformBuffer(), before populateCommandBuffer() reads them.
+	static constexpr int HAND_TORCH_SHADOW_INDEX = NUM_SHADOW_CUBES - 1;
 
 	// Models, textures and Descriptors (values assigned to the uniforms)
 	DescriptorSet DSglobal;
@@ -1328,16 +1369,26 @@ class Skeleton26ReplaceName : public BaseProject {
 		PShadow.create(&RPShadow2D[0]);
 
 		// The cube shadow pass's pipeline (torches). Same DSLlocal reuse as
-		// PShadow, see Shadow.vert's header; the push constant additionally
-		// carries the light's world position (read by ShadowCube.frag) so
-		// both stages need it in their stage flags.
-		VkPushConstantRange shadowCubePushConstant{};
-		shadowCubePushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-		shadowCubePushConstant.offset = 0;
-		shadowCubePushConstant.size = sizeof(ShadowCubePushConstantData);
+		// PShadow, see Shadow.vert's header. Set 1 is DSLshadowCubeCapture,
+		// one uniform buffer per torch cube slot (DSshadowCube[], mapped
+		// fresh every frame in updateUniformBuffer()) carrying the light's
+		// current view-projection matrices and world position -- NOT a push
+		// constant, see ShadowCube.vert's header for why that would silently
+		// freeze the held torch's shadow at whatever position it first
+		// rendered from. The push constant that remains only ever carries
+		// the face index, which genuinely is fixed at record time.
+		DSLshadowCubeCapture.init(this, {
+					{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+						VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+						sizeof(ShadowCubeUniformBufferObject), 1}
+				  });
+		VkPushConstantRange shadowCubeFacePushConstant{};
+		shadowCubeFacePushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+		shadowCubeFacePushConstant.offset = 0;
+		shadowCubeFacePushConstant.size = sizeof(ShadowCubeFacePushConstant);
 		PShadowCube.init(this, &VD, "shaders/ShadowCube.vert.spv",
 								"shaders/ShadowCube.frag.spv",
-								{&DSLlocal}, {shadowCubePushConstant});
+								{&DSLlocal, &DSLshadowCubeCapture}, {shadowCubeFacePushConstant});
 		// Created against RPShadowCubeCompat -- see that member's comment for
 		// why it exists purely to be render-pass-compatible with the 36
 		// manually built per-face framebuffers this pipeline actually draws
@@ -1348,9 +1399,11 @@ class Skeleton26ReplaceName : public BaseProject {
 		// The four post-processing sets are counted in here too: one uniform
 		// block each, and five sampled textures between them (one apiece for
 		// the bright pass and the two blurs, two for the composite).
-		DPSZs.uniformBlocksInPool = 2 + 4;
+		// + NUM_SHADOW_CUBES: DSshadowCube[], one uniform block/set per torch
+		// cube slot for the shadow capture pass (see its member comment).
+		DPSZs.uniformBlocksInPool = 2 + 4 + NUM_SHADOW_CUBES;
 		DPSZs.texturesInPool = 1 + 5;
-		DPSZs.setsInPool = 2 + 4;
+		DPSZs.setsInPool = 2 + 4 + NUM_SHADOW_CUBES;
 
 		// to support scene
 		VDRs.resize(1);
@@ -1584,6 +1637,17 @@ class Skeleton26ReplaceName : public BaseProject {
 		// SceneLights has read scene.json's world matrices.
 		computeShadowMatrices();
 
+		// The held torch's cube slot isn't in sceneLights.all() (it's not in
+		// lights.json), so computeShadowMatrices() never counts it into
+		// activeCubeShadows. Its face matrices get filled in every frame by
+		// updateHandTorchShadow() instead, but the cube shadow render loop
+		// (populateCommandBuffer()) still needs to know HAND_TORCH_SHADOW_INDEX
+		// is in play at all -- done once here, since whether the held torch
+		// exists doesn't change after startup.
+		if(handTorchInst != nullptr) {
+			activeCubeShadows = std::max(activeCubeShadows, HAND_TORCH_SHADOW_INDEX + 1);
+		}
+
 		// initializes the textual output
 		txt.init(this, windowWidth, windowHeight);
 		// initializes the flat-quad background/highlight layer for the cheat HUD
@@ -1630,13 +1694,6 @@ class Skeleton26ReplaceName : public BaseProject {
 	// SceneLights::init), and re-deriving that here would be a second copy of
 	// logic that already lives in exactly one place.
 	void computeShadowMatrices() {
-		// Near plane for a torch's cube map. Unlike the old front/back
-		// perspective hack, precision no longer depends on this (the cube
-		// stores LINEAR distance, see CubeShadowMap.hpp), so it's just a
-		// clip plane: close enough that only the torch fixture itself (not
-		// an occluder, Material::castsShadow) falls inside it.
-		const float TORCH_SHADOW_NEAR = 0.05f;
-
 		// Past this a torch contributes almost nothing anyway: with g = 3.0
 		// and beta = 1.4 (lights.json) it is down to about 8% of its stated
 		// colour. TORCH_SHADOW_FAR_CONST (member) rather than a local here:
@@ -1689,12 +1746,30 @@ class Skeleton26ReplaceName : public BaseProject {
 			for(int face = 0; face < 6; face++) {
 				glm::mat4 view = glm::lookAt(L.pos, L.pos + CUBE_FACE_DIR[face], CUBE_FACE_UP[face]);
 				glm::mat4 proj = glm::perspective(glm::radians(90.0f), 1.0f,
-												  TORCH_SHADOW_NEAR, TORCH_SHADOW_FAR);
+												  TORCH_SHADOW_NEAR_CONST, TORCH_SHADOW_FAR);
 				torchFaceMatrices[L.shadowIndex][face] = proj * view;
 			}
 			torchLightPos[L.shadowIndex] = L.pos;
 			activeCubeShadows = std::max(activeCubeShadows, L.shadowIndex + 1);
 		}
+	}
+
+	// Same six-face cube math as computeShadowMatrices()'s point-light branch,
+	// but for HAND_TORCH_SHADOW_INDEX and called every frame from
+	// updateUniformBuffer() instead of once from localInit(): the held torch's
+	// world position moves with the camera, so its face matrices can't be
+	// baked once like the wall torches' can. Runs before populateCommandBuffer()
+	// records this frame's cube shadow passes (updateUniformBuffer() precedes
+	// updateCommandBuffers() in Starter.hpp's drawFrame()), so the push
+	// constants that pass reads are already current.
+	void updateHandTorchShadow(const glm::vec3 &lightPos) {
+		for(int face = 0; face < 6; face++) {
+			glm::mat4 view = glm::lookAt(lightPos, lightPos + CUBE_FACE_DIR[face], CUBE_FACE_UP[face]);
+			glm::mat4 proj = glm::perspective(glm::radians(90.0f), 1.0f,
+											  TORCH_SHADOW_NEAR_CONST, TORCH_SHADOW_FAR_CONST);
+			torchFaceMatrices[HAND_TORCH_SHADOW_INDEX][face] = proj * view;
+		}
+		torchLightPos[HAND_TORCH_SHADOW_INDEX] = lightPos;
 	}
 
 	// Builds every torch's CubeShadowMap (colour cube image + face views +
@@ -1838,6 +1913,9 @@ class Skeleton26ReplaceName : public BaseProject {
 		Pcomposite.create(&RPcomposite);
 
 		DSglobal.init(this, &DSLglobal, {});
+		for(int i = 0; i < NUM_SHADOW_CUBES; i++) {
+			DSshadowCube[i].init(this, &DSLshadowCubeCapture, {});
+		}
 
 		// Wire the chain together. Each pass reads the previous pass's colour
 		// attachment as an ordinary texture; getViewAndSampler() hands back the
@@ -1888,6 +1966,9 @@ class Skeleton26ReplaceName : public BaseProject {
 		RPcomposite.cleanup();
 
 		DSglobal.cleanup();
+		for(int i = 0; i < NUM_SHADOW_CUBES; i++) {
+			DSshadowCube[i].cleanup();
+		}
 		DSbright.cleanup();
 		DSblurH.cleanup();
 		DSblurV.cleanup();
@@ -1907,6 +1988,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		DSLpost1.cleanup();
 		DSLpost2.cleanup();
 		DSLshadowSample.cleanup();
+		DSLshadowCubeCapture.cleanup();
 
 		if(Mpost != nullptr) {
 			Mpost->cleanup();
@@ -2045,12 +2127,17 @@ class Skeleton26ReplaceName : public BaseProject {
 				vkCmdBeginRenderPass(commandBuffer, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
 
 				PShadowCube.bind(commandBuffer);
-				ShadowCubePushConstantData pc{};
-				pc.lightViewProj = torchFaceMatrices[t][face];
-				pc.lightPos = glm::vec4(torchLightPos[t], 0.0f);
+				// Set 1: this torch's current matrices/position, from the
+				// uniform buffer updateUniformBuffer() maps every frame --
+				// see ShadowCube.vert's header for why this can't be a push
+				// constant. Only the face INDEX is still one, since that
+				// genuinely never changes once recorded.
+				DSshadowCube[t].bind(commandBuffer, PShadowCube, 1, currentImage);
+				ShadowCubeFacePushConstant facePc{};
+				facePc.face = face;
 				vkCmdPushConstants(commandBuffer, PShadowCube.pipelineLayout,
-								   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-								   sizeof(ShadowCubePushConstantData), &pc);
+								   VK_SHADER_STAGE_VERTEX_BIT, 0,
+								   sizeof(ShadowCubeFacePushConstant), &facePc);
 
 				for(int j = 0; j < SC.TI[0].InstanceCount; j++) {
 					Instance &inst = SC.TI[0].I[j];
@@ -2345,7 +2432,18 @@ class Skeleton26ReplaceName : public BaseProject {
 				// zero-initializes to 0, the sun's own shadow map, and
 				// indoors -- in the sun's shadow -- that reads every torch
 				// flame's light as fully shadowed.
-				L.shadowIndex = -1;
+				//
+				// The held torch is the one exception: it gets the reserved
+				// HAND_TORCH_SHADOW_INDEX cube slot instead, recomputed for
+				// its current (camera-following) position right here so
+				// populateCommandBuffer()'s cube shadow pass -- later this
+				// same frame -- renders it from the right place.
+				if(tf.heldByCamera) {
+					L.shadowIndex = HAND_TORCH_SHADOW_INDEX;
+					updateHandTorchShadow(L.pos);
+				} else {
+					L.shadowIndex = -1;
+				}
 
 				gubo.lights[gubo.lightCount++] = L;
 				live++;
@@ -2535,6 +2633,25 @@ class Skeleton26ReplaceName : public BaseProject {
 		ShadowUniformBufferObject shadowUbo{};
 		for(int i = 0; i < NUM_SHADOW_MAPS_2D; i++) {
 			shadowUbo.lightSpace[i] = shadowLightSpace2D[i];
+		}
+
+		// Same idea, cube side: DSshadowCube[t] feeds the shadow CAPTURE pass
+		// (PShadowCube/ShadowCube.vert/frag) its matrices/position through a
+		// mapped uniform buffer instead of a push constant, precisely so the
+		// held torch's slot -- refreshed a few lines above in this same
+		// function, by updateHandTorchShadow() -- actually takes effect every
+		// frame instead of freezing at whatever the "main" command buffer's
+		// one-time recording saw. The six static torches don't strictly need
+		// the re-map (their matrices never change after computeShadowMatrices()
+		// runs once), but mapping all of them uniformly is simpler than
+		// special-casing the held one, and costs nothing worth avoiding.
+		for(int t = 0; t < activeCubeShadows; t++) {
+			ShadowCubeUniformBufferObject cubeUbo{};
+			for(int face = 0; face < 6; face++) {
+				cubeUbo.lightViewProj[face] = torchFaceMatrices[t][face];
+			}
+			cubeUbo.lightPos = glm::vec4(torchLightPos[t], 0.0f);
+			DSshadowCube[t].map(currentImage, &cubeUbo, 0);
 		}
 
 		// Over every technique, not just the first: instances need the same
