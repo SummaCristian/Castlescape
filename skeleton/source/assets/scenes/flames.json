@@ -19,6 +19,9 @@
 // anchor is in the MODEL's own local space (see main.cpp's TORCH_FLAME_ANCHOR/
 // CANDLE_FLAME_ANCHOR comments for how these two were derived by walking each
 // mesh's own vertex accessor). sizeScale/lightScale default to 1.0 if omitted.
+// isCandle (default false) marks a model as a candle rather than a torch --
+// the only thing the debug HUD's separate "Torch Shadows"/"Candle Shadows"
+// toggles look at (see TorchFlame::isCandle in main.cpp).
 {
 	"models": {
 		"dungeonTorch": {
@@ -50,7 +53,8 @@
 		"dungeonCandle": {
 			"anchor": [0.0, 0.73, 0.0],
 			"sizeScale": 0.40,
-			"lightScale": 0.18
+			"lightScale": 0.18,
+			"isCandle": true
 		}
 	},
 

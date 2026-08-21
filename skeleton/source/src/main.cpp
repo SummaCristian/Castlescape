@@ -523,6 +523,19 @@ class Skeleton26ReplaceName : public BaseProject {
 		// tell apart by eye since both show up as flicker on a wall.
 		bool shadowsEnabled = true;
 
+		// Per-flame-TYPE shadow casting, read by updateDynamicShadowSlots()
+		// and the light-append loop in updateUniformBuffer(). Distinct from
+		// shadowsEnabled above: that one forces shadowFactor() to 1 for
+		// every already-cast shadow (a shading diagnostic), these two decide
+		// which flames COMPETE for a cube-shadow slot in the first place --
+		// off means that category never casts a shadow at all, not merely
+		// that its shadow renders as if absent. Torches and candles rather
+		// than per-instance: same reasoning as SceneLights' directEnabled/
+		// pointEnabled/spotEnabled, there's no use case for singling out one
+		// specific torch. Both default on, matching the authored scene.
+		bool torchShadowsEnabled = true;
+		bool candleShadowsEnabled = true;
+
 		// Geometry overlays (LightDebug.hpp), independent of the shading
 		// debug views above: crosses/arrows at each active light's position,
 		// and wireframe boxes at each torch's shadow-cube near/far clip
@@ -776,6 +789,16 @@ class Skeleton26ReplaceName : public BaseProject {
 		// candle actually casts instead of a torch-strength light that
 		// merely came out of a smaller flame.
 		float lightScale = 1.0f;
+
+		// True for a candle flame, false for a torch (the held torch
+		// included). No third kind exists, so this is the whole
+		// distinction the debug HUD's separate "Torch Shadows"/"Candle
+		// Shadows" toggles need -- everything else about a flame (mesh,
+		// light math, dynamic shadow pool membership) already treats the
+		// two identically. Set from flames.json's per-model "isCandle"
+		// (see FlameDef below); defaults to false so a model that omits
+		// it is a torch, matching every model but dungeonCandle.
+		bool isCandle = false;
 
 		// True for every flame that competes for a slot in the DYNAMIC
 		// shadow-cube pool (updateDynamicShadowSlots()) -- set automatically
@@ -1695,7 +1718,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		// them decorrelated without needing a seeded generator for one call.
 		auto addTorchFlame = [&](const char *id, glm::vec3 anchor, bool heldByCamera = false,
 								 glm::vec3 color = TORCH_LIGHT_COLOR, float sizeScale = 1.0f,
-								 float lightScale = 1.0f) {
+								 float lightScale = 1.0f, bool isCandle = false) {
 			auto it = SC.InstanceIds.find(id);
 			if(it == SC.InstanceIds.end()) {
 				std::cout << "Torch instance '" << id << "' not found, skipping its flame\n";
@@ -1718,6 +1741,7 @@ class Skeleton26ReplaceName : public BaseProject {
 			tf.color = color;
 			tf.sizeScale = sizeScale;
 			tf.lightScale = lightScale;
+			tf.isCandle = isCandle;
 			// Automatic, not a parameter: every flame this project has is
 			// either the one held torch or a static object, and every
 			// static one belongs in the dynamic shadow pool -- there is no
@@ -1763,6 +1787,7 @@ class Skeleton26ReplaceName : public BaseProject {
 					glm::vec3 color = TORCH_LIGHT_COLOR;
 					float sizeScale = 1.0f;
 					float lightScale = 1.0f;
+					bool isCandle = false;
 				};
 				// Same "only overwrite what's present" shape as
 				// SceneLights::readVec3, so a def can start from another
@@ -1777,6 +1802,7 @@ class Skeleton26ReplaceName : public BaseProject {
 					if(j.contains("color"))      def.color = readVec3(j["color"], def.color);
 					if(j.contains("sizeScale"))  def.sizeScale = j["sizeScale"].get<float>();
 					if(j.contains("lightScale")) def.lightScale = j["lightScale"].get<float>();
+					if(j.contains("isCandle"))   def.isCandle = j["isCandle"].get<bool>();
 					return def;
 				};
 
@@ -1812,7 +1838,7 @@ class Skeleton26ReplaceName : public BaseProject {
 					if(overrides != nullptr && overrides->contains(id)) {
 						def = applyFlameDef((*overrides)[id], def);
 					}
-					addTorchFlame(id.c_str(), def.anchor, false, def.color, def.sizeScale, def.lightScale);
+					addTorchFlame(id.c_str(), def.anchor, false, def.color, def.sizeScale, def.lightScale, def.isCandle);
 				}
 			}
 		}
@@ -1886,6 +1912,8 @@ class Skeleton26ReplaceName : public BaseProject {
 		hud.addToggle("Ambient Light", &sceneLights.ambientEnabled);
 		hud.addToggle("Sun Orbit", &sceneLights.orbitOverride);
 		hud.addToggle("Shadows", &cheats.shadowsEnabled);
+	hud.addToggle("Torch Shadows", &cheats.torchShadowsEnabled);
+	hud.addToggle("Candle Shadows", &cheats.candleShadowsEnabled);
 		hud.addToggle("Specular", &cheats.specularEnabled);
 		hud.addToggle("Tone Mapping", &cheats.toneMapEnabled);
 		hud.addToggle("Fullbright", &cheats.unlit);
@@ -2038,11 +2066,27 @@ class Skeleton26ReplaceName : public BaseProject {
 			torchLightPos[slot] = glm::vec3(tf.inst->Wm * glm::vec4(tf.anchor, 1.0f));
 		};
 
+		// The debug HUD's "Torch Shadows"/"Candle Shadows" toggles: a flame
+		// whose category is off is never a waiting candidate below, and any
+		// slot it already held gets freed here so switching a category off
+		// mid-game drops its shadow within this reassignment tick instead of
+		// waiting for something else to outbid it.
+		auto categoryEnabled = [&](const TorchFlame &tf) {
+			return tf.isCandle ? cheats.candleShadowsEnabled : cheats.torchShadowsEnabled;
+		};
+		for(int s = base; s < base + count; s++) {
+			int idx = dynamicSlotOccupant[s];
+			if(idx != -1 && !categoryEnabled(torchFlames[idx])) {
+				torchFlames[idx].shadowSlot = -1;
+				dynamicSlotOccupant[s] = -1;
+			}
+		}
+
 		struct Cand { int flameIdx; float distSq; };
 		std::vector<Cand> waiting;
 		for(size_t i = 0; i < torchFlames.size(); i++) {
 			const TorchFlame &tf = torchFlames[i];
-			if(!tf.shadowCandidate || tf.shadowSlot >= 0) {
+			if(!tf.shadowCandidate || tf.shadowSlot >= 0 || !categoryEnabled(tf)) {
 				continue;
 			}
 			waiting.push_back({(int)i, distSqTo(tf)});
@@ -2433,6 +2477,43 @@ class Skeleton26ReplaceName : public BaseProject {
 			if(t >= activeCubeShadows) {
 				break;
 			}
+			// A dynamic-pool slot (dynamicShadowSlotBase..HAND_TORCH_SHADOW_INDEX)
+			// with no current occupant -- freed by a disabled torch/candle
+			// shadow category (cheats.torchShadowsEnabled/candleShadowsEnabled,
+			// see updateDynamicShadowSlots()), or just outnumbered by slots --
+			// or the held torch's own reserved HAND_TORCH_SHADOW_INDEX with
+			// its category off, has nothing anything will ever sample this
+			// frame. Its six faces still get begin/end'd below (cheap: a
+			// clear plus the mandatory layout transition to
+			// SHADER_READ_ONLY_OPTIMAL that CookTorrance.frag's descriptor
+			// set requires even for a slot nothing samples -- skipping the
+			// render pass entirely left it stuck at UNDEFINED forever and
+			// triggered a validation error) -- only the expensive part, the
+			// per-instance draw loop over the whole scene below, is skipped.
+			bool slotOccupied =
+				(t < dynamicShadowSlotBase)
+				|| (t == HAND_TORCH_SHADOW_INDEX ? cheats.torchShadowsEnabled
+												  : dynamicSlotOccupant[t] != -1);
+
+			// The instance this cube map's own flame is anchored to (a
+			// torch/candle mesh, wherever this slot has one), excluded from
+			// its OWN shadow pass below. Without this, a candle sitting
+			// right under its own flame -- the anchor is barely 0.1 units
+			// above the wax, see flames.json's dungeonCandle comment -- casts
+			// its own body onto its own flame's cube map, self-shadowing the
+			// candle from the only light close enough to matter, which reads
+			// as the light not reaching the very object it's sitting on. The
+			// same instance still draws normally into every OTHER light's
+			// shadow pass (another candle's, a nearby torch's) -- only its
+			// own light skips it. Instance* rather than an id: addTorchFlame
+			// captures the same pointer once at spawn, so identity compare
+			// is exact and index-free.
+			Instance *ownerInst = nullptr;
+			if(t == HAND_TORCH_SHADOW_INDEX) {
+				ownerInst = handTorchInst;
+			} else if(t >= dynamicShadowSlotBase && dynamicSlotOccupant[t] != -1) {
+				ownerInst = torchFlames[dynamicSlotOccupant[t]].inst;
+			}
 
 			for(int face = 0; face < 6; face++) {
 				VkClearValue clearValues[2];
@@ -2449,28 +2530,38 @@ class Skeleton26ReplaceName : public BaseProject {
 				rpInfo.pClearValues = clearValues;
 				vkCmdBeginRenderPass(commandBuffer, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-				PShadowCube.bind(commandBuffer);
-				// Set 1: this torch's current matrices/position, from the
-				// uniform buffer updateUniformBuffer() maps every frame --
-				// see ShadowCube.vert's header for why this can't be a push
-				// constant. Only the face INDEX is still one, since that
-				// genuinely never changes once recorded.
-				DSshadowCube[t].bind(commandBuffer, PShadowCube, 1, currentImage);
-				ShadowCubeFacePushConstant facePc{};
-				facePc.face = face;
-				vkCmdPushConstants(commandBuffer, PShadowCube.pipelineLayout,
-								   VK_SHADER_STAGE_VERTEX_BIT, 0,
-								   sizeof(ShadowCubeFacePushConstant), &facePc);
+				// The scene-wide draw loop below is the actual cost (up to
+				// SC.TI[0].InstanceCount draws, times 6 faces, times every
+				// active cube slot) -- skipped for a slot nothing currently
+				// samples, while still leaving the begin/end above to clear
+				// the image and run the render pass's layout transition.
+				if(slotOccupied) {
+					PShadowCube.bind(commandBuffer);
+					// Set 1: this torch's current matrices/position, from the
+					// uniform buffer updateUniformBuffer() maps every frame --
+					// see ShadowCube.vert's header for why this can't be a push
+					// constant. Only the face INDEX is still one, since that
+					// genuinely never changes once recorded.
+					DSshadowCube[t].bind(commandBuffer, PShadowCube, 1, currentImage);
+					ShadowCubeFacePushConstant facePc{};
+					facePc.face = face;
+					vkCmdPushConstants(commandBuffer, PShadowCube.pipelineLayout,
+									   VK_SHADER_STAGE_VERTEX_BIT, 0,
+									   sizeof(ShadowCubeFacePushConstant), &facePc);
 
-				for(int j = 0; j < SC.TI[0].InstanceCount; j++) {
-					Instance &inst = SC.TI[0].I[j];
-					if(!materials.forModel(inst.Mid).castsShadow) {
-						continue;
+					for(int j = 0; j < SC.TI[0].InstanceCount; j++) {
+						Instance &inst = SC.TI[0].I[j];
+						if(!materials.forModel(inst.Mid).castsShadow) {
+							continue;
+						}
+						if(&inst == ownerInst) {
+							continue;
+						}
+						inst.DS[0][1]->bind(commandBuffer, PShadowCube, 0, currentImage);
+						SC.M[inst.Mid]->bind(commandBuffer);
+						vkCmdDrawIndexed(commandBuffer,
+										 static_cast<uint32_t>(SC.M[inst.Mid]->indices.size()), 1, 0, 0, 0);
 					}
-					inst.DS[0][1]->bind(commandBuffer, PShadowCube, 0, currentImage);
-					SC.M[inst.Mid]->bind(commandBuffer);
-					vkCmdDrawIndexed(commandBuffer,
-									 static_cast<uint32_t>(SC.M[inst.Mid]->indices.size()), 1, 0, 0, 0);
 				}
 
 				vkCmdEndRenderPass(commandBuffer);
@@ -2774,8 +2865,12 @@ class Skeleton26ReplaceName : public BaseProject {
 				// map, and indoors -- in the sun's shadow -- that would read
 				// its light as fully shadowed, hence the explicit -1.
 				if(tf.heldByCamera) {
-					L.shadowIndex = HAND_TORCH_SHADOW_INDEX;
-					updateHandTorchShadow(L.pos);
+					if(cheats.torchShadowsEnabled) {
+						L.shadowIndex = HAND_TORCH_SHADOW_INDEX;
+						updateHandTorchShadow(L.pos);
+					} else {
+						L.shadowIndex = -1;
+					}
 				} else if(tf.shadowCandidate) {
 					L.shadowIndex = tf.shadowSlot;
 				} else {
