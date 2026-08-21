@@ -63,6 +63,17 @@
 		// (no data here beyond the switch -- amplitude defaults to
 		// flickerStrength below). g/beta close to the lanterns': same kind of
 		// small warm source.
+		//
+		// No "castsShadow" on any of these six: shadow-casting for every
+		// point light in the scene (these six, the dl room's colored
+		// torches, the two candles) is now handed out at RUNTIME by
+		// main.cpp's dynamic shadow-cube pool, by proximity to the player,
+		// instead of being fixed forever for whichever torches happened to
+		// be implemented first -- see updateDynamicShadowSlots() there.
+		// These six still work as ordinary (non-shadow) lights through this
+		// file exactly as before; TorchFlame's own per-frame copy of each
+		// (main.cpp) is the one that gets a real shadow when the dynamic
+		// pool assigns it one.
 		{
 			"id": "torchW1",
 			"type": "point",
@@ -72,8 +83,7 @@
 			"g": 3.0,
 			"beta": 1.4,
 			"flicker": true,
-			"flickerStrength": 0.35,
-			"castsShadow": true
+			"flickerStrength": 0.35
 		},
 		{
 			"id": "torchW2",
@@ -84,8 +94,7 @@
 			"g": 3.0,
 			"beta": 1.4,
 			"flicker": true,
-			"flickerStrength": 0.35,
-			"castsShadow": true
+			"flickerStrength": 0.35
 		},
 		{
 			"id": "torchE1",
@@ -96,8 +105,7 @@
 			"g": 3.0,
 			"beta": 1.4,
 			"flicker": true,
-			"flickerStrength": 0.35,
-			"castsShadow": true
+			"flickerStrength": 0.35
 		},
 		{
 			"id": "torchE2",
@@ -108,8 +116,7 @@
 			"g": 3.0,
 			"beta": 1.4,
 			"flicker": true,
-			"flickerStrength": 0.35,
-			"castsShadow": true
+			"flickerStrength": 0.35
 		},
 		{
 			"id": "torchDC",
@@ -120,15 +127,11 @@
 			"g": 3.0,
 			"beta": 1.4,
 			"flicker": true,
-			"flickerStrength": 0.35,
-			"castsShadow": true
+			"flickerStrength": 0.35
 		},
 
-		// The dv alcove's torch. Shadow-casting like the other five: without a
-		// cube map of its own shadowFactor() returns 1 for every fragment it
-		// reaches, so this one lit the dl room straight through the wall
-		// between them. Gets its own real 6-face cube map like every other
-		// torch (CubeShadowMap.hpp), one of NUM_SHADOW_CUBES slots.
+		// The dv alcove's torch. Same as the other five above: no fixed
+		// "castsShadow" any more, it competes for the dynamic pool instead.
 		{
 			"id": "torchDV",
 			"type": "point",
@@ -138,8 +141,7 @@
 			"g": 3.0,
 			"beta": 1.4,
 			"flicker": true,
-			"flickerStrength": 0.35,
-			"castsShadow": true
+			"flickerStrength": 0.35
 		}
 	]
 }

@@ -29,21 +29,39 @@
 #define NUM_SHADOW_MAPS_2D 2
 
 // How many point lights can cast a shadow, each through one real 6-face cube
-// shadow map (CubeShadowMap.hpp). Six are handed out by SceneLights::init in
-// lights.json order (torchW1/W2/E1/E2/DC/DV); the 7th slot is reserved by
-// main.cpp for the held torch, which never goes through lights.json (it
-// moves with the camera -- see the HAND_TORCH_SHADOW_INDEX comment there).
+// shadow map (CubeShadowMap.hpp). Exactly one slot is fixed: the last one,
+// reserved by main.cpp for the held torch, which never goes through
+// lights.json (it moves with the camera -- see the HAND_TORCH_SHADOW_INDEX
+// comment there). Every other slot (main.cpp's
+// dynamicShadowSlotBase..HAND_TORCH_SHADOW_INDEX, currently 0..10) is handed
+// out at RUNTIME instead of at load time: there are more shadow-worthy point
+// lights in the scene (the six wall/dv torches, the four colored decorative
+// torches, the two candles -- twelve in all) than there are spare slots, so
+// main.cpp's updateDynamicShadowSlots() gives them to whichever are
+// currently nearest the player, re-deciding as the player moves (see its own
+// header for why that needs hysteresis rather than a plain "N nearest"
+// rule). No point light gets a PERMANENT slot just for being the first one
+// implemented -- lights.json's own "castsShadow" flag isn't used for point
+// lights any more, see its comment there.
 //
 // Adding a slot means: this number, one more samplerCube binding plus a
 // sampleShadowCube() case in CookTorrance.frag, and one more CubeShadowMap
-// instance in main.cpp. SceneLights::init hands out slots in lights.json
-// order and warns if a "castsShadow" point light finds none left.
+// instance in main.cpp -- the dynamic pool just gets wider, nothing else
+// needs touching.
 //
 // These share the fragment stage's sampled-image budget with
-// NUM_SHADOW_MAPS_2D and the albedo map, against a Vulkan guaranteed minimum
-// (maxPerStageDescriptorSampledImages) of 16. Real desktop drivers allow far
-// more, but past ~16 the code stops being portable by spec.
-#define NUM_SHADOW_CUBES 7
+// NUM_SHADOW_MAPS_2D and the albedo map. 20 + 2 + 1 = 23 exceeds the Vulkan
+// GUARANTEED minimum (maxPerStageDescriptorSampledImages) of 16, so this
+// isn't portable to a spec-minimum GPU any more -- deliberately: flames.json
+// (main.cpp) now spawns a flame for every torch/candle a LEVEL authors
+// (keyed by model, not hardcoded per instance), so the scene's point-light
+// count isn't a fixed 13 any more either, and this leaves headroom for
+// levels with more torches than today's one without every extra one
+// instantly losing the shadow contest. Real desktop GPUs allow far more
+// than 16 here in practice. If this ever needs to grow past what a target
+// GPU actually offers, the dynamic pool degrades gracefully either way --
+// SHADOW_SWAP_MARGIN (main.cpp) just has more candidates to arbitrate.
+#define NUM_SHADOW_CUBES 20
 
 #define LIGHT_DIRECT 0
 #define LIGHT_POINT  1

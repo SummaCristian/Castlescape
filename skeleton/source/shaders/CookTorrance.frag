@@ -110,13 +110,32 @@ layout(binding = 0, set = 2) uniform ShadowUniformBufferObject {
 layout(binding = 1, set = 2) uniform sampler2D shadowMap2D_0;
 layout(binding = 2, set = 2) uniform sampler2D shadowMap2D_1;
 
+// shadowCube0..18: the dynamic pool (main.cpp's
+// dynamicShadowSlotBase..HAND_TORCH_SHADOW_INDEX, currently the whole 0..18
+// range) -- whichever wall/dl/candle point light is currently nearest the
+// player, reassigned at runtime by updateDynamicShadowSlots(). None of these
+// belongs to a particular torch; which torch's cube map lands in which
+// binding changes as the player moves.
 layout(binding = 3, set = 2) uniform samplerCube shadowCube0;
 layout(binding = 4, set = 2) uniform samplerCube shadowCube1;
 layout(binding = 5, set = 2) uniform samplerCube shadowCube2;
 layout(binding = 6, set = 2) uniform samplerCube shadowCube3;
 layout(binding = 7, set = 2) uniform samplerCube shadowCube4;
 layout(binding = 8, set = 2) uniform samplerCube shadowCube5;
-layout(binding = 9, set = 2) uniform samplerCube shadowCube6;	// the held torch
+layout(binding = 9, set = 2) uniform samplerCube shadowCube6;
+layout(binding = 10, set = 2) uniform samplerCube shadowCube7;
+layout(binding = 11, set = 2) uniform samplerCube shadowCube8;
+layout(binding = 12, set = 2) uniform samplerCube shadowCube9;
+layout(binding = 13, set = 2) uniform samplerCube shadowCube10;
+layout(binding = 14, set = 2) uniform samplerCube shadowCube11;
+layout(binding = 15, set = 2) uniform samplerCube shadowCube12;
+layout(binding = 16, set = 2) uniform samplerCube shadowCube13;
+layout(binding = 17, set = 2) uniform samplerCube shadowCube14;
+layout(binding = 18, set = 2) uniform samplerCube shadowCube15;
+layout(binding = 19, set = 2) uniform samplerCube shadowCube16;
+layout(binding = 20, set = 2) uniform samplerCube shadowCube17;
+layout(binding = 21, set = 2) uniform samplerCube shadowCube18;
+layout(binding = 22, set = 2) uniform samplerCube shadowCube19;	// the held torch, fixed
 
 // Stands in for shadowMaps2D[idx], which the separate-bindings choice above
 // rules out. NUM_SHADOW_MAPS_2D is 2 (LightConstants.glsl); if that ever
@@ -127,8 +146,9 @@ float sampleShadowMap2D(int idx, vec2 uv) {
 }
 
 // Same idea for the cube maps, sampled by direction rather than by UV.
-// NUM_SHADOW_CUBES is 7 (LightConstants.glsl, six wall/dv torches plus the
-// held one); a case has to be added or removed here by hand if that changes.
+// NUM_SHADOW_CUBES is 20 (LightConstants.glsl: 19 dynamically-assigned slots
+// shared by every wall/dl torch and candle, plus the held torch's own fixed
+// last one); a case has to be added or removed here by hand if that changes.
 float sampleShadowCube(int idx, vec3 dir) {
     if(idx == 0) return texture(shadowCube0, dir).r;
     if(idx == 1) return texture(shadowCube1, dir).r;
@@ -136,7 +156,20 @@ float sampleShadowCube(int idx, vec3 dir) {
     if(idx == 3) return texture(shadowCube3, dir).r;
     if(idx == 4) return texture(shadowCube4, dir).r;
     if(idx == 5) return texture(shadowCube5, dir).r;
-    return texture(shadowCube6, dir).r;
+    if(idx == 6) return texture(shadowCube6, dir).r;
+    if(idx == 7) return texture(shadowCube7, dir).r;
+    if(idx == 8) return texture(shadowCube8, dir).r;
+    if(idx == 9) return texture(shadowCube9, dir).r;
+    if(idx == 10) return texture(shadowCube10, dir).r;
+    if(idx == 11) return texture(shadowCube11, dir).r;
+    if(idx == 12) return texture(shadowCube12, dir).r;
+    if(idx == 13) return texture(shadowCube13, dir).r;
+    if(idx == 14) return texture(shadowCube14, dir).r;
+    if(idx == 15) return texture(shadowCube15, dir).r;
+    if(idx == 16) return texture(shadowCube16, dir).r;
+    if(idx == 17) return texture(shadowCube17, dir).r;
+    if(idx == 18) return texture(shadowCube18, dir).r;
+    return texture(shadowCube19, dir).r;
 }
 
 // The sun/spot path: unchanged from the single-perspective-map technique,

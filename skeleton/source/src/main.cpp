@@ -3,6 +3,7 @@
 // This has been adapted from the Vulkan tutorial
 #include <sstream>
 #include <limits>
+#include <array>
 
 #include <json.hpp>
 
@@ -329,6 +330,37 @@ class Skeleton26ReplaceName : public BaseProject {
 	// torchFaceMatrices[HAND_TORCH_SHADOW_INDEX]/torchLightPos[..] every frame
 	// in updateUniformBuffer(), before populateCommandBuffer() reads them.
 	static constexpr int HAND_TORCH_SHADOW_INDEX = NUM_SHADOW_CUBES - 1;
+
+	// The DYNAMIC shadow-cube pool: everything between lights.json's own
+	// fixed slots (0..dynamicShadowSlotBase) and the held torch's reserved
+	// last one (HAND_TORCH_SHADOW_INDEX). Set once in localInit(), right
+	// after computeShadowMatrices() reports how many fixed slots
+	// sceneLights.all() actually used -- not a literal 6, so this stays
+	// correct if lights.json's own torch count ever changes.
+	int dynamicShadowSlotBase = 0;
+	// dynamicSlotOccupant[s] is an index into torchFlames for whichever
+	// flame currently holds dynamic slot (dynamicShadowSlotBase + s), or -1
+	// if the slot is empty (more slots than shadowCandidate flames). Sized
+	// NUM_SHADOW_CUBES for simplicity -- only the entries covering the
+	// dynamic range are ever touched -- rather than adding another
+	// compile-time constant for the pool's width.
+	std::array<int, NUM_SHADOW_CUBES> dynamicSlotOccupant{};
+
+	// How much (in-game) time between updateDynamicShadowSlots() calls: the
+	// candidates are static objects, only the player moves, so this doesn't
+	// need a per-frame answer. Startup value equal to the interval so the
+	// very first updateUniformBuffer() call fires it immediately (else the
+	// dynamic slots would render whatever garbage torchFaceMatrices/
+	// torchLightPos happen to start with).
+	float shadowReassignTimer = 0.3f;
+	static constexpr float SHADOW_REASSIGN_INTERVAL = 0.3f;
+	// A waiting candidate must be closer than an occupied slot's current
+	// occupant by more than this factor to take the slot. Without a margin,
+	// a player standing near the distance boundary between two candidates
+	// would flip the slot -- and force a fresh shadow render, since there's
+	// no cross-fade between "has a shadow" and "doesn't" -- on essentially
+	// every re-evaluation.
+	static constexpr float SHADOW_SWAP_MARGIN = 1.15f;
 
 	// Models, textures and Descriptors (values assigned to the uniforms)
 	DescriptorSet DSglobal;
@@ -745,6 +777,31 @@ class Skeleton26ReplaceName : public BaseProject {
 		// merely came out of a smaller flame.
 		float lightScale = 1.0f;
 
+		// True for every flame that competes for a slot in the DYNAMIC
+		// shadow-cube pool (updateDynamicShadowSlots()) -- set automatically
+		// in addTorchFlame() as !heldByCamera, not passed in by callers:
+		// every flame in this project is either the one held torch (its own
+		// dedicated HAND_TORCH_SHADOW_INDEX slot, recomputed every frame
+		// since it's the one that moves) or a static object, and every
+		// static one belongs in the pool. A future addTorchFlame() call for
+		// a new torch/candle is a shadow candidate for free, with nothing
+		// to remember to flip on.
+		bool shadowCandidate = false;
+
+		// This flame's absolute cube-shadow slot if it currently holds one
+		// of the dynamic pool's slots, else -1. Only meaningful when
+		// shadowCandidate is true; read by the light-append loop below to
+		// fill LightData::shadowIndex.
+		int shadowSlot = -1;
+
+		// This candidate's own six face view-projection matrices, computed
+		// once when it's registered in addTorchFlame() below -- it's a
+		// static object, same as the six lights.json torches, so unlike the
+		// held torch it never needs recomputing after that. Copied into
+		// torchFaceMatrices[]/torchLightPos[] whenever
+		// updateDynamicShadowSlots() hands this flame a slot.
+		std::array<glm::mat4, 6> shadowFaceMatrices{};
+
 		// That lean, resolved into the billboard's own axes (x = the
 		// billboard's right, y = its forward) and expressed in the same units
 		// the flame's local geometry uses. Uploaded straight to the shader.
@@ -772,31 +829,10 @@ class Skeleton26ReplaceName : public BaseProject {
 	// pixels sit a few percent up the card -- the anchor compensates by
 	// sinking that much further into the cup, and the fade doubles as the
 	// flame emerging from inside it rather than balancing on the rim.
+	// Also flames.json's fallback default for a model with no "anchor" of
+	// its own, and the value used for both "dungeonTorch" and
+	// "dungeonTorchHeld" there (confirmed identical meshes the same way).
 	static constexpr glm::vec3 TORCH_FLAME_ANCHOR = glm::vec3(-0.384f, 0.30f, 0.0f);
-
-	// Same idea for SM_Candle_01: its POSITION accessor is centred on X/Z
-	// (X -0.148..0.145, Z -0.146..0.145), so the anchor needs no lateral
-	// offset, unlike the torch's off-centre cup. The Y took an extra look,
-	// though: walking the accessor shows a wide flat wax-pool cap (radius
-	// up to 0.145) closing off at Y=0.618..0.638, then EMPTY space (the
-	// thin wick's side wall isn't modelled at all), then the wick's own
-	// tip caps at Y=0.731..0.734. An anchor placed in the middle of that
-	// gap (0.70) put the flame's base only ~0.03 world units above the
-	// wide disc -- close enough for the billboard's base to z-fight
-	// against it every frame. Sitting right at the wick tip instead clears
-	// the disc by the whole gap and still reads as the flame emerging from
-	// the wick, not floating above it.
-	static constexpr glm::vec3 CANDLE_FLAME_ANCHOR = glm::vec3(0.0f, 0.73f, 0.0f);
-
-	// A candle flame is a fraction of a torch flame's size; FLAME_HEIGHT/
-	// FLAME_HALF_WIDTH below are tuned for the torch, so candles ride them
-	// down via TorchFlame::sizeScale instead of needing their own constants.
-	static constexpr float CANDLE_FLAME_SIZE_SCALE = 0.40f;
-
-	// A candle's light should be a faint, local pool, not a torch-strength
-	// source that merely came out of a smaller flame -- so this scales the
-	// point light's colour well below sizeScale, independent of it.
-	static constexpr float CANDLE_FLAME_LIGHT_SCALE = 0.18f;
 
 	// The flame's size, in the torch model's own local units, so it rides
 	// each instance's uniform scale: full size on the wall-mounted torches,
@@ -1682,6 +1718,20 @@ class Skeleton26ReplaceName : public BaseProject {
 			tf.color = color;
 			tf.sizeScale = sizeScale;
 			tf.lightScale = lightScale;
+			// Automatic, not a parameter: every flame this project has is
+			// either the one held torch or a static object, and every
+			// static one belongs in the dynamic shadow pool -- there is no
+			// third kind, so a caller can never forget to opt a new torch/
+			// candle in. See the field comment for what "candidate" means.
+			tf.shadowCandidate = !heldByCamera;
+			if(tf.shadowCandidate) {
+				// Static object, so its face matrices are computed once
+				// here, the same way computeShadowMatrices() used to for
+				// the lights.json torches, rather than every frame like the
+				// held torch.
+				glm::vec3 anchorWorld = glm::vec3(inst->Wm * glm::vec4(anchor, 1.0f));
+				tf.shadowFaceMatrices = cubeFaceMatricesFor(anchorWorld);
+			}
 			// Offsets this torch into a different part of the CPU noise field,
 			// so no two gutter at the same moment. Scaled up because fireNoise
 			// hashes on the integer lattice: a fractional offset would leave
@@ -1693,33 +1743,79 @@ class Skeleton26ReplaceName : public BaseProject {
 		if(handTorchInst != nullptr) {
 			addTorchFlame("handTorch", TORCH_FLAME_ANCHOR, true);
 		}
-		// The wall-mounted dungeonTorch instances (see scene.json): two pairs
-		// flanking the hall's doorway, one in the corridor, one in the dv
-		// alcove.
-		addTorchFlame("dhTorchW1", TORCH_FLAME_ANCHOR);
-		addTorchFlame("dhTorchW2", TORCH_FLAME_ANCHOR);
-		addTorchFlame("dhTorchE1", TORCH_FLAME_ANCHOR);
-		addTorchFlame("dhTorchE2", TORCH_FLAME_ANCHOR);
-		addTorchFlame("dcTorchE", TORCH_FLAME_ANCHOR);
-		addTorchFlame("dvTorch", TORCH_FLAME_ANCHOR);
 
-		// A small cluster of decorative colored torches in the dl room (the
-		// one room along the dungeon's chain with no torches/decor of its
-		// own): a visible demo of the color parameter above, distinct from
-		// every realistic-orange torch elsewhere.
-		addTorchFlame("dlTorchRed",    TORCH_FLAME_ANCHOR, false, glm::vec3(1.00f, 0.10f, 0.05f));
-		addTorchFlame("dlTorchGreen",  TORCH_FLAME_ANCHOR, false, glm::vec3(0.15f, 1.00f, 0.20f));
-		addTorchFlame("dlTorchBlue",   TORCH_FLAME_ANCHOR, false, glm::vec3(0.15f, 0.45f, 1.00f));
-		addTorchFlame("dlTorchPurple", TORCH_FLAME_ANCHOR, false, glm::vec3(0.65f, 0.15f, 1.00f));
+		// Every OTHER flame in the scene: read from flames.json instead of
+		// listed here by instance id, so a level's torches/candles get fire
+		// automatically just by using the standard meshes, with no main.cpp
+		// change and no per-instance authoring -- see the file's own header
+		// for why it's keyed by model. "handTorch" above is the one
+		// exception, spawned by literal id: it's a gameplay singleton, not
+		// level dressing.
+		{
+			std::ifstream ifs("assets/scenes/flames.json");
+			if(!ifs.is_open()) {
+				std::cout << "flames.json not found, no flames beyond the held torch\n";
+			} else {
+				nlohmann::json js = nlohmann::json::parse(ifs, nullptr, true, true);
 
-		// The two dungeon candles (see scene.json): same realistic-orange
-		// fire as the wall torches, just shrunk to candle scale, with a
-		// much fainter light -- a candle shouldn't throw a torch's amount
-		// of light just because it shares the torch's light formula.
-		addTorchFlame("dhCandle", CANDLE_FLAME_ANCHOR, false, TORCH_LIGHT_COLOR,
-					   CANDLE_FLAME_SIZE_SCALE, CANDLE_FLAME_LIGHT_SCALE);
-		addTorchFlame("dcCandle", CANDLE_FLAME_ANCHOR, false, TORCH_LIGHT_COLOR,
-					   CANDLE_FLAME_SIZE_SCALE, CANDLE_FLAME_LIGHT_SCALE);
+				struct FlameDef {
+					glm::vec3 anchor = TORCH_FLAME_ANCHOR;
+					glm::vec3 color = TORCH_LIGHT_COLOR;
+					float sizeScale = 1.0f;
+					float lightScale = 1.0f;
+				};
+				// Same "only overwrite what's present" shape as
+				// SceneLights::readVec3, so a def can start from another
+				// def's values (a model's defaults, for an override to
+				// build on) instead of always starting from scratch.
+				auto readVec3 = [](const nlohmann::json &j, const glm::vec3 &fallback) {
+					if(!j.is_array() || j.size() != 3) return fallback;
+					return glm::vec3(j[0].get<float>(), j[1].get<float>(), j[2].get<float>());
+				};
+				auto applyFlameDef = [&](const nlohmann::json &j, FlameDef def) {
+					if(j.contains("anchor"))     def.anchor = readVec3(j["anchor"], def.anchor);
+					if(j.contains("color"))      def.color = readVec3(j["color"], def.color);
+					if(j.contains("sizeScale"))  def.sizeScale = j["sizeScale"].get<float>();
+					if(j.contains("lightScale")) def.lightScale = j["lightScale"].get<float>();
+					return def;
+				};
+
+				// Resolve each listed model NAME to its Mid once (same
+				// pattern as SceneMaterials.hpp), so spawning below is an
+				// O(1) lookup per instance instead of a string compare
+				// against every model name.
+				std::unordered_map<int, FlameDef> byModel;
+				if(js.contains("models")) {
+					for(auto it = js["models"].begin(); it != js["models"].end(); ++it) {
+						auto mit = SC.MeshIds.find(it.key());
+						if(mit == SC.MeshIds.end()) {
+							std::cout << "flames.json: unknown model '" << it.key() << "', skipped\n";
+							continue;
+						}
+						byModel[mit->second] = applyFlameDef(it.value(), FlameDef{});
+					}
+				}
+
+				const nlohmann::json *overrides = js.contains("overrides") ? &js["overrides"] : nullptr;
+
+				for(const auto &kv : SC.InstanceIds) {
+					const std::string &id = kv.first;
+					if(id == "handTorch") {
+						continue;
+					}
+					Instance *inst = SC.I[kv.second];
+					auto dit = byModel.find(inst->Mid);
+					if(dit == byModel.end()) {
+						continue;
+					}
+					FlameDef def = dit->second;
+					if(overrides != nullptr && overrides->contains(id)) {
+						def = applyFlameDef((*overrides)[id], def);
+					}
+					addTorchFlame(id.c_str(), def.anchor, false, def.color, def.sizeScale, def.lightScale);
+				}
+			}
+		}
 
 		// Surface parameters for the BRDF, one per model.
 		materials.init(&SC, "assets/scenes/materials.json");
@@ -1732,6 +1828,22 @@ class Skeleton26ReplaceName : public BaseProject {
 		// shadow-casting light, which instance+offset lights only have once
 		// SceneLights has read scene.json's world matrices.
 		computeShadowMatrices();
+
+		// Everything past lights.json's own fixed slots (activeCubeShadows,
+		// right now 6) and before the held torch's reserved last one is the
+		// dynamic pool: captured here, once, rather than as a literal 6, so
+		// this stays correct if lights.json's own torch count ever changes.
+		// dynamicSlotOccupant starts empty; updateDynamicShadowSlots() fills
+		// it in on the first updateUniformBuffer() call (shadowReassignTimer
+		// starts already due, see its member comment).
+		dynamicShadowSlotBase = activeCubeShadows;
+		dynamicSlotOccupant.fill(-1);
+		// The render loop below (populateCommandBuffer()) walks slots
+		// [0, activeCubeShadows) every frame, so the dynamic pool has to be
+		// counted in even before anything occupies it -- an empty dynamic
+		// slot still needs to run its (harmless, nothing samples it) capture
+		// pass, or a slot filled mid-game would never get rendered at all.
+		activeCubeShadows = std::max(activeCubeShadows, HAND_TORCH_SHADOW_INDEX);
 
 		// The held torch's cube slot isn't in sceneLights.all() (it's not in
 		// lights.json), so computeShadowMatrices() never counts it into
@@ -1783,6 +1895,25 @@ class Skeleton26ReplaceName : public BaseProject {
 		hud.addToggle("Light Heatmap", &cheats.showLightHeatmap);
 	}
 
+	// Six 90-degree perspective faces covering a point light's whole sphere,
+	// axis-aligned on world X/Y/Z (CUBE_FACE_DIR/CUBE_FACE_UP,
+	// CubeShadowMap.hpp) -- the same math every point-light shadow camera in
+	// this file needs, factored out so the six lights.json torches
+	// (computeShadowMatrices(), once), the held torch
+	// (updateHandTorchShadow(), every frame) and the dynamic shadow
+	// candidates (addTorchFlame(), once each, they're static objects too)
+	// share one implementation instead of three copies that could drift.
+	std::array<glm::mat4, 6> cubeFaceMatricesFor(const glm::vec3 &pos) const {
+		std::array<glm::mat4, 6> out{};
+		for(int face = 0; face < 6; face++) {
+			glm::mat4 view = glm::lookAt(pos, pos + CUBE_FACE_DIR[face], CUBE_FACE_UP[face]);
+			glm::mat4 proj = glm::perspective(glm::radians(90.0f), 1.0f,
+											  TORCH_SHADOW_NEAR_CONST, TORCH_SHADOW_FAR_CONST);
+			out[face] = proj * view;
+		}
+		return out;
+	}
+
 	// Builds the view-projection matrix each of the shadow passes renders
 	// with, in LightData::shadowIndex order. Called once, from localInit()
 	// right after sceneLights.init(): the sun and the torches never move, so
@@ -1793,12 +1924,12 @@ class Skeleton26ReplaceName : public BaseProject {
 	// SceneLights::init), and re-deriving that here would be a second copy of
 	// logic that already lives in exactly one place.
 	void computeShadowMatrices() {
-		// Past this a torch contributes almost nothing anyway: with g = 3.0
-		// and beta = 1.4 (lights.json) it is down to about 8% of its stated
-		// colour. TORCH_SHADOW_FAR_CONST (member) rather than a local here:
-		// createCubeShadowMaps() needs the same number for the color
-		// attachment's clear value.
-		const float TORCH_SHADOW_FAR = TORCH_SHADOW_FAR_CONST;
+		// A torch's far plane (cubeFaceMatricesFor() -> TORCH_SHADOW_FAR_CONST):
+		// past this it contributes almost nothing anyway -- with g = 3.0 and
+		// beta = 1.4 (lights.json) it is down to about 8% of its stated
+		// colour. createCubeShadowMaps() needs the same number for the color
+		// attachment's clear value, which is why it's a member and not a
+		// local here.
 
 		// The sun has no position, only a travel direction (SceneLights.hpp),
 		// so its shadow camera needs a stand-in position: back away from a
@@ -1842,33 +1973,122 @@ class Skeleton26ReplaceName : public BaseProject {
 			// (samplerCube), never rasterized to the screen, so there is no
 			// Vulkan-vs-GL NDC mismatch to correct for -- flipping would
 			// only mis-rotate which face's texels land where.
+			std::array<glm::mat4, 6> faces = cubeFaceMatricesFor(L.pos);
 			for(int face = 0; face < 6; face++) {
-				glm::mat4 view = glm::lookAt(L.pos, L.pos + CUBE_FACE_DIR[face], CUBE_FACE_UP[face]);
-				glm::mat4 proj = glm::perspective(glm::radians(90.0f), 1.0f,
-												  TORCH_SHADOW_NEAR_CONST, TORCH_SHADOW_FAR);
-				torchFaceMatrices[L.shadowIndex][face] = proj * view;
+				torchFaceMatrices[L.shadowIndex][face] = faces[face];
 			}
 			torchLightPos[L.shadowIndex] = L.pos;
 			activeCubeShadows = std::max(activeCubeShadows, L.shadowIndex + 1);
 		}
 	}
 
-	// Same six-face cube math as computeShadowMatrices()'s point-light branch,
-	// but for HAND_TORCH_SHADOW_INDEX and called every frame from
+	// Same cubeFaceMatricesFor() every point-light shadow camera uses, but
+	// for HAND_TORCH_SHADOW_INDEX and called every frame from
 	// updateUniformBuffer() instead of once from localInit(): the held torch's
 	// world position moves with the camera, so its face matrices can't be
-	// baked once like the wall torches' can. Runs before populateCommandBuffer()
-	// records this frame's cube shadow passes (updateUniformBuffer() precedes
-	// updateCommandBuffers() in Starter.hpp's drawFrame()), so the push
-	// constants that pass reads are already current.
+	// baked once like the static torches'/candidates' can. Runs before
+	// populateCommandBuffer() records this frame's cube shadow passes
+	// (updateUniformBuffer() precedes updateCommandBuffers() in Starter.hpp's
+	// drawFrame()), so the push constants that pass reads are already current.
 	void updateHandTorchShadow(const glm::vec3 &lightPos) {
+		std::array<glm::mat4, 6> faces = cubeFaceMatricesFor(lightPos);
 		for(int face = 0; face < 6; face++) {
-			glm::mat4 view = glm::lookAt(lightPos, lightPos + CUBE_FACE_DIR[face], CUBE_FACE_UP[face]);
-			glm::mat4 proj = glm::perspective(glm::radians(90.0f), 1.0f,
-											  TORCH_SHADOW_NEAR_CONST, TORCH_SHADOW_FAR_CONST);
-			torchFaceMatrices[HAND_TORCH_SHADOW_INDEX][face] = proj * view;
+			torchFaceMatrices[HAND_TORCH_SHADOW_INDEX][face] = faces[face];
 		}
 		torchLightPos[HAND_TORCH_SHADOW_INDEX] = lightPos;
+	}
+
+	// Distance-based reassignment for the dynamic shadow-cube pool
+	// (dynamicShadowSlotBase..HAND_TORCH_SHADOW_INDEX), among the flames
+	// marked shadowCandidate (the 4 colored dl torches + 2 candles): more of
+	// them exist than there are spare cube slots, so whichever are nearest
+	// the player get a real shadow, re-evaluated as the player moves so ones
+	// left behind lose theirs to ones now closer.
+	//
+	// A plain "N nearest, recomputed every tick" rule thrashes: standing
+	// near the distance boundary between two candidates flips the slot every
+	// time position noise crosses it, and every flip forces a fresh shadow
+	// render since there's no cross-fade between "has a shadow" and
+	// "doesn't". SHADOW_SWAP_MARGIN fixes that -- a waiting candidate only
+	// takes a slot from its current occupant if it's genuinely closer, not
+	// marginally closer -- and SHADOW_REASSIGN_INTERVAL (called from
+	// updateUniformBuffer(), not every frame) means the decision itself is
+	// only revisited a few times a second: the candidates are static, only
+	// the player moves, so nothing here needs a per-frame answer.
+	void updateDynamicShadowSlots(const glm::vec3 &eyePos) {
+		const int base = dynamicShadowSlotBase;
+		const int count = HAND_TORCH_SHADOW_INDEX - base;
+		if(count <= 0) {
+			return;
+		}
+
+		auto distSqTo = [&](const TorchFlame &tf) {
+			glm::vec3 pos = glm::vec3(tf.inst->Wm * glm::vec4(tf.anchor, 1.0f));
+			glm::vec3 d = pos - eyePos;
+			return glm::dot(d, d);
+		};
+
+		auto assignSlot = [&](int slot, int flameIdx) {
+			dynamicSlotOccupant[slot] = flameIdx;
+			TorchFlame &tf = torchFlames[flameIdx];
+			tf.shadowSlot = slot;
+			for(int face = 0; face < 6; face++) {
+				torchFaceMatrices[slot][face] = tf.shadowFaceMatrices[face];
+			}
+			torchLightPos[slot] = glm::vec3(tf.inst->Wm * glm::vec4(tf.anchor, 1.0f));
+		};
+
+		struct Cand { int flameIdx; float distSq; };
+		std::vector<Cand> waiting;
+		for(size_t i = 0; i < torchFlames.size(); i++) {
+			const TorchFlame &tf = torchFlames[i];
+			if(!tf.shadowCandidate || tf.shadowSlot >= 0) {
+				continue;
+			}
+			waiting.push_back({(int)i, distSqTo(tf)});
+		}
+		std::sort(waiting.begin(), waiting.end(),
+				  [](const Cand &a, const Cand &b) { return a.distSq < b.distSq; });
+
+		// Empty slots first, unconditionally: an empty slot never "wins"
+		// over a candidate the way an occupied one does, it just has
+		// nothing in it yet (startup, or fewer candidates than slots).
+		size_t wi = 0;
+		for(int s = base; s < base + count && wi < waiting.size(); s++) {
+			if(dynamicSlotOccupant[s] != -1) {
+				continue;
+			}
+			assignSlot(s, waiting[wi].flameIdx);
+			wi++;
+		}
+
+		// Occupied slots, worst (farthest occupant) first, contested
+		// against the best remaining waiter (nearest first, already
+		// sorted): the moment one pairing fails the margin, every pairing
+		// after it -- a worse waiter against a better-placed occupant --
+		// fails it too, so this can stop at the first miss instead of
+		// checking every combination.
+		std::vector<int> occupied;
+		for(int s = base; s < base + count; s++) {
+			if(dynamicSlotOccupant[s] != -1) {
+				occupied.push_back(s);
+			}
+		}
+		std::sort(occupied.begin(), occupied.end(), [&](int a, int b) {
+			return distSqTo(torchFlames[dynamicSlotOccupant[a]])
+				 > distSqTo(torchFlames[dynamicSlotOccupant[b]]);
+		});
+
+		const float marginSq = SHADOW_SWAP_MARGIN * SHADOW_SWAP_MARGIN;
+		for(size_t oi = 0; wi < waiting.size() && oi < occupied.size(); oi++, wi++) {
+			int slot = occupied[oi];
+			float occupantDistSq = distSqTo(torchFlames[dynamicSlotOccupant[slot]]);
+			if(waiting[wi].distSq * marginSq >= occupantDistSq) {
+				break;
+			}
+			torchFlames[dynamicSlotOccupant[slot]].shadowSlot = -1;
+			assignSlot(slot, waiting[wi].flameIdx);
+		}
 	}
 
 	// Builds every torch's CubeShadowMap (colour cube image + face views +
@@ -2320,6 +2540,17 @@ class Skeleton26ReplaceName : public BaseProject {
 		const glm::mat4 camToWorld = glm::inverse(View);
 		const glm::vec3 eyePos = glm::vec3(camToWorld[3]);
 
+		// Re-decides which shadow candidates hold the dynamic cube-shadow
+		// pool's slots, at most every SHADOW_REASSIGN_INTERVAL -- must run
+		// before the light-append loop below (it reads tf.shadowSlot) and
+		// before the DSshadowCube mapping loop further down (it writes
+		// torchFaceMatrices/torchLightPos for whichever slots change hands).
+		shadowReassignTimer += deltaT;
+		if(shadowReassignTimer >= SHADOW_REASSIGN_INTERVAL) {
+			shadowReassignTimer = 0.0f;
+			updateDynamicShadowSlots(eyePos);
+		}
+
 		// The cylindrical billboard basis every flame uses this frame, taken
 		// from the CAMERA's own right axis rather than from each flame's
 		// individual eye->anchor direction.
@@ -2530,21 +2761,23 @@ class Skeleton26ReplaceName : public BaseProject {
 				L.cosIn = 1.0f;
 				L.cosOut = 0.0f;
 				L.type = LIGHT_POINT;
-				// Not a shadow caster of its own (these lights aren't in
-				// lights.json and never got a SceneLights::init slot): -1
-				// skips shadowFactor()'s lookup entirely. Left unset this
-				// zero-initializes to 0, the sun's own shadow map, and
-				// indoors -- in the sun's shadow -- that reads every torch
-				// flame's light as fully shadowed.
-				//
-				// The held torch is the one exception: it gets the reserved
-				// HAND_TORCH_SHADOW_INDEX cube slot instead, recomputed for
-				// its current (camera-following) position right here so
-				// populateCommandBuffer()'s cube shadow pass -- later this
-				// same frame -- renders it from the right place.
+				// The held torch gets the reserved HAND_TORCH_SHADOW_INDEX
+				// cube slot, recomputed for its current (camera-following)
+				// position right here so populateCommandBuffer()'s cube
+				// shadow pass -- later this same frame -- renders it from
+				// the right place. Every other shadowCandidate flame reads
+				// whatever slot (if any) updateDynamicShadowSlots() gave it
+				// this reassignment tick -- -1 (skip shadowFactor()'s lookup
+				// entirely) if it currently isn't nearest enough to hold
+				// one. A non-candidate flame is never a shadow caster: left
+				// unset this zero-initializes to 0, the sun's own shadow
+				// map, and indoors -- in the sun's shadow -- that would read
+				// its light as fully shadowed, hence the explicit -1.
 				if(tf.heldByCamera) {
 					L.shadowIndex = HAND_TORCH_SHADOW_INDEX;
 					updateHandTorchShadow(L.pos);
+				} else if(tf.shadowCandidate) {
+					L.shadowIndex = tf.shadowSlot;
 				} else {
 					L.shadowIndex = -1;
 				}
