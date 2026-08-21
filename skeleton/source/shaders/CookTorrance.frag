@@ -240,6 +240,24 @@ bool debugOn(int flag) {
     return (gubo.debugFlags & flag) != 0;
 }
 
+// LIGHT_DEBUG_HEATMAP's color ramp: black (no light) through blue, green,
+// yellow, to red (overbright). A log compression goes first because the
+// input is unclamped HDR radiance -- torches sit well above 1.0 close up --
+// so a plain linear ramp would just read as solid red across most of a lit
+// room instead of showing the falloff the cheat exists to visualize.
+vec3 heatmapRamp(float intensity) {
+    float x = clamp(log(1.0 + intensity) / log(4.0), 0.0, 1.0);
+    vec3 c0 = vec3(0.0, 0.0, 0.0);
+    vec3 c1 = vec3(0.0, 0.0, 1.0);
+    vec3 c2 = vec3(0.0, 1.0, 0.0);
+    vec3 c3 = vec3(1.0, 1.0, 0.0);
+    vec3 c4 = vec3(1.0, 0.0, 0.0);
+    if(x < 0.25) return mix(c0, c1, x / 0.25);
+    if(x < 0.5)  return mix(c1, c2, (x - 0.25) / 0.25);
+    if(x < 0.75) return mix(c2, c3, (x - 0.5) / 0.25);
+    return mix(c3, c4, (x - 0.75) / 0.25);
+}
+
 const float PI = 3.14159265359;
 
 // Hemispheric ambient, E07 s.47-54. Indirect light, blended by which way the
@@ -385,11 +403,20 @@ void main() {
 
     vec3 V = normalize(gubo.eyePos - fragPos);
 
+    // Debug view: incoming light intensity, ignoring the surface's own
+    // albedo. Forcing mD/mS/k the same way LIGHT_DEBUG_NO_SPECULAR does
+    // reuses the normal Lo loop below unchanged; only what happens to the
+    // result (the ramp instead of a straight write) differs, further down.
+    bool heatmap = debugOn(LIGHT_DEBUG_HEATMAP);
+    if(heatmap) {
+        mD = vec3(1.0);
+    }
+
     // k is the diffuse share, so forcing it to 1 leaves the specular term
     // multiplied by 0: the highlights go, everything else stays exactly as it
     // was. Done here rather than inside BRDF so that function keeps taking all
     // its inputs as arguments.
-    float k = debugOn(LIGHT_DEBUG_NO_SPECULAR) ? 1.0 : ubo.k;
+    float k = (debugOn(LIGHT_DEBUG_NO_SPECULAR) || heatmap) ? 1.0 : ubo.k;
 
     // Rendering equation: sum over the sources of radiance times BRDF, each
     // term zeroed by shadowFactor() wherever that one light doesn't reach
@@ -410,6 +437,12 @@ void main() {
     }
 
     vec3 color = Lo + hemisphericAmbient(N, mD);
+
+    if(heatmap) {
+        float intensity = dot(color, vec3(0.2126, 0.7152, 0.0722));
+        outColor = vec4(heatmapRamp(intensity), 1.0);
+        return;
+    }
 
     // Written linear and unclamped into an R16G16B16A16_SFLOAT attachment, so
     // a surface that receives more than a unit of light keeps saying so rather

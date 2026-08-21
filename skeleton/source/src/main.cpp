@@ -16,6 +16,7 @@
 #include "custom/SceneLights.hpp"
 #include "custom/Flame.hpp"
 #include "custom/CubeShadowMap.hpp"
+#include "custom/LightDebug.hpp"
 
 // Our own files, and where to start reading.
 //
@@ -489,6 +490,17 @@ class Skeleton26ReplaceName : public BaseProject {
 		// from "this artifact is in the geometry", which is otherwise hard to
 		// tell apart by eye since both show up as flicker on a wall.
 		bool shadowsEnabled = true;
+
+		// Geometry overlays (LightDebug.hpp), independent of the shading
+		// debug views above: crosses/arrows at each active light's position,
+		// and wireframe boxes at each torch's shadow-cube near/far clip
+		// distance. Off by default, same reasoning as showCoordinates.
+		bool showLightGizmos = false;
+		bool showShadowFrustums = false;
+		// Shader-side, unlike the two above: recolors surfaces by incoming
+		// light intensity instead of drawing extra geometry. See
+		// LIGHT_DEBUG_HEATMAP in CookTorrance.frag.
+		bool showLightHeatmap = false;
 	} cheats;
 
 	// Numeric tuning for the movement cheats above, isolated the same way but
@@ -628,6 +640,12 @@ class Skeleton26ReplaceName : public BaseProject {
 	// the scene (Flame::spawn), held one included -- that's what the reusable
 	// design was for.
 	Flame flame;
+
+	// Cheat-menu-gated debug overlay: colored crosses/arrows at each active
+	// light's position, and wireframe boxes at each torch's shadow-cube
+	// near/far clip distance. See custom/LightDebug.hpp for why it draws via
+	// vertex pulling instead of a vertex buffer.
+	LightDebug lightDebug;
 
 	// One entry per torch that got a flame, filled once in localInit() (see
 	// addTorchFlame there) and walked every frame in updateUniformBuffer()
@@ -1581,6 +1599,8 @@ class Skeleton26ReplaceName : public BaseProject {
 		// handTorchInst above.
 		flame.init(this, &DSLglobal, &DSglobal);
 
+		lightDebug.init(this);
+
 		// seed just spreads each flame's sway/flicker phase (see Flame.hpp),
 		// not a real RNG: index * a large-ish irrational-ish constant keeps
 		// them decorrelated without needing a seeded generator for one call.
@@ -1682,6 +1702,9 @@ class Skeleton26ReplaceName : public BaseProject {
 		hud.addToggle("Tone Mapping", &cheats.toneMapEnabled);
 		hud.addToggle("Fullbright", &cheats.unlit);
 		hud.addToggle("Show Normals", &cheats.showNormals);
+		hud.addToggle("Light Gizmos", &cheats.showLightGizmos);
+		hud.addToggle("Shadow Frustums", &cheats.showShadowFrustums);
+		hud.addToggle("Light Heatmap", &cheats.showLightHeatmap);
 	}
 
 	// Builds the view-projection matrix each of the shadow passes renders
@@ -1949,6 +1972,8 @@ class Skeleton26ReplaceName : public BaseProject {
 		// over-1.0 colours land in the HDR attachment where bloom can find
 		// them.
 		flame.pipelinesAndDescriptorSetsInit(&RP);
+		// Same RP too, for the same reason -- see LightDebug.hpp's header.
+		lightDebug.pipelinesAndDescriptorSetsInit(&RP);
 	}
 
 	// Here you destroy your pipelines and Descriptor Sets!
@@ -1978,6 +2003,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		txt.pipelinesAndDescriptorSetsCleanup();
 		uiQuad.pipelinesAndDescriptorSetsCleanup();
 		flame.pipelinesAndDescriptorSetsCleanup();
+		lightDebug.pipelinesAndDescriptorSetsCleanup();
 	}
 
 	// Here you destroy all the Models, Texture and Desc. Set Layouts you created!
@@ -2035,6 +2061,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		txt.localCleanup();
 		uiQuad.localCleanup();
 		flame.localCleanup();
+		lightDebug.localCleanup();
 	}
 	
 	// Here it is the creation of the command buffer:
@@ -2160,6 +2187,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		RP.begin(commandBuffer, currentImage);
 		SC.populateCommandBuffer(commandBuffer, 0, currentImage);
 		flame.populateCommandBuffer(commandBuffer, currentImage);
+		lightDebug.populateCommandBuffer(commandBuffer, currentImage);
 		RP.end(commandBuffer);
 
 		// 2-5. Four full-screen quads: threshold, blur across, blur down,
@@ -2466,6 +2494,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		if(!cheats.specularEnabled) gubo.debugFlags |= LIGHT_DEBUG_NO_SPECULAR;
 		if(!cheats.toneMapEnabled)  gubo.debugFlags |= LIGHT_DEBUG_NO_TONEMAP;
 		if(!cheats.shadowsEnabled)  gubo.debugFlags |= LIGHT_DEBUG_NO_SHADOWS;
+		if(cheats.showLightHeatmap) gubo.debugFlags |= LIGHT_DEBUG_HEATMAP;
 
 		// Both computed further up, before the torch fire state that needs them.
 		gubo.eyePos = eyePos;
@@ -2653,6 +2682,45 @@ class Skeleton26ReplaceName : public BaseProject {
 			cubeUbo.lightPos = glm::vec4(torchLightPos[t], 0.0f);
 			DSshadowCube[t].map(currentImage, &cubeUbo, 0);
 		}
+
+		// Debug overlay (LightDebug.hpp, cheat-menu gated): gizmos at each
+		// active light's position/direction, and/or wireframe boxes at each
+		// torch's shadow-cube clip planes. Built here so gubo.lights[]/
+		// activeCubeShadows/torchLightPos[] are all current for this frame,
+		// including the held torch (refreshed by updateHandTorchShadow()
+		// earlier in this function, same as the DSshadowCube[] loop above
+		// relies on).
+		std::vector<glm::vec4> dbgPos, dbgColor;
+		if(cheats.showLightGizmos) {
+			for(int i = 0; i < gubo.lightCount; i++) {
+				const LightData &L = gubo.lights[i];
+				glm::vec4 color = glm::vec4(L.color, 1.0f);
+				if(L.type == LIGHT_DIRECT) {
+					// The sun has no position, only a direction, so its gizmo
+					// is an arrow anchored near the player instead of a cross
+					// at a point in space.
+					glm::vec3 anchor = eyePos + glm::vec3(0.0f, 2.0f, 0.0f);
+					glm::vec3 tip = anchor + L.dir * 3.0f;
+					LightDebug::PushLine(anchor, tip, color, dbgPos, dbgColor);
+					glm::vec3 upHint = (std::abs(L.dir.y) > 0.99f) ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
+					glm::vec3 side = glm::normalize(glm::cross(L.dir, upHint)) * 0.3f;
+					glm::vec3 back = -L.dir * 0.3f;
+					LightDebug::PushLine(tip, tip + back + side, color, dbgPos, dbgColor);
+					LightDebug::PushLine(tip, tip + back - side, color, dbgPos, dbgColor);
+				} else {
+					LightDebug::PushCross(L.pos, 0.3f, color, dbgPos, dbgColor);
+				}
+			}
+		}
+		if(cheats.showShadowFrustums) {
+			for(int t = 0; t < activeCubeShadows; t++) {
+				LightDebug::PushBox(torchLightPos[t], TORCH_SHADOW_NEAR_CONST,
+									glm::vec4(1.0f, 1.0f, 0.0f, 1.0f), dbgPos, dbgColor);
+				LightDebug::PushBox(torchLightPos[t], TORCH_SHADOW_FAR_CONST,
+									glm::vec4(1.0f, 0.5f, 0.0f, 1.0f), dbgPos, dbgColor);
+			}
+		}
+		lightDebug.update(currentImage, ViewPrj, dbgPos, dbgColor);
 
 		// Over every technique, not just the first: instances need the same
 		// per-object uniforms filled in regardless of which technique they

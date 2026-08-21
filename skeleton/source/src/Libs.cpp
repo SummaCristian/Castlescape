@@ -32,3 +32,6 @@
 
 #define FLAME_IMPLEMENTATION
 #include "custom/Flame.hpp"
+
+#define LIGHTDEBUG_IMPLEMENTATION
+#include "custom/LightDebug.hpp"
