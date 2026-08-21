@@ -48,100 +48,21 @@
 			"color": [1.0, 0.98, 0.92],
 			"orbitSpeed": 0.0,
 			"castsShadow": true
-		},
-
-		// The dungeon wall torches (five here, plus torchDV at the end of this
-		// file, six in all). Offset is the flame's position relative
-		// to its torch instance's own origin -- NOT rotated by the instance's
-		// eulerAngles (SceneLights adds it in world space), which is why the two
-		// walls need opposite-signed X: the west-wall torches are rotated 180 on
-		// Y so their cup points +X into the room, the east-wall ones are
-		// unrotated and point -X. See Flame_01/TorchSkull_01 placement in
-		// scene.json for the matching mesh offsets.
-		//
-		// flicker enables the per-frame sine-sum jitter in SceneLights::update
-		// (no data here beyond the switch -- amplitude defaults to
-		// flickerStrength below). g/beta close to the lanterns': same kind of
-		// small warm source.
-		//
-		// No "castsShadow" on any of these six: shadow-casting for every
-		// point light in the scene (these six, the dl room's colored
-		// torches, the two candles) is now handed out at RUNTIME by
-		// main.cpp's dynamic shadow-cube pool, by proximity to the player,
-		// instead of being fixed forever for whichever torches happened to
-		// be implemented first -- see updateDynamicShadowSlots() there.
-		// These six still work as ordinary (non-shadow) lights through this
-		// file exactly as before; TorchFlame's own per-frame copy of each
-		// (main.cpp) is the one that gets a real shadow when the dynamic
-		// pool assigns it one.
-		{
-			"id": "torchW1",
-			"type": "point",
-			"instance": "dhTorchW1",
-			"offset": [0.47, 0.40, 0.0],
-			"color": [1.0, 0.55, 0.20],
-			"g": 3.0,
-			"beta": 1.4,
-			"flicker": true,
-			"flickerStrength": 0.35
-		},
-		{
-			"id": "torchW2",
-			"type": "point",
-			"instance": "dhTorchW2",
-			"offset": [0.47, 0.40, 0.0],
-			"color": [1.0, 0.55, 0.20],
-			"g": 3.0,
-			"beta": 1.4,
-			"flicker": true,
-			"flickerStrength": 0.35
-		},
-		{
-			"id": "torchE1",
-			"type": "point",
-			"instance": "dhTorchE1",
-			"offset": [-0.47, 0.40, 0.0],
-			"color": [1.0, 0.55, 0.20],
-			"g": 3.0,
-			"beta": 1.4,
-			"flicker": true,
-			"flickerStrength": 0.35
-		},
-		{
-			"id": "torchE2",
-			"type": "point",
-			"instance": "dhTorchE2",
-			"offset": [-0.47, 0.40, 0.0],
-			"color": [1.0, 0.55, 0.20],
-			"g": 3.0,
-			"beta": 1.4,
-			"flicker": true,
-			"flickerStrength": 0.35
-		},
-		{
-			"id": "torchDC",
-			"type": "point",
-			"instance": "dcTorchE",
-			"offset": [-0.47, 0.40, 0.0],
-			"color": [1.0, 0.55, 0.20],
-			"g": 3.0,
-			"beta": 1.4,
-			"flicker": true,
-			"flickerStrength": 0.35
-		},
-
-		// The dv alcove's torch. Same as the other five above: no fixed
-		// "castsShadow" any more, it competes for the dynamic pool instead.
-		{
-			"id": "torchDV",
-			"type": "point",
-			"instance": "dvTorch",
-			"offset": [-0.47, 0.40, 0.0],
-			"color": [1.0, 0.55, 0.20],
-			"g": 3.0,
-			"beta": 1.4,
-			"flicker": true,
-			"flickerStrength": 0.35
 		}
+
+		// The dungeon wall torches (torchW1/W2, torchE1/E2, torchDC, and the
+		// dv alcove's torchDV) used to be authored here too, anchored to their
+		// instances the same way as above. They were removed: every one of
+		// them also carries the "dungeonTorch" model, so flames.json spawns a
+		// TorchFlame for each of them independently (main.cpp's "Torch
+		// flames' point lights" block), which appends its own per-frame point
+		// light into gubo already -- correct position even while the flame
+		// billboard sways, flicker, and a shot at the dynamic shadow-cube
+		// pool. Keeping a second, static copy here just doubled each torch's
+		// light contribution and doubled its debug gizmo (two crosses per
+		// torch, and since only the TorchFlame copy is distance-culled, only
+		// one of the pair would disappear when walking away). TorchFlame is
+		// now the sole owner of these six; nothing else in this file
+		// duplicates a flame-driven instance.
 	]
 }
