@@ -730,6 +730,21 @@ class Skeleton26ReplaceName : public BaseProject {
 		// color is untouched by this.
 		glm::vec3 color = TORCH_LIGHT_COLOR;
 
+		// Multiplies FLAME_HEIGHT/FLAME_HALF_WIDTH on top of the instance's
+		// own uniform scale (see instScale below). 1.0 for every torch; the
+		// candles pass a smaller value so their flame reads as a candle
+		// flame rather than a torch flame that merely rode the candle
+		// model's own (already small) instance scale.
+		float sizeScale = 1.0f;
+
+		// Multiplies the point light's colour only (see the light-append
+		// loop below) -- independent of sizeScale, since a small flame
+		// isn't automatically a dim one. 1.0 for every torch; the candles
+		// pass a small value so they read as the faint, local light a
+		// candle actually casts instead of a torch-strength light that
+		// merely came out of a smaller flame.
+		float lightScale = 1.0f;
+
 		// That lean, resolved into the billboard's own axes (x = the
 		// billboard's right, y = its forward) and expressed in the same units
 		// the flame's local geometry uses. Uploaded straight to the shader.
@@ -758,6 +773,30 @@ class Skeleton26ReplaceName : public BaseProject {
 	// sinking that much further into the cup, and the fade doubles as the
 	// flame emerging from inside it rather than balancing on the rim.
 	static constexpr glm::vec3 TORCH_FLAME_ANCHOR = glm::vec3(-0.384f, 0.30f, 0.0f);
+
+	// Same idea for SM_Candle_01: its POSITION accessor is centred on X/Z
+	// (X -0.148..0.145, Z -0.146..0.145), so the anchor needs no lateral
+	// offset, unlike the torch's off-centre cup. The Y took an extra look,
+	// though: walking the accessor shows a wide flat wax-pool cap (radius
+	// up to 0.145) closing off at Y=0.618..0.638, then EMPTY space (the
+	// thin wick's side wall isn't modelled at all), then the wick's own
+	// tip caps at Y=0.731..0.734. An anchor placed in the middle of that
+	// gap (0.70) put the flame's base only ~0.03 world units above the
+	// wide disc -- close enough for the billboard's base to z-fight
+	// against it every frame. Sitting right at the wick tip instead clears
+	// the disc by the whole gap and still reads as the flame emerging from
+	// the wick, not floating above it.
+	static constexpr glm::vec3 CANDLE_FLAME_ANCHOR = glm::vec3(0.0f, 0.73f, 0.0f);
+
+	// A candle flame is a fraction of a torch flame's size; FLAME_HEIGHT/
+	// FLAME_HALF_WIDTH below are tuned for the torch, so candles ride them
+	// down via TorchFlame::sizeScale instead of needing their own constants.
+	static constexpr float CANDLE_FLAME_SIZE_SCALE = 0.40f;
+
+	// A candle's light should be a faint, local pool, not a torch-strength
+	// source that merely came out of a smaller flame -- so this scales the
+	// point light's colour well below sizeScale, independent of it.
+	static constexpr float CANDLE_FLAME_LIGHT_SCALE = 0.18f;
 
 	// The flame's size, in the torch model's own local units, so it rides
 	// each instance's uniform scale: full size on the wall-mounted torches,
@@ -1607,9 +1646,10 @@ class Skeleton26ReplaceName : public BaseProject {
 		// handTorchInst above.
 		//
 		// maxInstances raised past the default 8: held torch + 6 wall
-		// torches + 4 colored dl torches is already 11, and spawn() past
-		// this cap fails silently (see addTorchFlame below), leaving a
-		// torch mesh with no fire and no light instead of an error.
+		// torches + 4 colored dl torches + 2 candles is already 13, and
+		// spawn() past this cap fails silently (see addTorchFlame below),
+		// leaving a torch/candle mesh with no fire and no light instead of
+		// an error.
 		flame.init(this, &DSLglobal, &DSglobal, 16);
 
 		lightDebug.init(this);
@@ -1618,7 +1658,8 @@ class Skeleton26ReplaceName : public BaseProject {
 		// not a real RNG: index * a large-ish irrational-ish constant keeps
 		// them decorrelated without needing a seeded generator for one call.
 		auto addTorchFlame = [&](const char *id, glm::vec3 anchor, bool heldByCamera = false,
-								 glm::vec3 color = TORCH_LIGHT_COLOR) {
+								 glm::vec3 color = TORCH_LIGHT_COLOR, float sizeScale = 1.0f,
+								 float lightScale = 1.0f) {
 			auto it = SC.InstanceIds.find(id);
 			if(it == SC.InstanceIds.end()) {
 				std::cout << "Torch instance '" << id << "' not found, skipping its flame\n";
@@ -1639,6 +1680,8 @@ class Skeleton26ReplaceName : public BaseProject {
 			tf.anchor = anchor;
 			tf.heldByCamera = heldByCamera;
 			tf.color = color;
+			tf.sizeScale = sizeScale;
+			tf.lightScale = lightScale;
 			// Offsets this torch into a different part of the CPU noise field,
 			// so no two gutter at the same moment. Scaled up because fireNoise
 			// hashes on the integer lattice: a fractional offset would leave
@@ -1668,6 +1711,15 @@ class Skeleton26ReplaceName : public BaseProject {
 		addTorchFlame("dlTorchGreen",  TORCH_FLAME_ANCHOR, false, glm::vec3(0.15f, 1.00f, 0.20f));
 		addTorchFlame("dlTorchBlue",   TORCH_FLAME_ANCHOR, false, glm::vec3(0.15f, 0.45f, 1.00f));
 		addTorchFlame("dlTorchPurple", TORCH_FLAME_ANCHOR, false, glm::vec3(0.65f, 0.15f, 1.00f));
+
+		// The two dungeon candles (see scene.json): same realistic-orange
+		// fire as the wall torches, just shrunk to candle scale, with a
+		// much fainter light -- a candle shouldn't throw a torch's amount
+		// of light just because it shares the torch's light formula.
+		addTorchFlame("dhCandle", CANDLE_FLAME_ANCHOR, false, TORCH_LIGHT_COLOR,
+					   CANDLE_FLAME_SIZE_SCALE, CANDLE_FLAME_LIGHT_SCALE);
+		addTorchFlame("dcCandle", CANDLE_FLAME_ANCHOR, false, TORCH_LIGHT_COLOR,
+					   CANDLE_FLAME_SIZE_SCALE, CANDLE_FLAME_LIGHT_SCALE);
 
 		// Surface parameters for the BRDF, one per model.
 		materials.init(&SC, "assets/scenes/materials.json");
@@ -2472,7 +2524,7 @@ class Skeleton26ReplaceName : public BaseProject {
 				// rides on colour and reach rides on g, and both are needed:
 				// colour alone makes the lit area pulse in place, g alone makes
 				// it grow and shrink without changing how hot it looks.
-				L.color = tf.color * tf.intensity;
+				L.color = tf.color * tf.intensity * tf.lightScale;
 				L.g = TORCH_LIGHT_G * (0.88f + 0.12f * tf.intensity);
 				L.beta = TORCH_LIGHT_BETA;
 				L.cosIn = 1.0f;
@@ -2655,8 +2707,8 @@ class Skeleton26ReplaceName : public BaseProject {
 			// the scale factor, with no need to fully decompose Wm.
 			float instScale = glm::length(glm::vec3(tf.inst->Wm[0]));
 
-			float halfWidth = FLAME_HALF_WIDTH * instScale;
-			float height = FLAME_HEIGHT * instScale;
+			float halfWidth = FLAME_HALF_WIDTH * instScale * tf.sizeScale;
+			float height = FLAME_HEIGHT * instScale * tf.sizeScale;
 
 			const glm::vec3 &right = tf.heldByCamera ? handBbRight : bbRight;
 			const glm::vec3 &up    = tf.heldByCamera ? handBbUp    : bbUp;
