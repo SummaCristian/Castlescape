@@ -13,7 +13,7 @@
 
 // Uniform blocks need a compile-time size, hence a fixed array plus a live
 // lightCount saying how much of it is real.
-#define MAX_LIGHTS 16
+#define MAX_LIGHTS 32
 
 // How many 2D (depth-only) shadow maps exist: one per DIRECT or SPOT
 // shadow-casting light. A point light does NOT take a slot here -- it gets a
@@ -61,7 +61,7 @@
 // than 16 here in practice. If this ever needs to grow past what a target
 // GPU actually offers, the dynamic pool degrades gracefully either way --
 // SHADOW_SWAP_MARGIN (main.cpp) just has more candidates to arbitrate.
-#define NUM_SHADOW_CUBES 20
+#define NUM_SHADOW_CUBES 32
 
 #define LIGHT_DIRECT 0
 #define LIGHT_POINT  1

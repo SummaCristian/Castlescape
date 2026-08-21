@@ -135,7 +135,19 @@ layout(binding = 18, set = 2) uniform samplerCube shadowCube15;
 layout(binding = 19, set = 2) uniform samplerCube shadowCube16;
 layout(binding = 20, set = 2) uniform samplerCube shadowCube17;
 layout(binding = 21, set = 2) uniform samplerCube shadowCube18;
-layout(binding = 22, set = 2) uniform samplerCube shadowCube19;	// the held torch, fixed
+layout(binding = 22, set = 2) uniform samplerCube shadowCube19;
+layout(binding = 23, set = 2) uniform samplerCube shadowCube20;
+layout(binding = 24, set = 2) uniform samplerCube shadowCube21;
+layout(binding = 25, set = 2) uniform samplerCube shadowCube22;
+layout(binding = 26, set = 2) uniform samplerCube shadowCube23;
+layout(binding = 27, set = 2) uniform samplerCube shadowCube24;
+layout(binding = 28, set = 2) uniform samplerCube shadowCube25;
+layout(binding = 29, set = 2) uniform samplerCube shadowCube26;
+layout(binding = 30, set = 2) uniform samplerCube shadowCube27;
+layout(binding = 31, set = 2) uniform samplerCube shadowCube28;
+layout(binding = 32, set = 2) uniform samplerCube shadowCube29;
+layout(binding = 33, set = 2) uniform samplerCube shadowCube30;
+layout(binding = 34, set = 2) uniform samplerCube shadowCube31;	// the held torch, fixed
 
 // Stands in for shadowMaps2D[idx], which the separate-bindings choice above
 // rules out. NUM_SHADOW_MAPS_2D is 2 (LightConstants.glsl); if that ever
@@ -169,7 +181,19 @@ float sampleShadowCube(int idx, vec3 dir) {
     if(idx == 16) return texture(shadowCube16, dir).r;
     if(idx == 17) return texture(shadowCube17, dir).r;
     if(idx == 18) return texture(shadowCube18, dir).r;
-    return texture(shadowCube19, dir).r;
+    if(idx == 19) return texture(shadowCube19, dir).r;
+    if(idx == 20) return texture(shadowCube20, dir).r;
+    if(idx == 21) return texture(shadowCube21, dir).r;
+    if(idx == 22) return texture(shadowCube22, dir).r;
+    if(idx == 23) return texture(shadowCube23, dir).r;
+    if(idx == 24) return texture(shadowCube24, dir).r;
+    if(idx == 25) return texture(shadowCube25, dir).r;
+    if(idx == 26) return texture(shadowCube26, dir).r;
+    if(idx == 27) return texture(shadowCube27, dir).r;
+    if(idx == 28) return texture(shadowCube28, dir).r;
+    if(idx == 29) return texture(shadowCube29, dir).r;
+    if(idx == 30) return texture(shadowCube30, dir).r;
+    return texture(shadowCube31, dir).r;
 }
 
 // The sun/spot path: unchanged from the single-perspective-map technique,

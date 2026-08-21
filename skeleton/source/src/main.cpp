@@ -888,14 +888,50 @@ class Skeleton26ReplaceName : public BaseProject {
 	// uploaded light costs a full GGX evaluation across the whole screen
 	// whether or not it can be seen.
 	//
-	// The radius is set generously on purpose: at g = 2.1 and beta = 1.4 a
-	// torch 25 units out contributes about 3% of its colour, which is still
-	// below what the ambient term hides, so nothing you could actually notice
-	// goes dark. This is headroom, not the fix -- the MSAA change in
-	// localInit() is what actually bought the frame budget back, and all six
-	// torches fit comfortably inside these limits in the current scene.
-	static constexpr float TORCH_LIGHT_CULL_DIST = 25.0f;
-	static constexpr int TORCH_LIGHT_MAX_LIVE = 8;
+	// 25 used to be "generous" back when this was written against a
+	// six-torch scene and a much smaller live-light/shadow-slot budget --
+	// wrong now: the dungeon's own footprint is ~60 units across, so a
+	// 25-unit radius drops any torch in a room the player isn't standing
+	// in, VISIBLY (its flame billboard is unconditional, see Flame.hpp, so
+	// it stays lit-looking on screen while casting zero light and shading
+	// its own surroundings pitch black -- exactly what a purely-numeric
+	// "3% contribution, below what ambient hides" estimate can't catch).
+	// 120 comfortably covers the whole level from any point in it, so this
+	// cull now only ever drops what's actually, truly out of range.
+	static constexpr float TORCH_LIGHT_CULL_DIST = 120.0f;
+	static constexpr int TORCH_LIGHT_MAX_LIVE = 32;
+
+	// How much a candidate's priority (both the live-light cut above and the
+	// shadow-cube pool below) is skewed by whether it's ahead of or behind
+	// the player, as a fraction of its real distance. 0 disables this
+	// entirely (pure nearest-first); 1.0 would let a light directly behind
+	// the player be treated as twice as far as its real distance for
+	// EQUAL alignment credit as one directly ahead, penalized by nothing.
+	// facingBiasedDistSq()'s (1 + W * (1 - alignment)) term ranges
+	// 1 (dead ahead, alignment 1) .. 1+W (directly to the side, alignment 0)
+	// .. 1+2W (dead behind, alignment -1), so at 0.6: a torch 8 units away
+	// but behind loses its slot to one 10 units away but in view (effective
+	// 64*2.2=140.8 vs 100*1=100), while a torch merely off to the side still
+	// mostly competes on real distance (effective 1.6x, not 2.2x).
+	static constexpr float SHADOW_FACING_BIAS_WEIGHT = 0.6f;
+
+	// Squared distance from eyePos to pos, inflated for anything not ahead
+	// of `forward` -- see SHADOW_FACING_BIAS_WEIGHT above. Still monotonic in
+	// real distance for a fixed alignment, so nearer-and-equally-in-view
+	// still always beats farther-and-equally-in-view; only the front/behind
+	// axis gets a thumb on the scale. One sqrt (for the cosine) instead of
+	// two (glm::normalize would need its own): distSq is already at hand at
+	// every call site.
+	static float facingBiasedDistSq(const glm::vec3 &pos, const glm::vec3 &eyePos,
+									 const glm::vec3 &forward) {
+		glm::vec3 d = pos - eyePos;
+		float distSq = glm::dot(d, d);
+		if(distSq < 1e-6f) {
+			return distSq;
+		}
+		float alignment = glm::dot(d, forward) / std::sqrt(distSq);	// cos(angle)
+		return distSq * (1.0f + SHADOW_FACING_BIAS_WEIGHT * (1.0f - alignment));
+	}
 
 	// Fire envelope. The fast, physically-right flicker band lives in
 	// Flame.frag instead, as a per-pixel shimmer that varies along the flame
@@ -2026,12 +2062,16 @@ class Skeleton26ReplaceName : public BaseProject {
 		torchLightPos[HAND_TORCH_SHADOW_INDEX] = lightPos;
 	}
 
-	// Distance-based reassignment for the dynamic shadow-cube pool
-	// (dynamicShadowSlotBase..HAND_TORCH_SHADOW_INDEX), among the flames
-	// marked shadowCandidate (the 4 colored dl torches + 2 candles): more of
-	// them exist than there are spare cube slots, so whichever are nearest
-	// the player get a real shadow, re-evaluated as the player moves so ones
-	// left behind lose theirs to ones now closer.
+	// Priority-based reassignment for the dynamic shadow-cube pool
+	// (dynamicShadowSlotBase..HAND_TORCH_SHADOW_INDEX), among every flame
+	// marked shadowCandidate (every torch/candle but the held one): the
+	// empty-slot pass below always gives one to every candidate first, no
+	// contest involved, so in THIS scene (12 candidates against 31 dynamic
+	// slots) every one of them keeps a real shadow permanently -- the
+	// contest logic below only fires past that point, i.e. only on a level
+	// authored with more shadow-worthy point lights than there are spare
+	// cube slots, re-evaluated as the player moves so ones left behind lose
+	// theirs to ones now more worth having.
 	//
 	// A plain "N nearest, recomputed every tick" rule thrashes: standing
 	// near the distance boundary between two candidates flips the slot every
@@ -2043,7 +2083,15 @@ class Skeleton26ReplaceName : public BaseProject {
 	// updateUniformBuffer(), not every frame) means the decision itself is
 	// only revisited a few times a second: the candidates are static, only
 	// the player moves, so nothing here needs a per-frame answer.
-	void updateDynamicShadowSlots(const glm::vec3 &eyePos) {
+	// forward: world-space look direction, see its own comment where
+	// updateUniformBuffer() derives it from camToWorld. Only changes the
+	// ORDER candidates are considered in (both which empty slot gets which
+	// waiting candidate first, and which occupied slot is worth contesting) --
+	// see facingBiasedDistSq(). It never changes WHETHER a candidate gets a
+	// slot: the empty-slot pass below is unconditional, so every candidate
+	// still gets one as long as there are at least as many slots as
+	// candidates, exactly as before this was added.
+	void updateDynamicShadowSlots(const glm::vec3 &eyePos, const glm::vec3 &forward) {
 		const int base = dynamicShadowSlotBase;
 		const int count = HAND_TORCH_SHADOW_INDEX - base;
 		if(count <= 0) {
@@ -2052,8 +2100,7 @@ class Skeleton26ReplaceName : public BaseProject {
 
 		auto distSqTo = [&](const TorchFlame &tf) {
 			glm::vec3 pos = glm::vec3(tf.inst->Wm * glm::vec4(tf.anchor, 1.0f));
-			glm::vec3 d = pos - eyePos;
-			return glm::dot(d, d);
+			return facingBiasedDistSq(pos, eyePos, forward);
 		};
 
 		auto assignSlot = [&](int slot, int flameIdx) {
@@ -2630,6 +2677,14 @@ class Skeleton26ReplaceName : public BaseProject {
 		// face.
 		const glm::mat4 camToWorld = glm::inverse(View);
 		const glm::vec3 eyePos = glm::vec3(camToWorld[3]);
+		// World-space look direction, for the same reason: camToWorld's column
+		// 2 is the camera's local +Z expressed in world space, and the camera
+		// looks down its own local -Z (glm::lookAt convention), hence the
+		// negation. Used below to bias both the live-torch-light cut and the
+		// shadow-cube pool toward whatever's actually in view over whatever's
+		// merely close -- a light directly behind the player lights nothing
+		// the frame renders, no matter how near it is.
+		const glm::vec3 forward = -glm::vec3(camToWorld[2]);
 
 		// Re-decides which shadow candidates hold the dynamic cube-shadow
 		// pool's slots, at most every SHADOW_REASSIGN_INTERVAL -- must run
@@ -2639,7 +2694,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		shadowReassignTimer += deltaT;
 		if(shadowReassignTimer >= SHADOW_REASSIGN_INTERVAL) {
 			shadowReassignTimer = 0.0f;
-			updateDynamicShadowSlots(eyePos);
+			updateDynamicShadowSlots(eyePos, forward);
 		}
 
 		// The cylindrical billboard basis every flame uses this frame, taken
@@ -2811,13 +2866,17 @@ class Skeleton26ReplaceName : public BaseProject {
 		// origin). So instead: appended straight into gubo here, every
 		// frame, from the same Wm the flame itself now rides.
 		//
-		// Culled by distance and capped in count, nearest first: every light
-		// in gubo costs a full BRDF evaluation for every fragment of every
-		// object, multiplied by the sample count. See TORCH_LIGHT_CULL_DIST
-		// on why dropping the far ones is invisible.
+		// Culled by REAL distance (never by facing -- a torch you just
+		// turned away from should keep lighting the room behind you, it just
+		// shouldn't win a contested slot over one you're looking at) and
+		// capped in count, priority order from facingBiasedDistSq() (i.e.
+		// nearest-and-in-view first): every light in gubo costs a full BRDF
+		// evaluation for every fragment of every object, multiplied by the
+		// sample count. See TORCH_LIGHT_CULL_DIST on why dropping the far
+		// ones is invisible. With TORCH_LIGHT_MAX_LIVE now well above the
+		// scene's actual flame count, this cap doesn't bite in practice --
+		// the ordering only matters if it ever does.
 		{
-			// Index + squared distance, so the sort doesn't pay for a sqrt it
-			// does not need.
 			std::vector<std::pair<float, const TorchFlame *>> nearest;
 			nearest.reserve(torchFlames.size());
 			const float cullSq = TORCH_LIGHT_CULL_DIST * TORCH_LIGHT_CULL_DIST;
@@ -2826,7 +2885,7 @@ class Skeleton26ReplaceName : public BaseProject {
 				glm::vec3 d = worldPos - eyePos;
 				float dSq = glm::dot(d, d);
 				if(dSq <= cullSq) {
-					nearest.push_back({dSq, &tf});
+					nearest.push_back({facingBiasedDistSq(worldPos, eyePos, forward), &tf});
 				}
 			}
 			std::sort(nearest.begin(), nearest.end(),
