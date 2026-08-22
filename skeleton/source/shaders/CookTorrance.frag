@@ -482,13 +482,36 @@ void main() {
     // bounce hemisphericAmbient() stands in for -- otherwise a shadow would
     // read as a hole into pure black instead of the dim, indirectly-lit area
     // a real one is.
+    // Below this, a light's radiance at this fragment is darker than the
+    // final image can show even before the BRDF and shadow map get
+    // involved -- well under 1 LSB of an 8-bit display once exposure and
+    // the sRGB curve in Composite.frag are through with it. Point/spot
+    // lights are only CPU-culled by distance to the CAMERA (see
+    // TORCH_LIGHT_CULL_DIST in main.cpp), not to the fragment being shaded,
+    // so a torch that passed that cull can still be near-zero at a
+    // fragment on the far side of a large room; this catches that case per
+    // pixel instead.
+    const float LIGHT_ATTEN_EPS = 1e-3;
+
     vec3 Lo = vec3(0.0);
     for(int i = 0; i < gubo.lightCount; i++) {
+        vec3 radiance = lightRadiance(gubo.lights[i], fragPos);
+
+        // Cheap reject before the expensive part: BRDF's handful of pow()s
+        // and, more importantly, shadowFactor()'s dependent shadow-map
+        // texture fetch. A direct light's radiance is a constant scene
+        // color, never near-zero while it's enabled, so this never fires
+        // for the sun -- only point/spot lights actually decay with
+        // distance.
+        if(max(radiance.r, max(radiance.g, radiance.b)) < LIGHT_ATTEN_EPS) {
+            continue;
+        }
+
         vec3 L = lightDirection(gubo.lights[i], fragPos);
         // Same clamped dot the BRDF uses, computed once here because
         // shadowFactor scales its depth bias by it too.
         float NdotL = clamp(dot(N, L), 0.0, 1.0);
-        Lo += lightRadiance(gubo.lights[i], fragPos)
+        Lo += radiance
             * BRDF(N, L, V, mD, ubo.mS, ubo.roughness, ubo.F0, k)
             * shadowFactor(gubo.lights[i].shadowIndex, gubo.lights[i].type, fragPos, gubo.lights[i].pos, NdotL);
     }
