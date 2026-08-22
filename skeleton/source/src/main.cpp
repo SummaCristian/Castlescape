@@ -346,6 +346,41 @@ class Skeleton26ReplaceName : public BaseProject {
 	// compile-time constant for the pool's width.
 	std::array<int, NUM_SHADOW_CUBES> dynamicSlotOccupant{};
 
+	// Caching for the static cube shadow slots (everything except
+	// HAND_TORCH_SHADOW_INDEX, which moves every frame and is excluded from
+	// this bookkeeping entirely): lastRenderedOccupant[t] is the "occupant
+	// identity" the slot's image last actually had its 6 faces rendered
+	// for -- t itself for a fixed lights.json slot (that identity never
+	// changes once set), or dynamicSlotOccupant[t] for a dynamic-pool slot.
+	// SHADOW_SLOT_UNSET means "never rendered", which every slot starts as:
+	// the image is otherwise left at VK_IMAGE_LAYOUT_UNDEFINED, which the
+	// samplerCube array descriptor is not allowed to be bound against, so
+	// every slot needs exactly one render even if it stays empty forever
+	// (see recordCubeSlotFaces()'s begin/end-only path for an unoccupied
+	// slot). Compared every frame against the slot's CURRENT identity
+	// (cheap: NUM_SHADOW_CUBES int compares) in updateUniformBuffer(); a
+	// mismatch queues that slot into pendingCubeSlotRenders and updates the
+	// stored identity, so a slot whose occupant hasn't changed since its
+	// last render is never touched again -- static point lights in this
+	// scene (all of them but the held torch: SceneLights::update() never
+	// moves a point light, and updateDynamicShadowSlots() only reassigns a
+	// dynamic slot when a nearer candidate genuinely outbids the current
+	// one) end up rendered exactly once for the life of the program instead
+	// of on every one of the ~9000+ per-frame draw calls the old
+	// unconditional every-frame loop cost across all of them combined.
+	static constexpr int SHADOW_SLOT_UNSET = -2;
+	std::array<int, NUM_SHADOW_CUBES> lastRenderedOccupant;
+	// Slots the diff above found stale this frame, rendered once via a
+	// beginSingleTimeCommands() command buffer right after the DSshadowCube
+	// mapping loop writes their fresh matrices/position for currentImage
+	// (see updateUniformBuffer()) -- not inside the "main" NamedCommandBuffer,
+	// which is recorded once per swapchain image and replayed unmodified
+	// every frame after that (see ShadowCubeUniformBufferObject's comment),
+	// so anything recorded into IT would still redraw every frame regardless
+	// of this caching. A member so renderCubeSlotsOnce() doesn't allocate a
+	// fresh vector every frame when it's (almost always) empty.
+	std::vector<int> pendingCubeSlotRenders;
+
 	// How much (in-game) time between updateDynamicShadowSlots() calls: the
 	// candidates are static objects, only the player moves, so this doesn't
 	// need a per-frame answer. Startup value equal to the interval so the
@@ -1908,6 +1943,12 @@ class Skeleton26ReplaceName : public BaseProject {
 		// starts already due, see its member comment).
 		dynamicShadowSlotBase = activeCubeShadows;
 		dynamicSlotOccupant.fill(-1);
+		// Nothing has been rendered yet -- the very first updateUniformBuffer()
+		// call's diff (see lastRenderedOccupant's member comment) queues every
+		// fixed slot plus whatever updateDynamicShadowSlots() assigns on that
+		// same tick (shadowReassignTimer already starts due) for its one and
+		// only render.
+		lastRenderedOccupant.fill(SHADOW_SLOT_UNSET);
 		// The render loop below (populateCommandBuffer()) walks slots
 		// [0, activeCubeShadows) every frame, so the dynamic pool has to be
 		// counted in even before anything occupies it -- an empty dynamic
@@ -2188,6 +2229,109 @@ class Skeleton26ReplaceName : public BaseProject {
 			torchFlames[dynamicSlotOccupant[slot]].shadowSlot = -1;
 			assignSlot(slot, waiting[wi].flameIdx);
 		}
+	}
+
+	// One cube slot's six-face render: shared by populateCommandBuffer()
+	// (every frame, HAND_TORCH_SHADOW_INDEX only) and renderCubeSlotsOnce()
+	// (a one-shot command buffer, every other slot, only when its occupant
+	// actually changes -- see lastRenderedOccupant's member comment). Exactly
+	// the body the old unconditional per-slot loop in populateCommandBuffer()
+	// used to run for every slot, every frame, factored out unchanged so
+	// splitting where it's called from couldn't also change what it draws.
+	//
+	// ownerInst: the instance this slot's own flame is anchored to (nullptr
+	// if none), excluded from its own shadow pass -- see the inline comment
+	// this carried before extraction, preserved at the call sites' comments
+	// instead of duplicated here.
+	void recordCubeSlotFaces(VkCommandBuffer commandBuffer, int currentImage, int t,
+							 bool slotOccupied, Instance *ownerInst) {
+		for(int face = 0; face < 6; face++) {
+			VkClearValue clearValues[2];
+			clearValues[0].color = {{TORCH_SHADOW_FAR_CONST, 0.0f, 0.0f, 0.0f}};
+			clearValues[1].depthStencil = {1.0f, 0};
+
+			VkRenderPassBeginInfo rpInfo{};
+			rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+			rpInfo.renderPass = RPShadowCubeCompat.renderPass;
+			rpInfo.framebuffer = torchCube[t].faceFramebuffers[face];
+			rpInfo.renderArea.offset = {0, 0};
+			rpInfo.renderArea.extent = {(uint32_t)SHADOW_MAP_RES, (uint32_t)SHADOW_MAP_RES};
+			rpInfo.clearValueCount = 2;
+			rpInfo.pClearValues = clearValues;
+			vkCmdBeginRenderPass(commandBuffer, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+			// The scene-wide draw loop below is the actual cost (up to
+			// SC.TI[0].InstanceCount draws, times 6 faces) -- skipped for a
+			// slot nothing currently samples, while still leaving the
+			// begin/end above to clear the image and run the render pass's
+			// mandatory layout transition to SHADER_READ_ONLY_OPTIMAL (the
+			// samplerCube array descriptor requires every slot to be in that
+			// layout even if nothing samples it this frame -- skipping the
+			// render pass entirely left it stuck at UNDEFINED forever and
+			// triggered a validation error).
+			if(slotOccupied) {
+				PShadowCube.bind(commandBuffer);
+				// Set 1: this torch's current matrices/position, from the
+				// uniform buffer updateUniformBuffer() maps every frame --
+				// see ShadowCube.vert's header for why this can't be a push
+				// constant. Only the face INDEX is still one, since that
+				// genuinely never changes once recorded.
+				DSshadowCube[t].bind(commandBuffer, PShadowCube, 1, currentImage);
+				ShadowCubeFacePushConstant facePc{};
+				facePc.face = face;
+				vkCmdPushConstants(commandBuffer, PShadowCube.pipelineLayout,
+								   VK_SHADER_STAGE_VERTEX_BIT, 0,
+								   sizeof(ShadowCubeFacePushConstant), &facePc);
+
+				for(int j = 0; j < SC.TI[0].InstanceCount; j++) {
+					Instance &inst = SC.TI[0].I[j];
+					if(!materials.forModel(inst.Mid).castsShadow) {
+						continue;
+					}
+					if(&inst == ownerInst) {
+						continue;
+					}
+					inst.DS[0][1]->bind(commandBuffer, PShadowCube, 0, currentImage);
+					SC.M[inst.Mid]->bind(commandBuffer);
+					vkCmdDrawIndexed(commandBuffer,
+									 static_cast<uint32_t>(SC.M[inst.Mid]->indices.size()), 1, 0, 0, 0);
+				}
+			}
+
+			vkCmdEndRenderPass(commandBuffer);
+		}
+	}
+
+	// Renders exactly the cube slots the lastRenderedOccupant diff (run every
+	// frame in updateUniformBuffer(), right after the reassignment call) found
+	// stale this frame, via ONE beginSingleTimeCommands() buffer -- a direct
+	// submit-and-wait on the graphics queue, not the recurring "main"
+	// NamedCommandBuffer, precisely so this can run only on the frame a
+	// slot's occupant actually changes (startup, or a genuine reassignment)
+	// instead of being baked into the buffer that replays every frame
+	// forever. Called after DSshadowCube[t].map(currentImage, ...) has
+	// already written this frame's matrices/position for every slot in
+	// `slots`, so PShadowCube's set 1 reads correct data despite this being
+	// a separate command buffer from the one DSshadowCube was mapped for.
+	//
+	// Blocking (vkQueueWaitIdle inside endSingleTimeCommands()) is fine here:
+	// this only runs on the rare frame something actually changed, not on
+	// the steady-state path, so the one-time stall costs far less than
+	// re-running all of these slots' draws unconditionally every frame would.
+	void renderCubeSlotsOnce(const std::vector<int> &slots, int currentImage) {
+		if(slots.empty()) {
+			return;
+		}
+		VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+		for(int t : slots) {
+			bool slotOccupied = (t < dynamicShadowSlotBase) || (dynamicSlotOccupant[t] != -1);
+			Instance *ownerInst = nullptr;
+			if(t >= dynamicShadowSlotBase && dynamicSlotOccupant[t] != -1) {
+				ownerInst = torchFlames[dynamicSlotOccupant[t]].inst;
+			}
+			recordCubeSlotFaces(commandBuffer, currentImage, t, slotOccupied, ownerInst);
+		}
+		endSingleTimeCommands(commandBuffer);
 	}
 
 	// Builds every torch's CubeShadowMap (colour cube image + face views +
@@ -2516,111 +2660,22 @@ class Skeleton26ReplaceName : public BaseProject {
 			RPShadow2D[i].end(commandBuffer);
 		}
 
-		// One torch's cube map is 6 SEPARATE render passes, one per face,
-		// against that face's own single-layer framebuffer
-		// (createCubeShadowMaps()) -- RenderPass::begin/end can't be reused
-		// here since it indexes frameBuffers[] by SWAPCHAIN image, not by
-		// cube face, so this drives vkCmdBegin/EndRenderPass directly
-		// against RPShadowCubeCompat.renderPass (valid: every one of these
-		//36 framebuffers was built compatible with it).
-		for(int t = 0; t < NUM_SHADOW_CUBES; t++) {
-			// A torch past the end of sceneLights.all() (fewer than
-			// NUM_SHADOW_CUBES point lights actually cast a shadow) has no
-			// light position to render with -- skip it rather than draw
-			// into a cube map nothing will ever sample (shadowIndex on the
-			// GPU side never points past the lights that exist).
-			if(t >= activeCubeShadows) {
-				break;
-			}
-			// A dynamic-pool slot (dynamicShadowSlotBase..HAND_TORCH_SHADOW_INDEX)
-			// with no current occupant -- freed by a disabled torch/candle
-			// shadow category (cheats.torchShadowsEnabled/candleShadowsEnabled,
-			// see updateDynamicShadowSlots()), or just outnumbered by slots --
-			// or the held torch's own reserved HAND_TORCH_SHADOW_INDEX with
-			// its category off, has nothing anything will ever sample this
-			// frame. Its six faces still get begin/end'd below (cheap: a
-			// clear plus the mandatory layout transition to
-			// SHADER_READ_ONLY_OPTIMAL that CookTorrance.frag's descriptor
-			// set requires even for a slot nothing samples -- skipping the
-			// render pass entirely left it stuck at UNDEFINED forever and
-			// triggered a validation error) -- only the expensive part, the
-			// per-instance draw loop over the whole scene below, is skipped.
-			bool slotOccupied =
-				(t < dynamicShadowSlotBase)
-				|| (t == HAND_TORCH_SHADOW_INDEX ? cheats.torchShadowsEnabled
-												  : dynamicSlotOccupant[t] != -1);
-
-			// The instance this cube map's own flame is anchored to (a
-			// torch/candle mesh, wherever this slot has one), excluded from
-			// its OWN shadow pass below. Without this, a candle sitting
-			// right under its own flame -- the anchor is barely 0.1 units
-			// above the wax, see flames.json's dungeonCandle comment -- casts
-			// its own body onto its own flame's cube map, self-shadowing the
-			// candle from the only light close enough to matter, which reads
-			// as the light not reaching the very object it's sitting on. The
-			// same instance still draws normally into every OTHER light's
-			// shadow pass (another candle's, a nearby torch's) -- only its
-			// own light skips it. Instance* rather than an id: addTorchFlame
-			// captures the same pointer once at spawn, so identity compare
-			// is exact and index-free.
-			Instance *ownerInst = nullptr;
-			if(t == HAND_TORCH_SHADOW_INDEX) {
-				ownerInst = handTorchInst;
-			} else if(t >= dynamicShadowSlotBase && dynamicSlotOccupant[t] != -1) {
-				ownerInst = torchFlames[dynamicSlotOccupant[t]].inst;
-			}
-
-			for(int face = 0; face < 6; face++) {
-				VkClearValue clearValues[2];
-				clearValues[0].color = {{TORCH_SHADOW_FAR_CONST, 0.0f, 0.0f, 0.0f}};
-				clearValues[1].depthStencil = {1.0f, 0};
-
-				VkRenderPassBeginInfo rpInfo{};
-				rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-				rpInfo.renderPass = RPShadowCubeCompat.renderPass;
-				rpInfo.framebuffer = torchCube[t].faceFramebuffers[face];
-				rpInfo.renderArea.offset = {0, 0};
-				rpInfo.renderArea.extent = {(uint32_t)SHADOW_MAP_RES, (uint32_t)SHADOW_MAP_RES};
-				rpInfo.clearValueCount = 2;
-				rpInfo.pClearValues = clearValues;
-				vkCmdBeginRenderPass(commandBuffer, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-				// The scene-wide draw loop below is the actual cost (up to
-				// SC.TI[0].InstanceCount draws, times 6 faces, times every
-				// active cube slot) -- skipped for a slot nothing currently
-				// samples, while still leaving the begin/end above to clear
-				// the image and run the render pass's layout transition.
-				if(slotOccupied) {
-					PShadowCube.bind(commandBuffer);
-					// Set 1: this torch's current matrices/position, from the
-					// uniform buffer updateUniformBuffer() maps every frame --
-					// see ShadowCube.vert's header for why this can't be a push
-					// constant. Only the face INDEX is still one, since that
-					// genuinely never changes once recorded.
-					DSshadowCube[t].bind(commandBuffer, PShadowCube, 1, currentImage);
-					ShadowCubeFacePushConstant facePc{};
-					facePc.face = face;
-					vkCmdPushConstants(commandBuffer, PShadowCube.pipelineLayout,
-									   VK_SHADER_STAGE_VERTEX_BIT, 0,
-									   sizeof(ShadowCubeFacePushConstant), &facePc);
-
-					for(int j = 0; j < SC.TI[0].InstanceCount; j++) {
-						Instance &inst = SC.TI[0].I[j];
-						if(!materials.forModel(inst.Mid).castsShadow) {
-							continue;
-						}
-						if(&inst == ownerInst) {
-							continue;
-						}
-						inst.DS[0][1]->bind(commandBuffer, PShadowCube, 0, currentImage);
-						SC.M[inst.Mid]->bind(commandBuffer);
-						vkCmdDrawIndexed(commandBuffer,
-										 static_cast<uint32_t>(SC.M[inst.Mid]->indices.size()), 1, 0, 0, 0);
-					}
-				}
-
-				vkCmdEndRenderPass(commandBuffer);
-			}
+		// Every cube slot but the held torch's is now rendered OUTSIDE this
+		// command buffer entirely -- once each, via renderCubeSlotsOnce()'s
+		// one-shot submissions from updateUniformBuffer() -- because this
+		// "main" buffer is recorded once per swapchain image and replayed
+		// unmodified every frame after that (see
+		// ShadowCubeUniformBufferObject's comment): a static point light's
+		// six faces recorded HERE would still redraw every single frame for
+		// the life of the program no matter how rarely their content
+		// actually changes. Only HAND_TORCH_SHADOW_INDEX genuinely needs a
+		// fresh render every frame (its light position moves with the
+		// camera), so it's the only one left in the per-frame path -- see
+		// recordCubeSlotFaces() for the shared six-face render logic both
+		// this and renderCubeSlotsOnce() call.
+		if(HAND_TORCH_SHADOW_INDEX < activeCubeShadows) {
+			recordCubeSlotFaces(commandBuffer, currentImage, HAND_TORCH_SHADOW_INDEX,
+								cheats.torchShadowsEnabled, handTorchInst);
 		}
 
 		// Offscreen pass - always required
@@ -2703,6 +2758,33 @@ class Skeleton26ReplaceName : public BaseProject {
 		if(shadowReassignTimer >= SHADOW_REASSIGN_INTERVAL) {
 			shadowReassignTimer = 0.0f;
 			updateDynamicShadowSlots(eyePos, forward);
+		}
+
+		// Diffs every static cube slot's CURRENT occupant identity against
+		// the one it was last actually rendered for (see
+		// lastRenderedOccupant's member comment) and queues anything that
+		// changed into pendingCubeSlotRenders. Cheap enough (activeCubeShadows
+		// int compares, at most NUM_SHADOW_CUBES - 1) to just run every
+		// frame rather than special-casing "only right after a reassignment
+		// tick" -- it only ever finds work on the frame something actually
+		// changed (startup, or a genuine reassignment/category toggle
+		// above), everything else is a no-op pass. HAND_TORCH_SHADOW_INDEX
+		// is excluded: it's rendered fresh every frame in
+		// populateCommandBuffer() instead, never through this cache.
+		for(int t = 0; t < dynamicShadowSlotBase; t++) {
+			// A fixed lights.json slot's identity never changes once set, so
+			// using the slot index itself as the "occupant" marker means
+			// this only ever fires once, on the very first frame.
+			if(lastRenderedOccupant[t] != t) {
+				pendingCubeSlotRenders.push_back(t);
+				lastRenderedOccupant[t] = t;
+			}
+		}
+		for(int t = dynamicShadowSlotBase; t < HAND_TORCH_SHADOW_INDEX; t++) {
+			if(lastRenderedOccupant[t] != dynamicSlotOccupant[t]) {
+				pendingCubeSlotRenders.push_back(t);
+				lastRenderedOccupant[t] = dynamicSlotOccupant[t];
+			}
 		}
 
 		// The cylindrical billboard basis every flame uses this frame, taken
@@ -3223,7 +3305,21 @@ class Skeleton26ReplaceName : public BaseProject {
 				}
 			}
 		}
-		
+
+		// Actually (re-)renders whichever static cube slots the diff earlier
+		// in this function found stale, now that BOTH their DSshadowCube[t]
+		// matrices/position AND every instance's inst.DS[0][1] world matrix
+		// (mapped for currentImage in the loop just above) are current --
+		// recordCubeSlotFaces() binds the SAME per-instance descriptor set
+		// the main pass uses, so rendering any earlier than this bakes
+		// whatever stale/uninitialized Wm currentImage's buffer slot last
+		// held (on the very first call, before that loop has ever run for
+		// this image index, that's garbage) permanently into the cached
+		// shadow map. See renderCubeSlotsOnce()'s own comment for why this
+		// is a one-shot submit rather than something recorded into "main".
+		renderCubeSlotsOnce(pendingCubeSlotRenders, currentImage);
+		pendingCubeSlotRenders.clear();
+
 		// updates the FPS
 		static float elapsedT = 0.0f;
 		static int countedFrames = 0;
