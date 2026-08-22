@@ -1189,23 +1189,58 @@ class Skeleton26ReplaceName : public BaseProject {
 	// Yaw easing, radians/second. Roughly a half-turn in a third of a second.
 	static constexpr float GHOST_TURN_SPEED = 9.0f;
 
-	// Collision size. The radius keeps it out of walls; the vertical slab is
-	// the part of its body a collider has to overlap to count as blocking it,
-	// measured from `pos`. Wider than the player's 0.3 because the ghost mesh
-	// is wider than the player's imaginary body, and a ghost visibly clipping
-	// a doorway jamb is more noticeable than the player's own shoulder doing
-	// it.
+	// Collision size: a vertical cylinder, not a box. A box would rotate with
+	// the mesh's facing (or, left axis-aligned, would silently stop matching
+	// it), and either way its corners project further out on a diagonal than
+	// a circle of the same "radius" -- which is exactly how a box collider
+	// snags on a doorway jamb or a corridor corner that a cylinder just slides
+	// past. That snagging risk is why character/creature controllers use
+	// capsules instead of boxes as a matter of course, and it's the reason
+	// this stays a circle in XZ even though the ghost itself isn't round.
 	//
-	// The slab is NOT symmetric: Ghost.gltf's own local bounds run from -1.80
-	// to +0.83 around its origin (most of the body hangs below the pivot, not
-	// centered on it). A symmetric +-0.9 slab used to sit at [1.3, 3.1] for a
-	// ghost hovering at y=2.2 -- above a table's ~1.22 top -- so the ghost was
-	// ruled to have floated over it while the actual mesh, reaching down to
-	// 0.4, visibly clipped straight through. Matching the real mesh bounds
-	// here is what makes the two agree.
-	static constexpr float GHOST_RADIUS = 0.5f;
-	static constexpr float GHOST_BODY_BOTTOM = -1.80f;
-	static constexpr float GHOST_BODY_TOP = 0.83f;
+	// Both numbers below are fitted from Ghost.gltf's own geometry at load
+	// time (see the fit right after ghosts are read from gameplay.json)
+	// instead of being hand-measured constants, so a model swap can't quietly
+	// desync them again the way the old hardcoded values did.
+	//
+	// The vertical slab is taken at the mesh's exact fitted bounds: unlike the
+	// radius there's no "getting stuck" failure mode to guard against by
+	// shrinking it, and shrinking it is exactly what caused the ghost to float
+	// over furniture it visibly clipped through (see ghostBlockedAt/
+	// ghostResolveWalls). Ghost.gltf's local bounds run from -1.80 to +0.83
+	// around its origin -- most of the body hangs below the pivot, not
+	// centered on it -- which is also why this is two numbers and not one
+	// symmetric half-height.
+	//
+	// The radius, by contrast, IS deliberately shrunk below the mesh's actual
+	// footprint (ghostXZFitShrink), the same way it always was: a circle sized
+	// to guarantee zero visual clipping would be wide enough to snag in a
+	// doorway. Shrinking it off the real fit rather than picking an unrelated
+	// number keeps it in the same ballpark as the mesh if the model changes.
+	//
+	// 0.45 lands the fitted radius close to 0.5 -- the value this project
+	// shipped and navigated doorways with before any of this fitting existed.
+	// A larger shrink (tried: 0.65, plus a steering margin on top of that)
+	// pushed the effective radius close enough to half the doorway width that
+	// ghostSteer's clear/blocked test started flipping every frame near a
+	// threshold, which is worse than the clipping it was meant to fix: a
+	// ghost that visibly clips a table is a minor visual issue, one that
+	// visibly vibrates in a doorway is a broken one. Getting all the way back
+	// to zero clipping isn't the goal here; not regressing movement is.
+	static constexpr float ghostXZFitShrink = 0.45f;
+	// Steering briefly probed with extra padding above the real radius, meant
+	// to stop borderline gaps from flip-flopping every frame. Playtesting it
+	// alongside the 0.65 shrink made things worse, not better -- padding a
+	// radius that was already close to half the doorway width just made
+	// "blocked" win the flip-flop more often. Back to 1.0 (no margin); the
+	// parameter stays in ghostPathClear/ghostSteer in case it's worth
+	// revisiting once the radius itself (ghostXZFitShrink, above) is confirmed
+	// comfortable, rather than stacked on top of a radius that was still
+	// riding the edge.
+	static constexpr float ghostSteerMargin = 1.0f;
+	float ghostRadius = 0.5f;
+	float ghostBodyBottom = -1.80f;
+	float ghostBodyTop = 0.83f;
 	// How far ahead a candidate heading is tested for walls before the ghost
 	// commits to it. Long enough to see a wall in time to turn along it, short
 	// enough that it doesn't refuse to enter a doorway.
@@ -1992,6 +2027,37 @@ class Skeleton26ReplaceName : public BaseProject {
 					ghosts.push_back(gh);
 				}
 				std::cout << "gameplay.json: " << ghosts.size() << " ghosts loaded\n";
+
+				// Fit the ghost's collision size from the actual mesh instead of
+				// hand-measuring it once and hoping nobody replaces the model.
+				// Every ghost instance shares the same Ghost.gltf, so one fit
+				// off the first one covers all of them.
+				if(!ghosts.empty()) {
+					Collider fit;
+					fit.fitAABB(SC.M[ghosts[0].inst->Mid]);
+					AABBextents E = fit.getExtents();	// fit's Wm is identity, so this is local space
+
+					// fitAABB reads the raw mesh, which knows nothing about
+					// scene.json's "scale" on the instance -- so a scaled-down
+					// ghost would otherwise keep a full-size collider. Same
+					// trick as keyWorldScale above: the length of the world
+					// matrix's first column IS the instance's uniform scale
+					// factor, so multiplying it in here is what makes shrinking
+					// a ghost in scene.json actually shrink what it collides
+					// as, not just what it looks like.
+					float instScale = glm::length(glm::vec3(ghosts[0].inst->Wm[0]));
+
+					ghostBodyBottom = E.yMin * instScale;
+					ghostBodyTop = E.yMax * instScale;
+
+					float halfX = 0.5f * (E.xMax - E.xMin);
+					float halfZ = 0.5f * (E.zMax - E.zMin);
+					ghostRadius = ghostXZFitShrink * 0.5f * (halfX + halfZ) * instScale;
+
+					std::cout << "Ghost collision fitted from mesh (scale " << instScale
+							  << "): radius " << ghostRadius
+							  << ", vertical [" << ghostBodyBottom << ", " << ghostBodyTop << "]\n";
+				}
 			}
 		}
 
@@ -3743,16 +3809,21 @@ class Skeleton26ReplaceName : public BaseProject {
 	// something it floats over -- and it floats over it precisely because the
 	// crate's yMax falls below the slab tested here. Same test, different
 	// consequence, no special case needed.
-	bool ghostBlockedAt(const glm::vec3 &p) const {
+	// `radius` is a parameter rather than always `ghostRadius` so a caller
+	// deciding WHERE to go (ghostPathClear/ghostSteer) can ask with a little
+	// extra padding, while the caller deciding whether `p` is actually
+	// physically stuck (ghostResolveWalls) keeps asking with the real body
+	// size. See ghostSteer for why that distinction exists.
+	bool ghostBlockedAt(const glm::vec3 &p, float radius) const {
 		for(Collider *C : allColliders) {
 			AABBextents E = C->getExtents();
-			if(E.yMax < p.y + GHOST_BODY_BOTTOM) continue;	// entirely underneath: floated over
-			if(E.yMin > p.y + GHOST_BODY_TOP) continue;	// entirely overhead: passed under
+			if(E.yMax < p.y + ghostBodyBottom) continue;	// entirely underneath: floated over
+			if(E.yMin > p.y + ghostBodyTop) continue;	// entirely overhead: passed under
 			float closestX = glm::clamp(p.x, E.xMin, E.xMax);
 			float closestZ = glm::clamp(p.z, E.zMin, E.zMax);
 			float dx = p.x - closestX;
 			float dz = p.z - closestZ;
-			if(dx * dx + dz * dz < GHOST_RADIUS * GHOST_RADIUS) {
+			if(dx * dx + dz * dz < radius * radius) {
 				return true;
 			}
 		}
@@ -3769,18 +3840,18 @@ class Skeleton26ReplaceName : public BaseProject {
 	void ghostResolveWalls(glm::vec3 &p) const {
 		for(Collider *C : allColliders) {
 			AABBextents E = C->getExtents();
-			if(E.yMax < p.y + GHOST_BODY_BOTTOM) continue;
-			if(E.yMin > p.y + GHOST_BODY_TOP) continue;
+			if(E.yMax < p.y + ghostBodyBottom) continue;
+			if(E.yMin > p.y + ghostBodyTop) continue;
 
 			float closestX = glm::clamp(p.x, E.xMin, E.xMax);
 			float closestZ = glm::clamp(p.z, E.zMin, E.zMax);
 			float dx = p.x - closestX;
 			float dz = p.z - closestZ;
 			float dist = std::sqrt(dx * dx + dz * dz);
-			if(dist >= GHOST_RADIUS) continue;
+			if(dist >= ghostRadius) continue;
 
 			if(dist > 1e-5f) {
-				float push = (GHOST_RADIUS - dist) / dist;
+				float push = (ghostRadius - dist) / dist;
 				p.x += dx * push;
 				p.z += dz * push;
 			} else {
@@ -3790,9 +3861,9 @@ class Skeleton26ReplaceName : public BaseProject {
 				float minX = std::min(pushXNeg, pushXPos);
 				float minZ = std::min(pushZNeg, pushZPos);
 				if(minX < minZ) {
-					p.x += (pushXNeg < pushXPos ? -1.0f : 1.0f) * (GHOST_RADIUS + minX);
+					p.x += (pushXNeg < pushXPos ? -1.0f : 1.0f) * (ghostRadius + minX);
 				} else {
-					p.z += (pushZNeg < pushZPos ? -1.0f : 1.0f) * (GHOST_RADIUS + minZ);
+					p.z += (pushZNeg < pushZPos ? -1.0f : 1.0f) * (ghostRadius + minZ);
 				}
 			}
 		}
@@ -3803,13 +3874,13 @@ class Skeleton26ReplaceName : public BaseProject {
 	// segment, spaced under the ghost's own radius so nothing thinner than the
 	// ghost can slip between two samples. A real swept test against every
 	// collider would cost more and buy nothing at these speeds.
-	bool ghostPathClear(const glm::vec3 &from, const glm::vec2 &dir, float dist) const {
-		const float step = GHOST_RADIUS * 0.8f;
+	bool ghostPathClear(const glm::vec3 &from, const glm::vec2 &dir, float dist, float radius) const {
+		const float step = ghostRadius * 0.8f;
 		int samples = std::max(1, (int)std::ceil(dist / step));
 		for(int i = 1; i <= samples; i++) {
 			float t = dist * (float)i / (float)samples;
 			glm::vec3 p = from + glm::vec3(dir.x * t, 0.0f, dir.y * t);
-			if(ghostBlockedAt(p)) {
+			if(ghostBlockedAt(p, radius)) {
 				return false;
 			}
 		}
@@ -3836,9 +3907,20 @@ class Skeleton26ReplaceName : public BaseProject {
 	// Returns a zero vector if it's boxed in on every side, which the caller
 	// reads as "don't move this frame".
 	glm::vec2 ghostSteer(Ghost &g, const glm::vec2 &desired) const {
+		// Probed with a little more than the ghost's actual radius, not the
+		// exact physical size ghostResolveWalls uses to push it out of a wall.
+		// A choke point only a hair wider than the body makes "clear?" flip
+		// between true and false from one frame's worth of movement -- which,
+		// fed straight into a direction, is a ghost snapping between two
+		// headings every frame instead of walking through. The padding turns
+		// that knife-edge into a threshold the ghost commits to well before it
+		// physically has to, at the cost of refusing a gap slightly sooner
+		// than it strictly needs to.
+		const float steerRadius = ghostRadius * ghostSteerMargin;
+
 		// Straight there. Also the point at which the ghost stops having an
 		// opinion about which way it went round the last obstacle.
-		if(ghostPathClear(g.pos, desired, GHOST_PROBE_DIST)) {
+		if(ghostPathClear(g.pos, desired, GHOST_PROBE_DIST, steerRadius)) {
 			return desired;
 		}
 
@@ -3854,7 +3936,7 @@ class Skeleton26ReplaceName : public BaseProject {
 				float c = std::cos(a), sn = std::sin(a);
 				glm::vec2 cand(desired.x * c - desired.y * sn,
 							   desired.x * sn + desired.y * c);
-				if(ghostPathClear(g.pos, cand, GHOST_PROBE_DIST)) {
+				if(ghostPathClear(g.pos, cand, GHOST_PROBE_DIST, steerRadius)) {
 					g.turnBias = sign;
 					return cand;
 				}
