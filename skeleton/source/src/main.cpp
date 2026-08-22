@@ -881,6 +881,14 @@ class Skeleton26ReplaceName : public BaseProject {
 	// into the room instead of only rimming their own wall.
 	static constexpr float TORCH_LIGHT_G = 2.1f;
 	static constexpr float TORCH_LIGHT_BETA = 1.4f;
+	// Candles additionally shrink g (their falloff reach), on top of
+	// flames.json's own lightScale (their peak brightness): the two are
+	// independent knobs the same way sizeScale/lightScale are (see
+	// flames.json's dungeonCandle comment) -- a dim flame that still
+	// reaches TORCH_LIGHT_G units out would carry into the next room at
+	// torch-like range, just dimly, instead of reading as a small local
+	// pool around the wick.
+	static constexpr float CANDLE_LIGHT_G_SCALE = 0.35f;
 
 	// How far a torch light still gets uploaded, and how many may be live at
 	// once. CookTorrance.frag loops over every light for every fragment (times
@@ -2906,7 +2914,8 @@ class Skeleton26ReplaceName : public BaseProject {
 				// colour alone makes the lit area pulse in place, g alone makes
 				// it grow and shrink without changing how hot it looks.
 				L.color = tf.color * tf.intensity * tf.lightScale;
-				L.g = TORCH_LIGHT_G * (0.88f + 0.12f * tf.intensity);
+				L.g = TORCH_LIGHT_G * (tf.isCandle ? CANDLE_LIGHT_G_SCALE : 1.0f)
+					  * (0.88f + 0.12f * tf.intensity);
 				L.beta = TORCH_LIGHT_BETA;
 				L.cosIn = 1.0f;
 				L.cosOut = 0.0f;
