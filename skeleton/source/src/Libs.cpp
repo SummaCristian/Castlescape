@@ -35,3 +35,6 @@
 
 #define LIGHTDEBUG_IMPLEMENTATION
 #include "custom/LightDebug.hpp"
+
+#define HUNTCYCLE_IMPLEMENTATION
+#include "custom/HuntCycle.hpp"
