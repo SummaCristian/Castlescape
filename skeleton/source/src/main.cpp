@@ -1189,14 +1189,23 @@ class Skeleton26ReplaceName : public BaseProject {
 	// Yaw easing, radians/second. Roughly a half-turn in a third of a second.
 	static constexpr float GHOST_TURN_SPEED = 9.0f;
 
-	// Collision size. The radius keeps it out of walls; the half-height is the
-	// vertical slab of its body a collider has to overlap to count as blocking
-	// it, measured either side of `pos`. Wider than the player's 0.3 because
-	// the ghost mesh is wider than the player's imaginary body, and a ghost
-	// visibly clipping a doorway jamb is more noticeable than the player's own
-	// shoulder doing it.
+	// Collision size. The radius keeps it out of walls; the vertical slab is
+	// the part of its body a collider has to overlap to count as blocking it,
+	// measured from `pos`. Wider than the player's 0.3 because the ghost mesh
+	// is wider than the player's imaginary body, and a ghost visibly clipping
+	// a doorway jamb is more noticeable than the player's own shoulder doing
+	// it.
+	//
+	// The slab is NOT symmetric: Ghost.gltf's own local bounds run from -1.80
+	// to +0.83 around its origin (most of the body hangs below the pivot, not
+	// centered on it). A symmetric +-0.9 slab used to sit at [1.3, 3.1] for a
+	// ghost hovering at y=2.2 -- above a table's ~1.22 top -- so the ghost was
+	// ruled to have floated over it while the actual mesh, reaching down to
+	// 0.4, visibly clipped straight through. Matching the real mesh bounds
+	// here is what makes the two agree.
 	static constexpr float GHOST_RADIUS = 0.5f;
-	static constexpr float GHOST_BODY_HALF_HEIGHT = 0.9f;
+	static constexpr float GHOST_BODY_BOTTOM = -1.80f;
+	static constexpr float GHOST_BODY_TOP = 0.83f;
 	// How far ahead a candidate heading is tested for walls before the ghost
 	// commits to it. Long enough to see a wall in time to turn along it, short
 	// enough that it doesn't refuse to enter a doorway.
@@ -3737,8 +3746,8 @@ class Skeleton26ReplaceName : public BaseProject {
 	bool ghostBlockedAt(const glm::vec3 &p) const {
 		for(Collider *C : allColliders) {
 			AABBextents E = C->getExtents();
-			if(E.yMax < p.y - GHOST_BODY_HALF_HEIGHT) continue;	// entirely underneath: floated over
-			if(E.yMin > p.y + GHOST_BODY_HALF_HEIGHT) continue;	// entirely overhead: passed under
+			if(E.yMax < p.y + GHOST_BODY_BOTTOM) continue;	// entirely underneath: floated over
+			if(E.yMin > p.y + GHOST_BODY_TOP) continue;	// entirely overhead: passed under
 			float closestX = glm::clamp(p.x, E.xMin, E.xMax);
 			float closestZ = glm::clamp(p.z, E.zMin, E.zMax);
 			float dx = p.x - closestX;
@@ -3760,8 +3769,8 @@ class Skeleton26ReplaceName : public BaseProject {
 	void ghostResolveWalls(glm::vec3 &p) const {
 		for(Collider *C : allColliders) {
 			AABBextents E = C->getExtents();
-			if(E.yMax < p.y - GHOST_BODY_HALF_HEIGHT) continue;
-			if(E.yMin > p.y + GHOST_BODY_HALF_HEIGHT) continue;
+			if(E.yMax < p.y + GHOST_BODY_BOTTOM) continue;
+			if(E.yMin > p.y + GHOST_BODY_TOP) continue;
 
 			float closestX = glm::clamp(p.x, E.xMin, E.xMax);
 			float closestZ = glm::clamp(p.z, E.zMin, E.zMax);
