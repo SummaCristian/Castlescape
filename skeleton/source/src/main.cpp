@@ -18,6 +18,7 @@
 #include "custom/Flame.hpp"
 #include "custom/CubeShadowMap.hpp"
 #include "custom/LightDebug.hpp"
+#include "custom/HuntCycle.hpp"
 
 // Our own files, and where to start reading.
 //
@@ -35,6 +36,8 @@
 //                   box gets wrong, like the gate's archway
 //   materials.json  surface parameters, one entry per model
 //   lights.json     the light sources and the ambient light
+//   gameplay.json   the hunt cycle's timings, the ghosts' patrols, and where
+//                   the run is won (see custom/HuntCycle.hpp)
 //
 // The shaders are in source/shaders/. PosNormUV.vert and CookTorrance.frag are
 // the pair that draws the scene; the other two draw the HUD.
@@ -530,6 +533,13 @@ class Skeleton26ReplaceName : public BaseProject {
 		// instead.
 		bool showCoordinates = false;
 
+		// Whether a hunting ghost touching the player ends the run. Off is the
+		// cheat: the hunt still happens, the torches still turn, the ghosts
+		// still come, you just can't lose to them -- which is what you want
+		// while tuning any of it, since watching a chase play out is hard when
+		// it's over the moment it starts working.
+		bool ghostsCanCatch = true;
+
 		// Lighting debug views, all resolved into gubo.debugFlags in
 		// updateUniformBuffer() and read by CookTorrance.frag. Same convention
 		// as showCoordinates: these have no "legit" state to preserve, so each
@@ -648,6 +658,11 @@ class Skeleton26ReplaceName : public BaseProject {
 		Instance *inst = nullptr;
 		glm::vec3 worldPos{0.0f};	// measured once at load, used for the in-range check
 		bool collected = false;
+		// The authored pose, kept so restartRun() can put a picked-up or
+		// dropped item back exactly where scene.json placed it. worldPos can't
+		// serve: dropping the key overwrites it.
+		glm::mat4 spawnWm{1.0f};
+		glm::vec3 spawnPos{0.0f};
 	};
 	std::vector<Pickup> pickups;
 	// Measured in 3D (unlike DOOR_INTERACT_RADIUS's XZ-only check): a pickup
@@ -808,7 +823,20 @@ class Skeleton26ReplaceName : public BaseProject {
 		// both, same reasoning as `intensity`. Defaults to the realistic
 		// torch orange, so any addTorchFlame() call that doesn't pass a
 		// color is untouched by this.
+		//
+		// Overwritten every frame by the hunt cycle (see the flame envelope
+		// block in updateUniformBuffer): during a hunt this is `baseColor`
+		// dragged toward violet. Everything downstream -- the light, the
+		// billboard, the bloom -- reads this one field, so the colour change
+		// needed no plumbing beyond the mix itself.
 		glm::vec3 color = TORCH_LIGHT_COLOR;
+
+		// What this torch burns when nothing is hunting: the colour authored in
+		// flames.json (or the default orange), captured once at spawn. `color`
+		// can't double as its own base, because mixing a value toward violet
+		// and storing the result back over the value you mixed FROM converges
+		// on violet and never comes back.
+		glm::vec3 baseColor = TORCH_LIGHT_COLOR;
 
 		// Multiplies FLAME_HEIGHT/FLAME_HALF_WIDTH on top of the instance's
 		// own uniform scale (see instScale below). 1.0 for every torch; the
@@ -1083,20 +1111,212 @@ class Skeleton26ReplaceName : public BaseProject {
 	// like every other prop, so it casts/receives shadows in both the sun's
 	// 2D map and the torches' cube maps for free, and needs no per-object
 	// shadow plumbing of its own.
+	//
+	// Each ghost runs a three-state machine, driven entirely by
+	// huntCycle.hunting():
+	//
+	//   Patrol   the original behaviour: walk the authored waypoint loop.
+	//   Chase    drop the loop and steer toward the player, around walls.
+	//   Return   the hunt is over, so walk BACK to where the chase started
+	//            and pick the patrol up exactly where it was left.
+	//
+	// Return is the state that makes the whole thing work, and it exists
+	// because of one specific problem: a ghost that can't pass through walls
+	// can end a chase anywhere in the castle -- three rooms and two doorways
+	// away from its loop -- and "walk back to a point you can no longer see"
+	// is exactly the pathfinding problem we don't want to solve for a level
+	// this small.
+	//
+	// So it isn't solved. During a chase the ghost drops a breadcrumb every
+	// GHOST_TRAIL_SPACING units (`trail` below), and returning is just walking
+	// that list backwards. The route home is guaranteed walkable because the
+	// ghost physically walked it a moment ago, and it costs one vector push
+	// every few frames instead of a nav mesh, an A* and a graph to run it on.
+	//
+	// The trail also self-prunes: a new breadcrumb landing near an older one
+	// truncates everything after that older one (see the chase block in
+	// GameLogic). A ghost that spends a hunt circling a table therefore walks
+	// home in a straight-ish line rather than re-tracing every lap, and the
+	// list stays bounded no matter how long a hunt runs.
+	enum class GhostMode {
+		Patrol,
+		Chase,
+		Return
+	};
+
 	struct Ghost {
+		std::string instanceId;
 		Instance *inst = nullptr;
 		std::vector<glm::vec3> waypoints;	// XZ used for the path; Y is the resting hover height
 		int targetIdx = 1;					// waypoints[] index currently being approached
 		float distAlongSegment = 0.0f;		// world units already covered on the current leg
 		float bobPhase = 0.0f;
-	};
-	Ghost ghost;
+		float speed = 1.5f;					// patrol pace, from gameplay.json
+		float chaseSpeed = 3.4f;			// hunting pace, from gameplay.json
 
-	// World units/second along the path.
-	static constexpr float GHOST_SPEED = 1.5f;
+		GhostMode mode = GhostMode::Patrol;
+		// Live world position WITHOUT the bob: the bob is presentation only,
+		// and folding it in here would make the ghost's collision slab pump up
+		// and down. Maintained in every mode, Patrol included, so a chase can
+		// start from wherever the loop had got to.
+		glm::vec3 pos{0.0f};
+		// Facing, eased rather than snapped: steering around a corner changes
+		// the heading in a single frame, and a ghost spinning on the spot
+		// reads as a bug, not a haunting.
+		float yaw = 0.0f;
+		// Which way it went around an obstacle last frame, +1 or -1. Kept until
+		// it gets a clear run at the player again, so it commits to one side of
+		// a pillar instead of dithering in front of it.
+		float turnBias = 1.0f;
+
+		// Breadcrumbs, oldest first. trail[0] is where the chase began.
+		std::vector<glm::vec3> trail;
+		// Patrol progress saved the moment the chase started, restored when the
+		// ghost gets back to trail[0].
+		int resumeIdx = 1;
+		float resumeDist = 0.0f;
+
+		// Where the ghost last actually SAW the player, and whether that's ever
+		// happened this hunt. Chase steers toward this, not toward the player's
+		// live position -- see ghostHasLineOfSight. A ghost that has never seen
+		// the player has nothing to chase and stays on patrol.
+		glm::vec3 lastKnownPlayerPos{0.0f};
+		bool hasLastKnown = false;
+
+		// Stuck detection for Chase: `pos` at the last check, and how long
+		// since then the ghost has covered less than GHOST_STUCK_EPS. A ghost
+		// pressed against a closed door or idling at a stale lastKnownPlayerPos
+		// looks identical from here -- either way it isn't getting anywhere,
+		// and GHOST_GIVEUP_TIME is what turns that into giving up rather than
+		// waiting out the rest of the hunt on the wrong side of a door.
+		glm::vec3 stuckCheckPos{0.0f};
+		float stuckTimer = 0.0f;
+	};
+	std::vector<Ghost> ghosts;
+
 	// Bob envelope: how far above/below the resting hover height (radians/sec, world units).
 	static constexpr float GHOST_BOB_SPEED = 1.6f;
 	static constexpr float GHOST_BOB_AMPLITUDE = 0.3f;
+	// How fast a ghost walks its breadcrumbs home. Faster than either patrol or
+	// chase: the return is dead time for the player, and a ghost drifting back
+	// across the map at patrol speed would still be out of position when the
+	// next hunt starts.
+	static constexpr float GHOST_RETURN_SPEED = 4.5f;
+	// Yaw easing, radians/second. Roughly a half-turn in a third of a second.
+	static constexpr float GHOST_TURN_SPEED = 9.0f;
+
+	// Collision size: a vertical cylinder, not a box. A box would rotate with
+	// the mesh's facing (or, left axis-aligned, would silently stop matching
+	// it), and either way its corners project further out on a diagonal than
+	// a circle of the same "radius" -- which is exactly how a box collider
+	// snags on a doorway jamb or a corridor corner that a cylinder just slides
+	// past. That snagging risk is why character/creature controllers use
+	// capsules instead of boxes as a matter of course, and it's the reason
+	// this stays a circle in XZ even though the ghost itself isn't round.
+	//
+	// Both numbers below are fitted from Ghost.gltf's own geometry at load
+	// time (see the fit right after ghosts are read from gameplay.json)
+	// instead of being hand-measured constants, so a model swap can't quietly
+	// desync them again the way the old hardcoded values did.
+	//
+	// The vertical slab is taken at the mesh's exact fitted bounds: unlike the
+	// radius there's no "getting stuck" failure mode to guard against by
+	// shrinking it, and shrinking it is exactly what caused the ghost to float
+	// over furniture it visibly clipped through (see ghostBlockedAt/
+	// ghostResolveWalls). Ghost.gltf's local bounds run from -1.80 to +0.83
+	// around its origin -- most of the body hangs below the pivot, not
+	// centered on it -- which is also why this is two numbers and not one
+	// symmetric half-height.
+	//
+	// The radius, by contrast, IS deliberately shrunk below the mesh's actual
+	// footprint (ghostXZFitShrink), the same way it always was: a circle sized
+	// to guarantee zero visual clipping would be wide enough to snag in a
+	// doorway. Shrinking it off the real fit rather than picking an unrelated
+	// number keeps it in the same ballpark as the mesh if the model changes.
+	//
+	// 0.45 lands the fitted radius close to 0.5 -- the value this project
+	// shipped and navigated doorways with before any of this fitting existed.
+	// A larger shrink (tried: 0.65, plus a steering margin on top of that)
+	// pushed the effective radius close enough to half the doorway width that
+	// ghostSteer's clear/blocked test started flipping every frame near a
+	// threshold, which is worse than the clipping it was meant to fix: a
+	// ghost that visibly clips a table is a minor visual issue, one that
+	// visibly vibrates in a doorway is a broken one. Getting all the way back
+	// to zero clipping isn't the goal here; not regressing movement is.
+	static constexpr float ghostXZFitShrink = 0.45f;
+	// Steering briefly probed with extra padding above the real radius, meant
+	// to stop borderline gaps from flip-flopping every frame. Playtesting it
+	// alongside the 0.65 shrink made things worse, not better -- padding a
+	// radius that was already close to half the doorway width just made
+	// "blocked" win the flip-flop more often. Back to 1.0 (no margin); the
+	// parameter stays in ghostPathClear/ghostSteer in case it's worth
+	// revisiting once the radius itself (ghostXZFitShrink, above) is confirmed
+	// comfortable, rather than stacked on top of a radius that was still
+	// riding the edge.
+	static constexpr float ghostSteerMargin = 1.0f;
+	float ghostRadius = 0.5f;
+	float ghostBodyBottom = -1.80f;
+	float ghostBodyTop = 0.83f;
+	// How far ahead a candidate heading is tested for walls before the ghost
+	// commits to it. Long enough to see a wall in time to turn along it, short
+	// enough that it doesn't refuse to enter a doorway.
+	static constexpr float GHOST_PROBE_DIST = 1.2f;
+	// Horizontal distance at which a hunting ghost catches the player, plus the
+	// vertical slack that catch allows. The vertical part matters: the ghosts
+	// hover at 2.2 and the player's eyes are at 1.8, so a plain 3D distance
+	// test would need a radius big enough to be unfair horizontally.
+	static constexpr float GHOST_CATCH_RADIUS = 0.85f;
+	static constexpr float GHOST_CATCH_VERTICAL = 2.5f;
+	// Breadcrumb spacing, and the radius within which a new breadcrumb counts
+	// as revisiting an old one (and prunes the loop between them). The prune
+	// radius has to be comfortably larger than the spacing, or consecutive
+	// breadcrumbs would prune each other and the trail could never grow.
+	static constexpr float GHOST_TRAIL_SPACING = 0.75f;
+	static constexpr float GHOST_TRAIL_PRUNE_RADIUS = 1.4f;
+
+	// How little ground counts as "not really moving" for the stuck check
+	// below, and how long a chasing ghost tolerates that before giving up.
+	// Padded a bit above pure floating-point idle drift -- a ghost easing its
+	// yaw or nudged half a centimetre by ghostResolveWalls shouldn't reset the
+	// clock, only an actual stall (a closed door, an empty lastKnownPlayerPos)
+	// should.
+	static constexpr float GHOST_STUCK_EPS = 0.08f;
+	static constexpr float GHOST_GIVEUP_TIME = 3.0f;
+
+	// The hunt cycle: the clock that decides when the torches change colour and
+	// the ghosts come for the player. Owns no scene state of its own, see
+	// custom/HuntCycle.hpp.
+	HuntCycle huntCycle;
+
+	// How the current run ended, or Running if it hasn't. Freezes GameLogic()
+	// the same way an open cheat HUD does, and R starts a fresh one.
+	enum class RunState {
+		Running,
+		Caught,
+		Escaped
+	};
+	RunState runState = RunState::Running;
+	bool restartKeyWasPressed = false;
+
+	// Where the exit is and whether it's locked, both from gameplay.json's
+	// "exit" block. The box is world-space and axis-aligned: the player wins by
+	// standing inside it.
+	glm::vec3 exitBoxMin{0.0f};
+	glm::vec3 exitBoxMax{0.0f};
+	bool exitHasBox = false;
+	bool exitRequiresKey = true;
+	// Set every frame in GameLogic() when the player is standing in a locked
+	// exit without the key, read by updateUniformBuffer() to explain why
+	// nothing happened. Same pattern as nearbyDoor/nearbyPickup.
+	bool atLockedExit = false;
+
+	// The player's authored starting pose, captured in localInit() before
+	// anything moves it, so restarting a run puts them back where they spawned
+	// instead of at a second set of hardcoded coordinates that could drift out
+	// of step with the first.
+	glm::vec3 spawnPos{0.0f};
+	float spawnYaw = 0.0f;
+	float spawnPitch = 0.0f;
 
 	// Tallest surface the player can walk straight onto without jumping, measured
 	// from the feet. Deliberately a single shared constant rather than a local in
@@ -1730,6 +1950,8 @@ class Skeleton26ReplaceName : public BaseProject {
 			p.instanceId = id;
 			p.inst = SC.I[it->second];
 			p.worldPos = glm::vec3(p.inst->Wm[3]);
+			p.spawnWm = p.inst->Wm;
+			p.spawnPos = p.worldPos;
 			pickups.push_back(p);
 		};
 		keyPickupIdx = (int)pickups.size();
@@ -1746,23 +1968,121 @@ class Skeleton26ReplaceName : public BaseProject {
 			keyWorldScale = glm::length(glm::vec3(pickups[keyPickupIdx].inst->Wm[0]));
 		}
 
-		// The ghost's patrol: a closed rectangular loop around the perimeter
-		// of the west dungeon room (the one with the table), inset from the
-		// walls/torches and clear of the table+chairs sitting in the middle.
-		// Y is the resting hover height -- GameLogic() adds the bob on top
-		// of it every frame, it isn't part of the path shape itself.
+		// The player's spawn pose, captured before anything can move it. See
+		// spawnPos's declaration: this is what restartRun() puts them back to.
+		spawnPos = camPos;
+		spawnYaw = camYaw;
+		spawnPitch = camPitch;
+
+		// The rules of the game: the hunt cycle's timings, where the run is
+		// won, and the ghosts' patrols. All three used to be constants in this
+		// file (the ghost's waypoint loop was written out right here); they're
+		// a data file now for the same reason lights.json is one, which is that
+		// every number in it is a tuning decision someone will want to change
+		// without waiting for a rebuild.
 		{
-			auto it = SC.InstanceIds.find("ghost");
-			if(it == SC.InstanceIds.end()) {
-				std::cout << "Ghost instance 'ghost' not found, skipping\n";
+			std::ifstream ifs("assets/scenes/gameplay.json");
+			if(!ifs.is_open()) {
+				std::cout << "gameplay.json not found: default hunt timings, no ghosts\n";
+				// Still has to be armed: a default-constructed HuntCycle has a
+				// phase timer of 0 and would fall straight into a hunt on the
+				// first frame. init() with no overrides is exactly "defaults,
+				// then reset()".
+				huntCycle.init(nlohmann::json::object());
 			} else {
-				ghost.inst = SC.I[it->second];
-				ghost.waypoints = {
-					glm::vec3(-33.0f, 2.2f, 23.0f),
-					glm::vec3(-33.0f, 2.2f, 37.0f),
-					glm::vec3(-19.0f, 2.2f, 37.0f),
-					glm::vec3(-19.0f, 2.2f, 23.0f),
-				};
+				// ignore_comments, like every other scene file here.
+				nlohmann::json js = nlohmann::json::parse(ifs, nullptr, true, true);
+
+				// Unconditional, and with an empty object if the block is
+				// absent: init() treats every key as optional and finishes by
+				// arming the clock, which has to happen either way.
+				huntCycle.init(js.value("hunt", nlohmann::json::object()));
+
+				if(js.contains("exit")) {
+					const nlohmann::json &e = js["exit"];
+					if(e.contains("box") && e["box"].size() == 6) {
+						glm::vec3 a(e["box"][0].get<float>(), e["box"][1].get<float>(), e["box"][2].get<float>());
+						glm::vec3 b(e["box"][3].get<float>(), e["box"][4].get<float>(), e["box"][5].get<float>());
+						// min/max rather than trusting the authored order, so
+						// writing the two corners the other way round still
+						// describes the same box instead of an empty one.
+						exitBoxMin = glm::min(a, b);
+						exitBoxMax = glm::max(a, b);
+						exitHasBox = true;
+					} else {
+						std::cout << "gameplay.json: \"exit\" needs a 6-number \"box\", the run can't be won\n";
+					}
+					exitRequiresKey = e.value("requiresKey", true);
+				}
+
+				for(const auto &g : js.value("ghosts", nlohmann::json::array())) {
+					std::string id = g.value("instance", std::string(""));
+					auto it = SC.InstanceIds.find(id);
+					if(it == SC.InstanceIds.end()) {
+						std::cout << "gameplay.json: no scene instance '" << id
+								  << "', ghost skipped\n";
+						continue;
+					}
+
+					Ghost gh;
+					gh.instanceId = id;
+					gh.inst = SC.I[it->second];
+					gh.speed = g.value("speed", gh.speed);
+					gh.chaseSpeed = g.value("chaseSpeed", gh.chaseSpeed);
+					for(const auto &w : g.value("waypoints", nlohmann::json::array())) {
+						if(w.size() != 3) {
+							std::cout << "gameplay.json: ghost '" << id
+									  << "' has a waypoint that isn't 3 numbers, skipped\n";
+							continue;
+						}
+						gh.waypoints.push_back(glm::vec3(w[0].get<float>(), w[1].get<float>(), w[2].get<float>()));
+					}
+					// Two is the minimum that describes a path at all; one
+					// waypoint is a ghost standing still, which is almost
+					// certainly a typo rather than an intention.
+					if(gh.waypoints.size() < 2) {
+						std::cout << "gameplay.json: ghost '" << id
+								  << "' needs at least 2 waypoints, skipped\n";
+						continue;
+					}
+					gh.pos = gh.waypoints[0];
+					// Staggered so identically-authored ghosts don't hover in
+					// lockstep, same trick as the torches' flicker phase.
+					gh.bobPhase = (float)ghosts.size() * 2.399963f;
+					ghosts.push_back(gh);
+				}
+				std::cout << "gameplay.json: " << ghosts.size() << " ghosts loaded\n";
+
+				// Fit the ghost's collision size from the actual mesh instead of
+				// hand-measuring it once and hoping nobody replaces the model.
+				// Every ghost instance shares the same Ghost.gltf, so one fit
+				// off the first one covers all of them.
+				if(!ghosts.empty()) {
+					Collider fit;
+					fit.fitAABB(SC.M[ghosts[0].inst->Mid]);
+					AABBextents E = fit.getExtents();	// fit's Wm is identity, so this is local space
+
+					// fitAABB reads the raw mesh, which knows nothing about
+					// scene.json's "scale" on the instance -- so a scaled-down
+					// ghost would otherwise keep a full-size collider. Same
+					// trick as keyWorldScale above: the length of the world
+					// matrix's first column IS the instance's uniform scale
+					// factor, so multiplying it in here is what makes shrinking
+					// a ghost in scene.json actually shrink what it collides
+					// as, not just what it looks like.
+					float instScale = glm::length(glm::vec3(ghosts[0].inst->Wm[0]));
+
+					ghostBodyBottom = E.yMin * instScale;
+					ghostBodyTop = E.yMax * instScale;
+
+					float halfX = 0.5f * (E.xMax - E.xMin);
+					float halfZ = 0.5f * (E.zMax - E.zMin);
+					ghostRadius = ghostXZFitShrink * 0.5f * (halfX + halfZ) * instScale;
+
+					std::cout << "Ghost collision fitted from mesh (scale " << instScale
+							  << "): radius " << ghostRadius
+							  << ", vertical [" << ghostBodyBottom << ", " << ghostBodyTop << "]\n";
+				}
 			}
 		}
 
@@ -1818,6 +2138,7 @@ class Skeleton26ReplaceName : public BaseProject {
 			tf.anchor = anchor;
 			tf.heldByCamera = heldByCamera;
 			tf.color = color;
+			tf.baseColor = color;
 			tf.sizeScale = sizeScale;
 			tf.lightScale = lightScale;
 			tf.isCandle = isCandle;
@@ -1986,6 +2307,13 @@ class Skeleton26ReplaceName : public BaseProject {
 		hud.addToggle("Jump", &cheats.jumpEnabled);
 		hud.addToggle("Sprint", &cheats.sprintEnabled);
 		hud.addToggle("Show Coordinates", &cheats.showCoordinates);
+
+		// Gameplay rows. "Hunt" forces the cycle into its hunt phase and holds
+		// it there, so the mechanic can be watched without waiting out
+		// calmDuration; "Ghosts Can Catch" is the row that lets you watch it
+		// for longer than the first ghost takes to reach you.
+		hud.addToggle("Hunt", &huntCycle.forceHunt);
+		hud.addToggle("Ghosts Can Catch", &cheats.ghostsCanCatch);
 
 		// Lighting rows. Listed after the movement ones and in the order you'd
 		// use them: first which sources are on, then how they're being shaded.
@@ -2886,6 +3214,21 @@ class Skeleton26ReplaceName : public BaseProject {
 								- 2.0f * w0 * tf.intensityVel) * deltaT;
 			tf.intensity += tf.intensityVel * deltaT;
 
+			// The hunt cycle's colour, recomputed from the authored base every
+			// frame (see TorchFlame::baseColor). This one line is the whole
+			// visual half of the mechanic: `color` is what both the point light
+			// and the billboard read, so tinting it here turns the torch, its
+			// light, its shadows and its bloom violet together, with no second
+			// path to keep in step.
+			//
+			// The warning pulse and the hunt's dimming ride on the same value
+			// rather than on `intensity`, which is spring-driven state: a 4 Hz
+			// pulse written into a spring with a ~0.2 s response would be
+			// damped into nothing, and writing it into the spring's own value
+			// would corrupt the flicker it exists to produce.
+			tf.color = huntCycle.flameColor(tf.baseColor)
+					   * huntCycle.warningPulse() * huntCycle.lightScale();
+
 			// Height: the same signal, compressed into a narrower band and
 			// chased much more slowly -- see TorchFlame::heightScale.
 			float hTarget = 0.78f + 0.31f * (target - 0.30f) / 1.10f;	// ~0.78..1.09
@@ -3376,10 +3719,22 @@ class Skeleton26ReplaceName : public BaseProject {
 		// itself). Re-prints on top of a shown/hidden toggle whenever the
 		// text itself changes (e.g. walking from a door straight to the key),
 		// not just on the binary transition the door-only version needed.
+		// The locked-exit line rides the same slot: it's the same kind of
+		// message (a one-line explanation of what the thing in front of you
+		// needs), it appears in the same place, and the two can't be in range
+		// at once in any layout worth building.
 		static bool interactPromptShown = false;
 		static std::string interactPromptText;
-		bool showInteractPrompt = (nearbyDoor >= 0 || nearbyPickup >= 0);
-		std::string wantedPromptText = (nearbyPickup >= 0) ? "[E] Pick up" : "[E] Interact";
+		//
+		// Suppressed once a run has ended: GameLogic() stops updating
+		// nearbyDoor/nearbyPickup/atLockedExit when it freezes, so whatever was
+		// in range on the last live frame would otherwise sit there under the
+		// game-over text still inviting a keypress that does nothing.
+		bool showInteractPrompt = runState == RunState::Running &&
+								  (nearbyDoor >= 0 || nearbyPickup >= 0 || atLockedExit);
+		std::string wantedPromptText = atLockedExit      ? "The way out is locked - find the key"
+									 : (nearbyPickup >= 0) ? "[E] Pick up"
+														   : "[E] Interact";
 		if(showInteractPrompt && (!interactPromptShown || wantedPromptText != interactPromptText)) {
 			if(interactPromptShown) txt.removeText(3);
 			float sx, sy;
@@ -3394,10 +3749,353 @@ class Skeleton26ReplaceName : public BaseProject {
 			interactPromptShown = false;
 		}
 
+		// The hunt banner, centred and high on the screen: the words behind
+		// what the torches are already saying in colour. Two lines only,
+		// because a player reading a paragraph is a player not running.
+		//
+		// Re-printed only when the text changes, not every frame -- print()
+		// unconditionally dirties the text command buffer, and the countdown is
+		// therefore deliberately rounded to whole seconds so it changes at most
+		// once a second instead of once a frame.
+		static bool huntBannerShown = false;
+		static std::string huntBannerText;
+		std::string wantedHuntText;
+		if(runState == RunState::Running) {
+			if(huntCycle.phase() == HuntPhase::Warning) {
+				std::ostringstream hoss;
+				hoss << "THE LIGHTS ARE TURNING - "
+					 << (int)std::ceil(huntCycle.timeLeftInPhase()) << "\n";
+				wantedHuntText = hoss.str();
+			} else if(huntCycle.phase() == HuntPhase::Hunt) {
+				wantedHuntText = "RUN\n";
+			}
+		}
+		if(!wantedHuntText.empty() && (!huntBannerShown || wantedHuntText != huntBannerText)) {
+			if(huntBannerShown) txt.removeText(4);
+			float sx, sy;
+			txt.pixelToScr((float)windowWidth / 2.0f, 60.0f, sx, sy);
+			txt.print(sx, sy, wantedHuntText, 4, "CO", false, true, false,
+					  TAL_CENTER, TRH_CENTER, TRV_TOP,
+					  {1.0f, 0.85f, 0.2f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f});
+			huntBannerShown = true;
+			huntBannerText = wantedHuntText;
+		} else if(wantedHuntText.empty() && huntBannerShown) {
+			txt.removeText(4);
+			huntBannerShown = false;
+		}
+
+		// End of run. Static text, so unlike the banner above it's printed once
+		// on the transition and left alone until the run restarts.
+		static bool endBannerShown = false;
+		static std::string endBannerText;
+		std::string wantedEndText;
+		if(runState == RunState::Caught) {
+			wantedEndText = "CAUGHT\n[R] Try again\n";
+		} else if(runState == RunState::Escaped) {
+			wantedEndText = "YOU ESCAPED THE CASTLE\n[R] Play again\n";
+		}
+		if(!wantedEndText.empty() && (!endBannerShown || wantedEndText != endBannerText)) {
+			if(endBannerShown) txt.removeText(5);
+			float sx, sy;
+			txt.pixelToScr((float)windowWidth / 2.0f, (float)windowHeight / 2.0f, sx, sy);
+			txt.print(sx, sy, wantedEndText, 5, "CO", false, true, false,
+					  TAL_CENTER, TRH_CENTER, TRV_MIDDLE,
+					  {1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f});
+			endBannerShown = true;
+			endBannerText = wantedEndText;
+		} else if(wantedEndText.empty() && endBannerShown) {
+			txt.removeText(5);
+			endBannerShown = false;
+		}
+
 		txt.updateCommandBuffer();
 		uiQuad.updateCommandBuffer();
 	}
 	
+	// --- Ghost navigation ---------------------------------------------------
+	//
+	// The ghosts obey the same walls the player does, and for the same reason
+	// the player does: a threat that ignores geometry can't be played around.
+	// If a ghost could drift through the dungeon wall behind you there'd be no
+	// point in running anywhere, no point in the doors, and no decision left in
+	// the hunt beyond holding W. Solid ghosts turn every corner and doorway
+	// into something the player can use.
+	//
+	// None of this is pathfinding. It's a wall test, a push-out identical to
+	// the player's, and a fan of candidate headings -- which is enough for a
+	// castle of rooms and corridors, and is all the return trail (see the Ghost
+	// struct) leaves it needing to do.
+
+	// True if a ghost-sized cylinder standing at `p` overlaps a wall. `p` is
+	// the ghost's un-bobbed position, so the vertical slab it tests is fixed.
+	//
+	// Unlike the player's wall pass there's no MAX_STEP_HEIGHT exemption: a
+	// ghost hovers, so a low crate isn't something it steps onto, it's
+	// something it floats over -- and it floats over it precisely because the
+	// crate's yMax falls below the slab tested here. Same test, different
+	// consequence, no special case needed.
+	// `radius` is a parameter rather than always `ghostRadius` so a caller
+	// deciding WHERE to go (ghostPathClear/ghostSteer) can ask with a little
+	// extra padding, while the caller deciding whether `p` is actually
+	// physically stuck (ghostResolveWalls) keeps asking with the real body
+	// size. See ghostSteer for why that distinction exists.
+	bool ghostBlockedAt(const glm::vec3 &p, float radius) const {
+		for(Collider *C : allColliders) {
+			AABBextents E = C->getExtents();
+			if(E.yMax < p.y + ghostBodyBottom) continue;	// entirely underneath: floated over
+			if(E.yMin > p.y + ghostBodyTop) continue;	// entirely overhead: passed under
+			float closestX = glm::clamp(p.x, E.xMin, E.xMax);
+			float closestZ = glm::clamp(p.z, E.zMin, E.zMax);
+			float dx = p.x - closestX;
+			float dz = p.z - closestZ;
+			if(dx * dx + dz * dz < radius * radius) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// Pushes `p` back out of anything it has ended up inside, horizontally.
+	// Deliberately the same shape as the player's wall-collision block: the
+	// ghost is a circle in XZ against the same boxes, and the only difference
+	// is the radius and which vertical slab counts. Sliding along a wall
+	// instead of sticking to it falls out of this for free, exactly as it does
+	// for the player -- move first, then get pushed out along the shortest
+	// horizontal escape, and the component parallel to the wall survives.
+	void ghostResolveWalls(glm::vec3 &p) const {
+		for(Collider *C : allColliders) {
+			AABBextents E = C->getExtents();
+			if(E.yMax < p.y + ghostBodyBottom) continue;
+			if(E.yMin > p.y + ghostBodyTop) continue;
+
+			float closestX = glm::clamp(p.x, E.xMin, E.xMax);
+			float closestZ = glm::clamp(p.z, E.zMin, E.zMax);
+			float dx = p.x - closestX;
+			float dz = p.z - closestZ;
+			float dist = std::sqrt(dx * dx + dz * dz);
+			if(dist >= ghostRadius) continue;
+
+			if(dist > 1e-5f) {
+				float push = (ghostRadius - dist) / dist;
+				p.x += dx * push;
+				p.z += dz * push;
+			} else {
+				// Centre exactly inside the footprint: out along the nearest side.
+				float pushXNeg = p.x - E.xMin, pushXPos = E.xMax - p.x;
+				float pushZNeg = p.z - E.zMin, pushZPos = E.zMax - p.z;
+				float minX = std::min(pushXNeg, pushXPos);
+				float minZ = std::min(pushZNeg, pushZPos);
+				if(minX < minZ) {
+					p.x += (pushXNeg < pushXPos ? -1.0f : 1.0f) * (ghostRadius + minX);
+				} else {
+					p.z += (pushZNeg < pushZPos ? -1.0f : 1.0f) * (ghostRadius + minZ);
+				}
+			}
+		}
+	}
+
+	// Whether a ghost at `from` could travel `dist` along `dir` without hitting
+	// anything. Sampled rather than swept: a handful of point tests along the
+	// segment, spaced under the ghost's own radius so nothing thinner than the
+	// ghost can slip between two samples. A real swept test against every
+	// collider would cost more and buy nothing at these speeds.
+	bool ghostPathClear(const glm::vec3 &from, const glm::vec2 &dir, float dist, float radius) const {
+		const float step = ghostRadius * 0.8f;
+		int samples = std::max(1, (int)std::ceil(dist / step));
+		for(int i = 1; i <= samples; i++) {
+			float t = dist * (float)i / (float)samples;
+			glm::vec3 p = from + glm::vec3(dir.x * t, 0.0f, dir.y * t);
+			if(ghostBlockedAt(p, radius)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	// True if the exact point `p` sits inside any collider's box. Unlike
+	// ghostBlockedAt this tests the real Y of `p`, not a vertical slab hung
+	// off some other position's height -- what a sightline needs, since the
+	// ray runs from a hovering ghost's eye down to a standing player's, and a
+	// table or chair along the way should only block it if the line is
+	// actually low enough to clip the furniture there.
+	bool ghostPointBlocked(const glm::vec3 &p) const {
+		for(Collider *C : allColliders) {
+			AABBextents E = C->getExtents();
+			if(p.x < E.xMin || p.x > E.xMax) continue;
+			if(p.z < E.zMin || p.z > E.zMax) continue;
+			if(p.y < E.yMin || p.y > E.yMax) continue;
+			return true;
+		}
+		return false;
+	}
+
+	// Roughly where a ghost's "eyes" are, relative to its hover pivot --
+	// nearer the top of the body than the centre. Only used for the sightline
+	// below; the movement/collision code has no use for it.
+	static constexpr float GHOST_EYE_OFFSET = 0.5f;
+
+	// Whether a ghost at `from` can currently see the player at `eyeTarget`
+	// (already an eye-height position -- see camPos). A straight 3D ray, not
+	// the flat XZ probe ghostPathClear uses for walking: that one tests a
+	// fixed vertical slab at the ghost's own height and would call a
+	// waist-high table "blocking" even though a hovering ghost looking down
+	// at a player clears right over it. Walls and closed doors still block --
+	// their boxes run floor to ceiling, so no point on the ray between two
+	// eye heights ever misses them.
+	bool ghostHasLineOfSight(const glm::vec3 &from, const glm::vec3 &eyeTarget) const {
+		glm::vec3 eyeFrom = from + glm::vec3(0.0f, GHOST_EYE_OFFSET, 0.0f);
+		glm::vec3 delta = eyeTarget - eyeFrom;
+		float d = glm::length(delta);
+		if(d < 1e-4f) return true;
+		glm::vec3 dir = delta / d;
+		const float step = ghostRadius * 0.8f;
+		int samples = std::max(1, (int)std::ceil(d / step));
+		// i starts at 1 and stops short of `samples` so neither endpoint --
+		// the ghost's own eye position, or the player's -- is tested against
+		// their own collider footprint.
+		for(int i = 1; i < samples; i++) {
+			float t = d * (float)i / (float)samples;
+			if(ghostPointBlocked(eyeFrom + dir * t)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	// Picks the heading a chasing ghost should actually take, given the
+	// direction it WANTS to go (straight at the player).
+	//
+	// Fans out from `desired` in widening steps and takes the first candidate
+	// with a clear probe ahead of it. Straight at the player wins whenever it's
+	// available; when it isn't, the fan finds the shallowest deviation that is,
+	// which along a wall is the direction that slides down it and around a
+	// corner is the one that turns the corner. Backwards (the last candidates)
+	// is a valid answer too -- that's a ghost giving up on a dead end.
+	//
+	// g.turnBias is why it doesn't dither. Without it, a ghost facing a pillar
+	// with the player behind it would evaluate left and right as equally good
+	// every frame and, as the geometry shifted by centimetres, keep swapping --
+	// vibrating in place instead of committing. The bias remembers the side it
+	// chose and re-tries that side first, and is only re-examined once the
+	// ghost gets a clear straight line again.
+	//
+	// Returns a zero vector if it's boxed in on every side, which the caller
+	// reads as "don't move this frame".
+	glm::vec2 ghostSteer(Ghost &g, const glm::vec2 &desired) const {
+		// Probed with a little more than the ghost's actual radius, not the
+		// exact physical size ghostResolveWalls uses to push it out of a wall.
+		// A choke point only a hair wider than the body makes "clear?" flip
+		// between true and false from one frame's worth of movement -- which,
+		// fed straight into a direction, is a ghost snapping between two
+		// headings every frame instead of walking through. The padding turns
+		// that knife-edge into a threshold the ghost commits to well before it
+		// physically has to, at the cost of refusing a gap slightly sooner
+		// than it strictly needs to.
+		const float steerRadius = ghostRadius * ghostSteerMargin;
+
+		// Straight there. Also the point at which the ghost stops having an
+		// opinion about which way it went round the last obstacle.
+		if(ghostPathClear(g.pos, desired, GHOST_PROBE_DIST, steerRadius)) {
+			return desired;
+		}
+
+		// Deviations in degrees, shallowest first. Stops just short of 180: a
+		// dead straight retreat is what the last pair already covers, and it
+		// would be reached only when literally every other heading is blocked.
+		static constexpr float FAN[] = {25.0f, 50.0f, 75.0f, 100.0f, 125.0f, 150.0f};
+		for(float deg : FAN) {
+			// The remembered side first, then the other one.
+			for(int s = 0; s < 2; s++) {
+				float sign = (s == 0) ? g.turnBias : -g.turnBias;
+				float a = glm::radians(deg) * sign;
+				float c = std::cos(a), sn = std::sin(a);
+				glm::vec2 cand(desired.x * c - desired.y * sn,
+							   desired.x * sn + desired.y * c);
+				if(ghostPathClear(g.pos, cand, GHOST_PROBE_DIST, steerRadius)) {
+					g.turnBias = sign;
+					return cand;
+				}
+			}
+		}
+		return glm::vec2(0.0f);
+	}
+
+	// Puts everything a run touches back to its authored state: the player, the
+	// ghosts, the hunt clock, the doors, and anything picked up or dropped.
+	// Nothing here reloads a file -- every "authored" value was captured in
+	// localInit() (spawnPos, Door::baseWm, Pickup::spawnWm), so a restart can't
+	// disagree with the scene the game started from.
+	void restartRun() {
+		camPos = spawnPos;
+		camYaw = spawnYaw;
+		camPitch = spawnPitch;
+		camVerticalVelocity = 0.0f;
+		eyeStepOffset = 0.0f;
+		grounded = true;
+		sprinting = false;
+		walkBobPhase = 0.0f;
+		walkBobBlend = 0.0f;
+
+		huntCycle.reset();
+
+		for(Ghost &g : ghosts) {
+			g.mode = GhostMode::Patrol;
+			g.targetIdx = 1;
+			g.distAlongSegment = 0.0f;
+			g.resumeIdx = 1;
+			g.resumeDist = 0.0f;
+			g.trail.clear();
+			g.turnBias = 1.0f;
+			g.hasLastKnown = false;
+			g.stuckTimer = 0.0f;
+			if(!g.waypoints.empty()) {
+				g.pos = g.waypoints[0];
+			}
+		}
+
+		for(Door &d : doors) {
+			d.open = false;
+			d.angle = 0.0f;
+			d.inst->Wm = d.baseWm;
+			if(d.inst->C != nullptr) {
+				d.inst->C->setWorldMatrix(d.inst->Wm);
+			}
+		}
+
+		for(Pickup &p : pickups) {
+			p.collected = false;
+			p.worldPos = p.spawnPos;
+			p.inst->Wm = p.spawnWm;
+		}
+		hasKey = false;
+		nearbyDoor = -1;
+		nearbyPickup = -1;
+		atLockedExit = false;
+
+		runState = RunState::Running;
+	}
+
+	// Called once on the frame the hunt cycle changes phase. Everything the
+	// phase change actually DOES (colour, ghost behaviour) is polled from
+	// huntCycle where it's needed, so this is left with just the announcement
+	// -- and it exists as its own function because that's the single place a
+	// music track would be swapped from. The project has no audio backend yet
+	// (nothing links an audio library, see CMakeLists.txt), so for now it
+	// prints; when one is added, three calls go here and nothing else moves.
+	void onHuntPhaseChanged() {
+		switch(huntCycle.phase()) {
+			case HuntPhase::Calm:
+				std::cout << "[hunt] calm\n";
+				break;
+			case HuntPhase::Warning:
+				std::cout << "[hunt] warning: the lights are turning\n";
+				break;
+			case HuntPhase::Hunt:
+				std::cout << "[hunt] HUNT\n";
+				break;
+		}
+	}
+
 	float GameLogic() {
 		// Camera FOV-y, Near Plane and Far Plane
 		const float FOVy = glm::radians(45.0f);
@@ -3475,10 +4173,32 @@ class Skeleton26ReplaceName : public BaseProject {
 		glm::vec3 right = glm::normalize(glm::cross(front, worldUp));
 		glm::vec3 up = glm::normalize(glm::cross(right, front));
 
+		// Restart. Only offered once a run has ended, so R is free to mean
+		// something else during play, and edge-triggered like every other key
+		// here so holding it doesn't restart every frame.
+		bool restartKey = glfwGetKey(window, GLFW_KEY_R);
+		if(runState != RunState::Running && restartKey && !restartKeyWasPressed && !hud.isOpen()) {
+			restartRun();
+		}
+		restartKeyWasPressed = restartKey;
+
+		// The hunt clock, gated on the same two conditions as the movement
+		// block below. A cycle that kept counting down behind an open cheat
+		// menu, or over a game-over screen, would have the player come back to
+		// a phase they never saw start.
+		if(!hud.isOpen() && runState == RunState::Running) {
+			huntCycle.update(deltaT);
+			if(huntCycle.phaseJustChanged()) {
+				onHuntPhaseChanged();
+			}
+		}
+
 		// Freeze all movement/physics while the cheat HUD is open, so opening
 		// it pauses the game exactly where it was (camera included, since m/r
-		// were already zeroed above).
-		if(!hud.isOpen()) {
+		// were already zeroed above). A finished run freezes the same way, for
+		// the same reason: the last frame the player saw is the one they should
+		// keep looking at while deciding whether to restart.
+		if(!hud.isOpen() && runState == RunState::Running) {
 			// Sprint: Ctrl multiplies movement speed, gated behind sprintEnabled like
 			// the other cheats/debug toggles. Polled directly (not through getSixAxis/
 			// "fire") since Starter.hpp doesn't wire Ctrl to anything.
@@ -3700,39 +4420,256 @@ class Skeleton26ReplaceName : public BaseProject {
 							* glm::rotate(glm::mat4(1.0f), yaw, glm::vec3(0.0f, 1.0f, 0.0f));
 			}
 
-			// Ghost: walks its waypoint loop at constant speed (distance-based,
-			// not time-based, so GHOST_SPEED is an actual world-units/second
-			// figure regardless of leg length), facing the leg it's currently
-			// on, with a sinusoidal bob added on top of the hover height
-			// afterwards -- the facing/position math and the bob are kept
-			// separate so the bob never fights the direction the ghost is
-			// looking.
-			if(ghost.inst != nullptr && ghost.waypoints.size() >= 2) {
-				int n = (int)ghost.waypoints.size();
-				glm::vec3 from = ghost.waypoints[ghost.targetIdx == 0 ? n - 1 : ghost.targetIdx - 1];
-				glm::vec3 to = ghost.waypoints[ghost.targetIdx];
-				float segLen = glm::length(glm::vec2(to.x - from.x, to.z - from.z));
+			// Ghosts. See the Ghost struct for the three modes and why Return
+			// works the way it does.
+			//
+			// Common to all three: the mode decides a movement direction and a
+			// speed, and everything after that -- the bob, the eased facing,
+			// the world matrix -- is shared. The bob is added at the very end,
+			// on top of `pos` rather than into it, so it never feeds back into
+			// either the steering or the collision slab.
+			bool ghostsHunting = huntCycle.hunting();
+			for(Ghost &g : ghosts) {
+				if(g.inst == nullptr || g.waypoints.size() < 2) continue;
 
-				ghost.distAlongSegment += GHOST_SPEED * deltaT;
-				while(segLen > 0.0f && ghost.distAlongSegment >= segLen) {
-					ghost.distAlongSegment -= segLen;
-					ghost.targetIdx = (ghost.targetIdx + 1) % n;
-					from = ghost.waypoints[ghost.targetIdx == 0 ? n - 1 : ghost.targetIdx - 1];
-					to = ghost.waypoints[ghost.targetIdx];
-					segLen = glm::length(glm::vec2(to.x - from.x, to.z - from.z));
+				// --- Line of sight, checked every frame a hunt is on regardless
+				// of mode: a Patrol or Return ghost that spots the player needs
+				// to be able to start/resume a chase, not just a Chase one that
+				// already has a target to refresh.
+				if(ghostsHunting && ghostHasLineOfSight(g.pos, camPos)) {
+					g.lastKnownPlayerPos = camPos;
+					g.hasLastKnown = true;
 				}
 
-				float t = segLen > 0.0f ? ghost.distAlongSegment / segLen : 0.0f;
-				glm::vec3 pos = glm::mix(from, to, t);
+				// --- Mode transitions.
+				//
+				// Starting (or resuming) a chase now needs g.hasLastKnown, not
+				// just the phase being Hunt: a ghost that has never seen the
+				// player has nothing to walk toward, so it stays on patrol
+				// instead of beelining for coordinates it was never shown --
+				// which is exactly what used to put a ghost behind a door in
+				// another room the player was about to open.
+				if(ghostsHunting && g.hasLastKnown && g.mode != GhostMode::Chase) {
+					if(g.mode == GhostMode::Patrol) {
+						// Remember exactly where on the loop we're leaving
+						// from, and start a fresh trail at that same point.
+						g.resumeIdx = g.targetIdx;
+						g.resumeDist = g.distAlongSegment;
+						g.trail.clear();
+						g.trail.push_back(g.pos);
+					}
+					// Coming back out of Return instead, the existing trail and
+					// resume point are still the way home -- a second hunt
+					// starting mid-return just extends the same trail.
+					g.mode = GhostMode::Chase;
+					g.stuckCheckPos = g.pos;
+					g.stuckTimer = 0.0f;
+				} else if(!ghostsHunting && g.mode == GhostMode::Chase) {
+					// An empty trail means the chase never went anywhere, so
+					// there's nothing to walk back.
+					g.mode = g.trail.empty() ? GhostMode::Patrol : GhostMode::Return;
+				}
 
-				ghost.bobPhase += GHOST_BOB_SPEED * deltaT;
-				pos.y += std::sin(ghost.bobPhase) * GHOST_BOB_AMPLITUDE;
+				// --- Move, per mode. Each branch leaves a `moveDir` (XZ, unit
+				// or zero) for the facing code below.
+				glm::vec2 moveDir(0.0f);
 
-				// +M_PI: the ghost mesh's modeled front faces -Z, not +Z like the
-				// watching skulls -- confirmed by it walking backwards without this.
-				float yaw = std::atan2(to.x - from.x, to.z - from.z) + (float)M_PI;
-				ghost.inst->Wm = glm::translate(glm::mat4(1.0f), pos)
-								* glm::rotate(glm::mat4(1.0f), yaw, glm::vec3(0.0f, 1.0f, 0.0f));
+				if(g.mode == GhostMode::Chase) {
+					// Toward the last place the player was actually seen, not
+					// their live position -- see ghostHasLineOfSight above.
+					glm::vec2 toPlayer(g.lastKnownPlayerPos.x - g.pos.x, g.lastKnownPlayerPos.z - g.pos.z);
+					float d = glm::length(toPlayer);
+					if(d > 1e-4f) {
+						moveDir = ghostSteer(g, toPlayer / d);
+						if(moveDir != glm::vec2(0.0f)) {
+							// min(step, d): stops the ghost overshooting
+							// straight past a player it has already reached,
+							// which at chase speed on a long frame it otherwise
+							// can -- and overshooting is how you get a ghost
+							// that passes THROUGH the player without the catch
+							// test below ever seeing them close.
+							float step = std::min(g.chaseSpeed * deltaT, d);
+							g.pos.x += moveDir.x * step;
+							g.pos.z += moveDir.y * step;
+							ghostResolveWalls(g.pos);
+						}
+					}
+
+					// Giving up: a ghost pinned against a closed door and one
+					// standing on a stale lastKnownPlayerPos with nobody there
+					// both look the same from here -- no meaningful ground
+					// covered -- so one timer catches both instead of needing
+					// an "arrived" check that the door case would never trip.
+					float moved = glm::length(glm::vec2(g.pos.x - g.stuckCheckPos.x, g.pos.z - g.stuckCheckPos.z));
+					if(moved >= GHOST_STUCK_EPS) {
+						g.stuckCheckPos = g.pos;
+						g.stuckTimer = 0.0f;
+					} else {
+						g.stuckTimer += deltaT;
+						if(g.stuckTimer >= GHOST_GIVEUP_TIME) {
+							g.hasLastKnown = false;
+							g.mode = g.trail.empty() ? GhostMode::Patrol : GhostMode::Return;
+						}
+					}
+
+					// Breadcrumb. Dropped by distance travelled, not by time,
+					// so the trail's density doesn't depend on the frame rate.
+					if(g.trail.empty()) {
+						g.trail.push_back(g.pos);
+					} else if(glm::length(glm::vec2(g.pos.x - g.trail.back().x,
+													g.pos.z - g.trail.back().z)) >= GHOST_TRAIL_SPACING) {
+						// Before adding it: does this land back on a stretch we
+						// already walked? If so the shortest way home from here
+						// is that older crumb, and everything recorded since is
+						// a detour worth throwing away. Searched oldest-first
+						// so the biggest loop is the one that gets cut.
+						//
+						// The last two crumbs are excluded because they're
+						// necessarily within the prune radius of where we are
+						// (spacing is smaller than that radius, deliberately),
+						// and matching them would prune the trail back to
+						// nothing on every single step.
+						int cut = -1;
+						for(int i = 0; i + 2 < (int)g.trail.size(); i++) {
+							glm::vec2 delta(g.pos.x - g.trail[i].x, g.pos.z - g.trail[i].z);
+							if(glm::length(delta) < GHOST_TRAIL_PRUNE_RADIUS) {
+								cut = i;
+								break;
+							}
+						}
+						if(cut >= 0) {
+							// No new crumb: we're standing on trail[cut]
+							// already, near enough for it to be the head.
+							g.trail.resize((size_t)cut + 1);
+						} else {
+							g.trail.push_back(g.pos);
+						}
+					}
+				} else if(g.mode == GhostMode::Return) {
+					// Walk the breadcrumbs backwards, popping each as it's
+					// reached. Faster than the chase (see GHOST_RETURN_SPEED):
+					// this is time the player isn't being threatened in.
+					glm::vec3 target = g.trail.back();
+					glm::vec2 delta(target.x - g.pos.x, target.z - g.pos.z);
+					float d = glm::length(delta);
+					float step = GHOST_RETURN_SPEED * deltaT;
+					if(d <= step) {
+						// Reached it: land exactly on it (so the next leg
+						// starts from a point we know is walkable) and drop it.
+						g.pos.x = target.x;
+						g.pos.z = target.z;
+						g.pos.y = target.y;
+						if(d > 1e-4f) moveDir = delta / d;
+						g.trail.pop_back();
+						if(g.trail.empty()) {
+							// Home. trail[0] was the patrol position at the
+							// moment the chase started, so restoring the saved
+							// leg and distance resumes the loop mid-stride
+							// rather than snapping to the nearest waypoint.
+							g.mode = GhostMode::Patrol;
+							g.targetIdx = g.resumeIdx;
+							g.distAlongSegment = g.resumeDist;
+						}
+					} else {
+						moveDir = delta / d;
+						g.pos.x += moveDir.x * step;
+						g.pos.z += moveDir.y * step;
+						ghostResolveWalls(g.pos);
+					}
+				} else {
+					// Patrol: walks its waypoint loop at constant speed
+					// (distance-based, not time-based, so `speed` is an actual
+					// world-units/second figure regardless of leg length),
+					// facing the leg it's currently on.
+					int n = (int)g.waypoints.size();
+					glm::vec3 from = g.waypoints[g.targetIdx == 0 ? n - 1 : g.targetIdx - 1];
+					glm::vec3 to = g.waypoints[g.targetIdx];
+					float segLen = glm::length(glm::vec2(to.x - from.x, to.z - from.z));
+
+					g.distAlongSegment += g.speed * deltaT;
+					while(segLen > 0.0f && g.distAlongSegment >= segLen) {
+						g.distAlongSegment -= segLen;
+						g.targetIdx = (g.targetIdx + 1) % n;
+						from = g.waypoints[g.targetIdx == 0 ? n - 1 : g.targetIdx - 1];
+						to = g.waypoints[g.targetIdx];
+						segLen = glm::length(glm::vec2(to.x - from.x, to.z - from.z));
+					}
+
+					float t = segLen > 0.0f ? g.distAlongSegment / segLen : 0.0f;
+					// The patrol is authored, not steered: it's assumed clear,
+					// and it drives `pos` directly with no wall resolution, so
+					// a ghost can't be shoved off its own loop by a collider
+					// somebody adds next to it.
+					g.pos = glm::mix(from, to, t);
+					if(segLen > 0.0f) {
+						moveDir = glm::normalize(glm::vec2(to.x - from.x, to.z - from.z));
+					}
+				}
+
+				// --- Facing, eased toward the direction of travel. A ghost
+				// that isn't moving (boxed in, or standing on the player) keeps
+				// the yaw it had rather than snapping to some default.
+				//
+				// +M_PI: the ghost mesh's modeled front faces -Z, not +Z like
+				// the watching skulls -- confirmed by it walking backwards
+				// without this.
+				if(moveDir != glm::vec2(0.0f)) {
+					float targetYaw = std::atan2(moveDir.x, moveDir.y) + (float)M_PI;
+					// Shortest way round: without this, easing from +179 to
+					// -179 degrees takes the long way and spins the ghost.
+					float dYaw = targetYaw - g.yaw;
+					while(dYaw > (float)M_PI)  dYaw -= 2.0f * (float)M_PI;
+					while(dYaw < -(float)M_PI) dYaw += 2.0f * (float)M_PI;
+					float maxStep = GHOST_TURN_SPEED * deltaT;
+					g.yaw += glm::clamp(dYaw, -maxStep, maxStep);
+				}
+
+				g.bobPhase += GHOST_BOB_SPEED * deltaT;
+				glm::vec3 drawPos = g.pos;
+				drawPos.y += std::sin(g.bobPhase) * GHOST_BOB_AMPLITUDE;
+
+				g.inst->Wm = glm::translate(glm::mat4(1.0f), drawPos)
+							* glm::rotate(glm::mat4(1.0f), g.yaw, glm::vec3(0.0f, 1.0f, 0.0f));
+
+				// --- The catch. Only a hunting ghost can end the run: one
+				// you've walked into on patrol is scenery, and killing the
+				// player for brushing past a ghost that isn't chasing them
+				// would make the colour telegraph a lie.
+				if(ghostsHunting && cheats.ghostsCanCatch && runState == RunState::Running) {
+					float dx = camPos.x - g.pos.x;
+					float dz = camPos.z - g.pos.z;
+					// Measured from the player's chest, not their eyes: the
+					// eye height (1.8) is the top of the body, and comparing a
+					// hovering ghost against it would read as half a metre
+					// further away vertically than it is.
+					float dy = std::abs((camPos.y - 0.9f) - g.pos.y);
+					if(dx * dx + dz * dz < GHOST_CATCH_RADIUS * GHOST_CATCH_RADIUS &&
+					   dy < GHOST_CATCH_VERTICAL) {
+						runState = RunState::Caught;
+						std::cout << "[run] caught by '" << g.instanceId << "'\n";
+					}
+				}
+			}
+
+			// The way out. Standing in the exit box wins the run -- unless it's
+			// locked and the key isn't in hand, in which case atLockedExit
+			// flags it so updateUniformBuffer() can say why. Checked after the
+			// ghosts so a ghost catching the player on the threshold beats
+			// reaching it, which is the reading that makes the last few metres
+			// tense instead of a formality.
+			atLockedExit = false;
+			if(exitHasBox && runState == RunState::Running) {
+				bool inside = camPos.x >= exitBoxMin.x && camPos.x <= exitBoxMax.x &&
+							  camPos.y >= exitBoxMin.y && camPos.y <= exitBoxMax.y &&
+							  camPos.z >= exitBoxMin.z && camPos.z <= exitBoxMax.z;
+				if(inside) {
+					if(exitRequiresKey && !hasKey) {
+						atLockedExit = true;
+					} else {
+						runState = RunState::Escaped;
+						std::cout << "[run] escaped\n";
+					}
+				}
 			}
 
 			// Gravity: constant downward acceleration, integrated into a vertical

@@ -1,0 +1,117 @@
+// The rules of the game, as opposed to the look of it. Read once at startup by
+// main.cpp's localInit(); see include/custom/HuntCycle.hpp for what the "hunt"
+// block means and the Ghost struct in main.cpp for the rest.
+//
+// Everything here is tuning, not structure: changing a number changes how the
+// game plays without a recompile, which is the whole reason these live in a
+// file instead of as constants in main.cpp. If this file is missing the game
+// still runs, on the defaults compiled into HuntCycle.hpp -- minus the ghosts,
+// which have no sensible default patrol.
+{
+	// The loop the whole game runs on: calm -> warning -> hunt -> calm.
+	//
+	// calmDuration is long and huntDuration is short on purpose. A hunt is an
+	// interruption to exploring, and a game that is 50/50 between the two
+	// stops being a castle you explore and becomes a chase with scenery.
+	//
+	// warningDuration is the fairness dial. It's how long the player has, from
+	// the first flicker of violet, to get somewhere defensible before anything
+	// starts moving. Shortening it makes the game harder in the cheapest
+	// possible way -- if it needs to be harder, raise the ghosts' chaseSpeed
+	// instead, which the player can at least see coming.
+	"hunt": {
+		"calmDuration": 45.0,
+		"warningDuration": 3.0,
+		"huntDuration": 18.0,
+		"recoverDuration": 4.0,
+
+		// Violet. Read against grey stone and orange firelight this is the
+		// single clearest "something is wrong" signal available without adding
+		// a UI element, which is why the mechanic hangs off colour at all.
+		"huntColor": [0.42, 0.10, 1.0],
+		// Slightly dimmer during a hunt, but only slightly: a player who can't
+		// read the walls can't dodge, and dying to darkness isn't the same as
+		// dying to a ghost.
+		"huntLightScale": 0.8,
+
+		// The pre-hunt throb. Depth is a fraction of flame brightness, Hz is
+		// pulses per second.
+		"warningPulseDepth": 0.35,
+		"warningPulseHz": 4.0
+	},
+
+	// Where the run is won. An axis-aligned world-space box the player has to
+	// stand inside, given as [xMin, yMin, zMin, xMax, yMax, zMax].
+	//
+	// Currently the east end of the dv room, which is simply the far end of
+	// the level: there is no exit door modelled yet. When one exists, move this
+	// box onto it -- nothing else needs to change.
+	//
+	// requiresKey gates it behind dhKey, which is what finally gives the key a
+	// job. Set it false to make the exit unconditional.
+	"exit": {
+		"box": [21.0, -1.0, 20.0, 25.0, 5.0, 30.0],
+		"requiresKey": true
+	},
+
+	// The ghosts. One entry per "ghost*" instance in scene.json.
+	//
+	// waypoints is a CLOSED loop in world space, walked in order and then back
+	// to the first. XZ is the path; Y is the hover height, which the bob is
+	// added to each frame rather than being baked into the path.
+	//
+	// Keep waypoints inside the room's floor tiles and off the furniture. They
+	// are not pathfound: the patrol assumes a straight line between
+	// consecutive waypoints is walkable, and only the chase steers around
+	// anything.
+	//
+	// speed is the patrol pace, chaseSpeed the hunting one. chaseSpeed is
+	// deliberately just under a sprinting player (3.0 * 2.0 = 6.0) and just
+	// over a walking one (3.0): you cannot outwalk a ghost, you can outrun
+	// one, and you can't outrun one forever because sprinting is the loud
+	// option. That gap is where the mechanic actually lives.
+	"ghosts": [
+		{
+			// The original patrol: the perimeter of the west hall, inset from
+			// the walls and torches and clear of the table and chairs in the
+			// middle of it.
+			"instance": "ghost",
+			"speed": 1.5,
+			"chaseSpeed": 3.4,
+			"waypoints": [
+				[-33.0, 2.2, 23.0],
+				[-33.0, 2.2, 37.0],
+				[-19.0, 2.2, 37.0],
+				[-19.0, 2.2, 23.0]
+			]
+		},
+		{
+			// The antechamber corridor. A short, tight loop: this is the room
+			// the player has to cross to get anywhere, so the ghost patrolling
+			// it is the one they'll meet most often.
+			"instance": "ghost2",
+			"speed": 1.3,
+			"chaseSpeed": 3.4,
+			"waypoints": [
+				[-12.0, 2.2, 22.0],
+				[-4.0, 2.2, 22.0],
+				[-4.0, 2.2, 28.0],
+				[-12.0, 2.2, 28.0]
+			]
+		},
+		{
+			// The east room, between the player and the way out. The fastest
+			// of the three, because by the time the player reaches it they
+			// know what a violet torch means.
+			"instance": "ghost3",
+			"speed": 1.6,
+			"chaseSpeed": 3.7,
+			"waypoints": [
+				[4.0, 2.2, 19.0],
+				[14.0, 2.2, 19.0],
+				[14.0, 2.2, 28.0],
+				[4.0, 2.2, 28.0]
+			]
+		}
+	]
+}
