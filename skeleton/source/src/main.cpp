@@ -1175,6 +1175,22 @@ class Skeleton26ReplaceName : public BaseProject {
 		// ghost gets back to trail[0].
 		int resumeIdx = 1;
 		float resumeDist = 0.0f;
+
+		// Where the ghost last actually SAW the player, and whether that's ever
+		// happened this hunt. Chase steers toward this, not toward the player's
+		// live position -- see ghostHasLineOfSight. A ghost that has never seen
+		// the player has nothing to chase and stays on patrol.
+		glm::vec3 lastKnownPlayerPos{0.0f};
+		bool hasLastKnown = false;
+
+		// Stuck detection for Chase: `pos` at the last check, and how long
+		// since then the ghost has covered less than GHOST_STUCK_EPS. A ghost
+		// pressed against a closed door or idling at a stale lastKnownPlayerPos
+		// looks identical from here -- either way it isn't getting anywhere,
+		// and GHOST_GIVEUP_TIME is what turns that into giving up rather than
+		// waiting out the rest of the hunt on the wrong side of a door.
+		glm::vec3 stuckCheckPos{0.0f};
+		float stuckTimer = 0.0f;
 	};
 	std::vector<Ghost> ghosts;
 
@@ -1257,6 +1273,15 @@ class Skeleton26ReplaceName : public BaseProject {
 	// breadcrumbs would prune each other and the trail could never grow.
 	static constexpr float GHOST_TRAIL_SPACING = 0.75f;
 	static constexpr float GHOST_TRAIL_PRUNE_RADIUS = 1.4f;
+
+	// How little ground counts as "not really moving" for the stuck check
+	// below, and how long a chasing ghost tolerates that before giving up.
+	// Padded a bit above pure floating-point idle drift -- a ghost easing its
+	// yaw or nudged half a centimetre by ghostResolveWalls shouldn't reset the
+	// clock, only an actual stall (a closed door, an empty lastKnownPlayerPos)
+	// should.
+	static constexpr float GHOST_STUCK_EPS = 0.08f;
+	static constexpr float GHOST_GIVEUP_TIME = 3.0f;
 
 	// The hunt cycle: the clock that decides when the torches change colour and
 	// the ghosts come for the player. Owns no scene state of its own, see
@@ -3887,6 +3912,56 @@ class Skeleton26ReplaceName : public BaseProject {
 		return true;
 	}
 
+	// True if the exact point `p` sits inside any collider's box. Unlike
+	// ghostBlockedAt this tests the real Y of `p`, not a vertical slab hung
+	// off some other position's height -- what a sightline needs, since the
+	// ray runs from a hovering ghost's eye down to a standing player's, and a
+	// table or chair along the way should only block it if the line is
+	// actually low enough to clip the furniture there.
+	bool ghostPointBlocked(const glm::vec3 &p) const {
+		for(Collider *C : allColliders) {
+			AABBextents E = C->getExtents();
+			if(p.x < E.xMin || p.x > E.xMax) continue;
+			if(p.z < E.zMin || p.z > E.zMax) continue;
+			if(p.y < E.yMin || p.y > E.yMax) continue;
+			return true;
+		}
+		return false;
+	}
+
+	// Roughly where a ghost's "eyes" are, relative to its hover pivot --
+	// nearer the top of the body than the centre. Only used for the sightline
+	// below; the movement/collision code has no use for it.
+	static constexpr float GHOST_EYE_OFFSET = 0.5f;
+
+	// Whether a ghost at `from` can currently see the player at `eyeTarget`
+	// (already an eye-height position -- see camPos). A straight 3D ray, not
+	// the flat XZ probe ghostPathClear uses for walking: that one tests a
+	// fixed vertical slab at the ghost's own height and would call a
+	// waist-high table "blocking" even though a hovering ghost looking down
+	// at a player clears right over it. Walls and closed doors still block --
+	// their boxes run floor to ceiling, so no point on the ray between two
+	// eye heights ever misses them.
+	bool ghostHasLineOfSight(const glm::vec3 &from, const glm::vec3 &eyeTarget) const {
+		glm::vec3 eyeFrom = from + glm::vec3(0.0f, GHOST_EYE_OFFSET, 0.0f);
+		glm::vec3 delta = eyeTarget - eyeFrom;
+		float d = glm::length(delta);
+		if(d < 1e-4f) return true;
+		glm::vec3 dir = delta / d;
+		const float step = ghostRadius * 0.8f;
+		int samples = std::max(1, (int)std::ceil(d / step));
+		// i starts at 1 and stops short of `samples` so neither endpoint --
+		// the ghost's own eye position, or the player's -- is tested against
+		// their own collider footprint.
+		for(int i = 1; i < samples; i++) {
+			float t = d * (float)i / (float)samples;
+			if(ghostPointBlocked(eyeFrom + dir * t)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
 	// Picks the heading a chasing ghost should actually take, given the
 	// direction it WANTS to go (straight at the player).
 	//
@@ -3971,6 +4046,8 @@ class Skeleton26ReplaceName : public BaseProject {
 			g.resumeDist = 0.0f;
 			g.trail.clear();
 			g.turnBias = 1.0f;
+			g.hasLastKnown = false;
+			g.stuckTimer = 0.0f;
 			if(!g.waypoints.empty()) {
 				g.pos = g.waypoints[0];
 			}
@@ -4355,8 +4432,24 @@ class Skeleton26ReplaceName : public BaseProject {
 			for(Ghost &g : ghosts) {
 				if(g.inst == nullptr || g.waypoints.size() < 2) continue;
 
+				// --- Line of sight, checked every frame a hunt is on regardless
+				// of mode: a Patrol or Return ghost that spots the player needs
+				// to be able to start/resume a chase, not just a Chase one that
+				// already has a target to refresh.
+				if(ghostsHunting && ghostHasLineOfSight(g.pos, camPos)) {
+					g.lastKnownPlayerPos = camPos;
+					g.hasLastKnown = true;
+				}
+
 				// --- Mode transitions.
-				if(ghostsHunting && g.mode != GhostMode::Chase) {
+				//
+				// Starting (or resuming) a chase now needs g.hasLastKnown, not
+				// just the phase being Hunt: a ghost that has never seen the
+				// player has nothing to walk toward, so it stays on patrol
+				// instead of beelining for coordinates it was never shown --
+				// which is exactly what used to put a ghost behind a door in
+				// another room the player was about to open.
+				if(ghostsHunting && g.hasLastKnown && g.mode != GhostMode::Chase) {
 					if(g.mode == GhostMode::Patrol) {
 						// Remember exactly where on the loop we're leaving
 						// from, and start a fresh trail at that same point.
@@ -4369,6 +4462,8 @@ class Skeleton26ReplaceName : public BaseProject {
 					// resume point are still the way home -- a second hunt
 					// starting mid-return just extends the same trail.
 					g.mode = GhostMode::Chase;
+					g.stuckCheckPos = g.pos;
+					g.stuckTimer = 0.0f;
 				} else if(!ghostsHunting && g.mode == GhostMode::Chase) {
 					// An empty trail means the chase never went anywhere, so
 					// there's nothing to walk back.
@@ -4380,7 +4475,9 @@ class Skeleton26ReplaceName : public BaseProject {
 				glm::vec2 moveDir(0.0f);
 
 				if(g.mode == GhostMode::Chase) {
-					glm::vec2 toPlayer(camPos.x - g.pos.x, camPos.z - g.pos.z);
+					// Toward the last place the player was actually seen, not
+					// their live position -- see ghostHasLineOfSight above.
+					glm::vec2 toPlayer(g.lastKnownPlayerPos.x - g.pos.x, g.lastKnownPlayerPos.z - g.pos.z);
 					float d = glm::length(toPlayer);
 					if(d > 1e-4f) {
 						moveDir = ghostSteer(g, toPlayer / d);
@@ -4395,6 +4492,23 @@ class Skeleton26ReplaceName : public BaseProject {
 							g.pos.x += moveDir.x * step;
 							g.pos.z += moveDir.y * step;
 							ghostResolveWalls(g.pos);
+						}
+					}
+
+					// Giving up: a ghost pinned against a closed door and one
+					// standing on a stale lastKnownPlayerPos with nobody there
+					// both look the same from here -- no meaningful ground
+					// covered -- so one timer catches both instead of needing
+					// an "arrived" check that the door case would never trip.
+					float moved = glm::length(glm::vec2(g.pos.x - g.stuckCheckPos.x, g.pos.z - g.stuckCheckPos.z));
+					if(moved >= GHOST_STUCK_EPS) {
+						g.stuckCheckPos = g.pos;
+						g.stuckTimer = 0.0f;
+					} else {
+						g.stuckTimer += deltaT;
+						if(g.stuckTimer >= GHOST_GIVEUP_TIME) {
+							g.hasLastKnown = false;
+							g.mode = g.trail.empty() ? GhostMode::Patrol : GhostMode::Return;
 						}
 					}
 
