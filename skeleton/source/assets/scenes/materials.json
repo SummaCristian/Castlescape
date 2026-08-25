@@ -62,6 +62,13 @@
 		// varied in surface (wax, bone, metal+wood) to lump into one entry.
 		"dungeonFloor":   { "roughness": 0.85, "F0": 0.04, "k": 0.93 },
 		"dungeonWall":    { "roughness": 0.80, "F0": 0.04, "k": 0.93 },
+		// Coffered stone ceiling (SM_StoneCeiling_01, modelled for this project
+		// on the kit's 7.2 grid). Dressed stone like the walls, not the rougher
+		// floor: same values as "dungeonWall". Its instances sit at y = 6.213,
+		// i.e. 0.02 (the common riser) + 6.1929, the exact height of
+		// SM_WallStraight_01, so the beams seat flush on the wall tops with no
+		// overlapping coplanar faces to z-fight.
+		"dungeonCeiling": { "roughness": 0.80, "F0": 0.04, "k": 0.93 },
 		"dungeonCorner":  { "roughness": 0.80, "F0": 0.04, "k": 0.93 },
 		// Split door (see scene.json): stone wall half keeps the same values
 		// as the other dungeon stone; the wood-and-iron leaf gets the same
