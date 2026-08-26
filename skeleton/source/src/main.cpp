@@ -336,9 +336,24 @@ class Skeleton26ReplaceName : public BaseProject {
 	// Far clip for every torch's cube map (computeShadowMatrices()) and the
 	// clear value ShadowCube.frag's output gets reset to before each face
 	// pass: with nothing drawn a fragment's "distance" should read as
-	// infinity/unlit, and any value >= this far plane does that, since
-	// shadowFromCube() (CookTorrance.frag) never queries beyond it either.
-	static constexpr float TORCH_SHADOW_FAR_CONST = 15.0f;
+	// infinity/unlit, and any value >= this far plane does that -- PROVIDED
+	// shadowFromCube() (CookTorrance.frag) never actually gets queried
+	// beyond it, which was true back when this was 15: with the old g/beta
+	// the torch's radiance was already down to a few percent by 15 units
+	// out, invisibly below LIGHT_ATTEN_EPS's per-pixel skip soon after.
+	//
+	// That invariant broke once the falloff was retuned for a longer reach
+	// (lower beta, higher g, a soft RADIANCE_CAP replacing the old
+	// unbounded-then-culled shape): the torch now stays visibly bright well
+	// past 15 units, so any wall farther than that from the torch WAS being
+	// queried -- and got the clear value back as its "nearest occluder",
+	// which is closer than the wall's own real distance, so it read as
+	// falsely shadowed. That's what looked like the torch's light "only
+	// reaching a fixed radius" with a hard edge at that radius, rather than
+	// the shadow bug it actually was. Raised to comfortably cover the
+	// dungeon's own ~60-unit footprint (TORCH_LIGHT_CULL_DIST's comment,
+	// main.cpp) so the far plane stops being reachable during normal play.
+	static constexpr float TORCH_SHADOW_FAR_CONST = 60.0f;
 	// Near clip for every torch's cube map -- close enough that only the
 	// torch fixture itself (not an occluder, Material::castsShadow) falls
 	// inside it. A member (not a computeShadowMatrices() local) because
@@ -962,9 +977,20 @@ class Skeleton26ReplaceName : public BaseProject {
 	// a much smaller, closer source than a lamp head.
 	static constexpr glm::vec3 TORCH_LIGHT_COLOR = glm::vec3(1.0f, 0.5f, 0.16f);
 	// With the falloff (g/d)^beta, g = 2.1 makes the torches genuinely carry
-	// into the room instead of only rimming their own wall.
-	static constexpr float TORCH_LIGHT_G = 2.1f;
-	static constexpr float TORCH_LIGHT_BETA = 1.4f;
+	// into the room instead of only rimming their own wall. Raised to 3.5 to
+	// extend how far a torch reaches -- g is the distance at which the light
+	// is exactly its authored color, so a bigger g pushes that "full
+	// brightness" boundary further out and correspondingly pushes the whole
+	// falloff tail out with it.
+	static constexpr float TORCH_LIGHT_G = 3.5f;
+	// Lower beta = a gentler power curve, so the fade into darkness is spread
+	// over more distance instead of most of the drop happening in a short
+	// band right past g. The old 1.4 was steep enough that a surface just
+	// past the torch's comfortable reach was already too dim to register
+	// against the ambient floor, tonemapping, and 8-bit output -- so backing
+	// away read as the torch's light suddenly switching off rather than
+	// dimming out.
+	static constexpr float TORCH_LIGHT_BETA = 1.0f;
 	// Candles additionally shrink g (their falloff reach), on top of
 	// flames.json's own lightScale (their peak brightness): the two are
 	// independent knobs the same way sizeScale/lightScale are (see
@@ -2387,11 +2413,11 @@ class Skeleton26ReplaceName : public BaseProject {
 	// logic that already lives in exactly one place.
 	void computeShadowMatrices() {
 		// A torch's far plane (cubeFaceMatricesFor() -> TORCH_SHADOW_FAR_CONST):
-		// past this it contributes almost nothing anyway -- with g = 3.0 and
-		// beta = 1.4 (lights.json) it is down to about 8% of its stated
-		// colour. createCubeShadowMaps() needs the same number for the color
-		// attachment's clear value, which is why it's a member and not a
-		// local here.
+		// now sized to the dungeon's own footprint rather than "wherever the
+		// torch has faded to nothing", see that constant's own comment for
+		// why a falloff-sized far plane went wrong. createCubeShadowMaps()
+		// needs the same number for the color attachment's clear value,
+		// which is why it's a member and not a local here.
 
 		// The sun has no position, only a travel direction (SceneLights.hpp),
 		// so its shadow camera needs a stand-in position: back away from a

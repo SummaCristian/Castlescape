@@ -246,11 +246,42 @@ float shadowFromMap2D(int idx, vec3 pos, float bias) {
 // two-map dance this always has an answer -- a cube map covers every
 // direction by construction -- so there is no "covered" out-parameter and no
 // fallback to a second slot.
-float shadowFromCube(int idx, vec3 pos, vec3 lightPos, float bias) {
+//
+// A plain (dist - bias > closestDist) ? 0.0 : 1.0 comparison is a binary
+// lit/unlit test, which reads as a razor-sharp edge on a wall. Multi-sample
+// PCF (jittering the lookup direction and averaging several taps) was tried
+// here and reverted: with only a few taps -- more wasn't affordable, since
+// sampleShadowCube() below is a linear branch chain picking one of
+// NUM_SHADOW_CUBES samplerCube bindings rather than a plain texture() call,
+// so every tap repeats that whole chain -- the samples land far enough apart
+// to show up as separate overlapping blobs instead of blending into one soft
+// edge.
+//
+// This does the softening with the SAME single sample instead: rather than a
+// hard step, it ramps from fully lit down to fully shadowed across a small
+// band of world-space distance, starting exactly where the hard test's
+// threshold used to sit.
+//
+// occluderGap is how much closer the stored occluder is than this fragment:
+// ~0 (or negative, floating-point noise aside) when the map's closest hit
+// IS this fragment's own surface -- i.e. nothing occludes it -- and growing
+// positive as a real occluder sits further in front of it. Ramping the
+// *lit* factor down starting at occluderGap == bias (equivalent to the old
+// `dist - bias > closestDist` threshold) rather than at occluderGap == 0
+// matters: with the old (closestDist - (dist - bias)) formulation, an
+// unoccluded surface -- occluderGap == 0 -- landed only `bias` units into a
+// softEdge-wide ramp rather than solidly on its plateau, so ordinary lit
+// walls sat partway up the ramp and any texel-to-texel precision noise
+// could tip the result either way -- which is exactly the "suddenly not
+// lit" pop reported. This version has a flat lit==1.0 plateau for every
+// occluderGap <= bias, matching the hard test's own unoccluded case.
+float shadowFromCube(int idx, vec3 pos, vec3 lightPos, float bias, float softEdge) {
     vec3 toFrag = pos - lightPos;
     float dist = length(toFrag);
     float closestDist = sampleShadowCube(idx, toFrag);
-    return (dist - bias > closestDist) ? 0.0 : 1.0;
+
+    float occluderGap = dist - closestDist;
+    return 1.0 - clamp((occluderGap - bias) / softEdge, 0.0, 1.0);
 }
 
 // 1.0: fully lit. 0.0: this light's shadow map says something else is closer
@@ -268,12 +299,28 @@ float shadowFactor(int shadowIndex, int type, vec3 pos, vec3 lightPos, float Ndo
     }
 
     if(type == LIGHT_POINT) {
-        // Flat bias in world units: the whole point of storing a LINEAR
-        // distance per direction is that one number now buys the same
-        // real-world slack everywhere, instead of needing the old
-        // slope-scaled min/max pair a warped projective depth required.
-        const float CUBE_BIAS = 0.03;
-        return shadowFromCube(shadowIndex, pos, lightPos, CUBE_BIAS);
+        // Slope-scaled, same reason the 2D path below does it: a flat bias
+        // was tuned for a surface facing roughly toward the light, but at a
+        // grazing angle -- exactly what you get brushing past a curved
+        // pillar at close range, held torch just centimetres from its
+        // surface -- one shadow-map texel covers a much larger stretch of
+        // that surface's true depth, so the stored "closest occluder"
+        // distance can be meaningfully off from any single fragment's real
+        // distance even with nothing actually occluding it. A flat 0.03 was
+        // nowhere near enough slack for that case: it read as a large,
+        // unstable black patch swimming across the pillar as the player
+        // walked past, not a fine-grained self-shadow flicker. Both the
+        // bias and the softening band widen together at grazing incidence,
+        // since the same growing depth-quantization error is what both are
+        // there to absorb.
+        const float CUBE_BIAS_MIN = 0.03;   // head-on
+        const float CUBE_BIAS_MAX = 0.35;   // edge-on
+        const float CUBE_SOFT_MIN = 0.15;
+        const float CUBE_SOFT_MAX = 0.6;
+        float grazing = clamp(1.0 - NdotL, 0.0, 1.0);
+        float bias = mix(CUBE_BIAS_MIN, CUBE_BIAS_MAX, grazing);
+        float softEdge = mix(CUBE_SOFT_MIN, CUBE_SOFT_MAX, grazing);
+        return shadowFromCube(shadowIndex, pos, lightPos, bias, softEdge);
     }
 
     // The bias is per PROJECTION KIND, because one number cannot serve both.
@@ -368,7 +415,48 @@ vec3 lightRadiance(Light lt, vec3 pos) {
     }
 
     float dist = length(lt.pos - pos);
-    vec3 radiance = lt.color * pow(lt.g / max(dist, 0.0001), lt.beta);
+
+    // max(dist, 0.0001) alone only guards the divide -- g/dist still grows
+    // essentially unbounded as dist shrinks, so radiance stays fairly flat
+    // over most of a room then rockets upward in the last stretch right
+    // next to the source, which the tonemap then crushes to white almost
+    // immediately after. Continuous on paper, but it reads as "barely
+    // brightening, then suddenly maxed out" over the final approach to any
+    // surface right in front of the light -- which is what a wall directly
+    // ahead of the held torch shows as you walk up to it.
+    //
+    // NEAR_RADIUS softens that: it's a smooth floor on how close `dist` can
+    // effectively get (sqrt(dist^2 + r^2) never drops below r), roughly the
+    // torch flame's own physical size, so the curve flattens out near the
+    // light instead of diverging. Spreads the same total brightness change
+    // over more distance instead of dumping most of it into the last few
+    // centimetres.
+    const float NEAR_RADIUS = 0.4;
+    float distSoft = sqrt(dist * dist + NEAR_RADIUS * NEAR_RADIUS);
+    vec3 radiance = lt.color * pow(lt.g / distSoft, lt.beta);
+
+    // NEAR_RADIUS only bounds the last few centimetres right at the flame --
+    // between there and ~g units out, g/distSoft is still essentially raw
+    // 1/dist, and raising TORCH_LIGHT_G (main.cpp) to extend the torch's
+    // reach stretched that steep middle section out to distances you
+    // actually walk through, not just brush against. Composite.frag's
+    // tonemap (c/(Y+1)) approaches white asymptotically, so most of a
+    // surface's visible "climb to fully lit" ends up backloaded into
+    // whatever's left of that steep section once you're within a couple of
+    // units of the light -- which is what reads as the wall suddenly
+    // lighting up rather than gradually brightening as you approach.
+    //
+    // RADIANCE_CAP compresses the raw value itself, before it ever reaches
+    // the tonemap, the same soft-knee shape BloomBright.frag's
+    // softThreshold() uses for the opposite problem: unaffected below the
+    // cap (radiance << CAP leaves the scale factor ~1), smoothly bending
+    // over as it approaches CAP instead of racing on to whatever raw value
+    // 1/dist would otherwise produce. That spreads the same total
+    // brightness increase over the whole approach instead of dumping most
+    // of it into the last stretch before saturation.
+    const float RADIANCE_CAP = 1.8;
+    float peak = max(radiance.r, max(radiance.g, radiance.b));
+    radiance *= RADIANCE_CAP * (1.0 - exp(-peak / RADIANCE_CAP)) / max(peak, 1e-4);
 
     if(lt.type == LIGHT_SPOT) {
         // lt.dir is where the lamp POINTS, so a lamp aimed down is [0,-1,0].
