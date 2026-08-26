@@ -41,7 +41,9 @@ layout(binding = 0, set = 0) uniform UniformBufferObject {
 	float F0;
 	float k;
 	int flatNormals;
+	int interiorAmbient;
 	float time;
+	float ambientWeight;
 } ubo;
 
 layout(binding = 0, set = 1) uniform ShadowCubeUniformBufferObject {

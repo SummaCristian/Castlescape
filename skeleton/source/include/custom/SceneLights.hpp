@@ -74,6 +74,23 @@ struct AmbientLight {
 	glm::vec3 upper = glm::vec3(0.1f);				// sky color
 	glm::vec3 lower = glm::vec3(0.05f);				// ground color
 	glm::vec3 dir = glm::vec3(0.0f, 1.0f, 0.0f);	// which way "up" blends
+
+	// The scene's default share of indirect light, 0..1 -- E17's
+	// gubo.ambientLight, which the maze lab sets to 0.05. CookTorrance.frag
+	// blends rather than sums: direct light keeps (1 - weight), ambient takes
+	// weight. So this is the brightness of the indirect term and upper/lower
+	// above are only its two COLORS, which is why they read near 1 in
+	// lights.json rather than near 0.1 as they did when they were summed.
+	//
+	// A material can override it per model (Material::ambientWeight), and that
+	// is the whole point: an enclosed room and an open courtyard need
+	// different values in the same frame.
+	//
+	// The default is the INDOOR value, matching lights.json: the game is played
+	// inside the dungeon, so a model that names no weight is far more likely to
+	// be in a sealed room than under the sky, and should not be lit as if a
+	// ceiling above it did nothing.
+	float weight = 0.05f;
 };
 
 class SceneLights {
@@ -197,6 +214,9 @@ void SceneLights::init(Scene *SC, const std::string &file) {
 		if(a.contains("upper"))     ambientLight.upper = readVec3(a["upper"], ambientLight.upper);
 		if(a.contains("lower"))     ambientLight.lower = readVec3(a["lower"], ambientLight.lower);
 		if(a.contains("direction")) ambientLight.dir = glm::normalize(readVec3(a["direction"], ambientLight.dir));
+		// Clamped, not just read: above 1 the blend would take more than the
+		// whole frame and leave the direct term negative.
+		if(a.contains("weight")) ambientLight.weight = glm::clamp(a["weight"].get<float>(), 0.0f, 1.0f);
 	}
 
 	if(!js.contains("lights")) {

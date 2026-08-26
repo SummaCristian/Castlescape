@@ -53,13 +53,26 @@ struct UniformBufferObject {
 	// A mat4 rather than a mat3 to avoid std140's column-padding rules.
 	alignas(16) glm::mat4 nMat;
 	// Cook-Torrance material. mD isn't here, it's the albedo texture.
-	// Must match the GLSL block field for field; the floats after the vec3 fill
-	// std140's padding, so no explicit padding of ours is needed.
+	//
+	// Must match, field for field, the block declared by the four shaders that
+	// see it: PosNormUV.vert and CookTorrance.frag at set 1, Shadow.vert and
+	// ShadowCube.vert at set 0. (Flame.vert and Spark.vert sit at the same
+	// binding but read a FlameUniformBufferObject of their own, so they are not
+	// bound by this layout.)
+	//
+	// No explicit padding of ours: the scalars below fall into std140's vec4
+	// slots on their own, as [mS.xyz | roughness], [F0 | k | flatNormals |
+	// interiorAmbient], [time | ambientWeight | - | -]. The struct's 16-byte
+	// alignment rounds its size to those same 240 bytes, so C++ and GLSL agree.
 	alignas(16) glm::vec3 mS;	// specular color
 	float roughness;			// rho: width of the microfacet distribution
 	float F0;					// reflectance seen head-on
 	float k;					// diffuse share of the BRDF
 	int flatNormals;			// 1: derive the face normal in the shader
+	// 1: take the hemispheric ambient of a vertical surface instead of the one
+	// this surface's normal implies. For interiors, where the sky/ground blend
+	// the model is built on has no meaning. See SceneMaterials.hpp.
+	int interiorAmbient;
 	// Seconds since startup, the same value for every instance in a frame.
 	// Piggybacks the per-object UBO instead of going in
 	// GlobalUniformBufferObject, which would shift LightData[] off the offset
@@ -67,6 +80,10 @@ struct UniformBufferObject {
 	// the torch flames entirely on the GPU; the scene shaders declare it and
 	// ignore it, since both pipelines share DSLlocal and so this one struct.
 	float time;
+	// This model's share of indirect light, overriding the scene's. Negative
+	// means "inherit gubo.ambientWeight", and that is the common case: only
+	// the interior models carry one. See Material::ambientWeight.
+	float ambientWeight;
 };
 
 // Everything that's the same for every object drawn this frame. Split from the
@@ -90,6 +107,10 @@ struct GlobalUniformBufferObject {
 	// pad the array start to a 16-byte boundary regardless, so this scalar
 	// just rides in front of that padding like debugFlags does above.
 	float time;
+	// The scene's default share of indirect light, 0..1, from lights.json.
+	// Rides in the same padding before lights[] that time and debugFlags do,
+	// so the array's offset is unchanged.
+	float ambientWeight;
 	LightData lights[MAX_LIGHTS];
 };
 
@@ -315,9 +336,24 @@ class Skeleton26ReplaceName : public BaseProject {
 	// Far clip for every torch's cube map (computeShadowMatrices()) and the
 	// clear value ShadowCube.frag's output gets reset to before each face
 	// pass: with nothing drawn a fragment's "distance" should read as
-	// infinity/unlit, and any value >= this far plane does that, since
-	// shadowFromCube() (CookTorrance.frag) never queries beyond it either.
-	static constexpr float TORCH_SHADOW_FAR_CONST = 15.0f;
+	// infinity/unlit, and any value >= this far plane does that -- PROVIDED
+	// shadowFromCube() (CookTorrance.frag) never actually gets queried
+	// beyond it, which was true back when this was 15: with the old g/beta
+	// the torch's radiance was already down to a few percent by 15 units
+	// out, invisibly below LIGHT_ATTEN_EPS's per-pixel skip soon after.
+	//
+	// That invariant broke once the falloff was retuned for a longer reach
+	// (lower beta, higher g, a soft RADIANCE_CAP replacing the old
+	// unbounded-then-culled shape): the torch now stays visibly bright well
+	// past 15 units, so any wall farther than that from the torch WAS being
+	// queried -- and got the clear value back as its "nearest occluder",
+	// which is closer than the wall's own real distance, so it read as
+	// falsely shadowed. That's what looked like the torch's light "only
+	// reaching a fixed radius" with a hard edge at that radius, rather than
+	// the shadow bug it actually was. Raised to comfortably cover the
+	// dungeon's own ~60-unit footprint (TORCH_LIGHT_CULL_DIST's comment,
+	// main.cpp) so the far plane stops being reachable during normal play.
+	static constexpr float TORCH_SHADOW_FAR_CONST = 60.0f;
 	// Near clip for every torch's cube map -- close enough that only the
 	// torch fixture itself (not an occluder, Material::castsShadow) falls
 	// inside it. A member (not a computeShadowMatrices() local) because
@@ -941,9 +977,20 @@ class Skeleton26ReplaceName : public BaseProject {
 	// a much smaller, closer source than a lamp head.
 	static constexpr glm::vec3 TORCH_LIGHT_COLOR = glm::vec3(1.0f, 0.5f, 0.16f);
 	// With the falloff (g/d)^beta, g = 2.1 makes the torches genuinely carry
-	// into the room instead of only rimming their own wall.
-	static constexpr float TORCH_LIGHT_G = 2.1f;
-	static constexpr float TORCH_LIGHT_BETA = 1.4f;
+	// into the room instead of only rimming their own wall. Raised to 3.5 to
+	// extend how far a torch reaches -- g is the distance at which the light
+	// is exactly its authored color, so a bigger g pushes that "full
+	// brightness" boundary further out and correspondingly pushes the whole
+	// falloff tail out with it.
+	static constexpr float TORCH_LIGHT_G = 3.5f;
+	// Lower beta = a gentler power curve, so the fade into darkness is spread
+	// over more distance instead of most of the drop happening in a short
+	// band right past g. The old 1.4 was steep enough that a surface just
+	// past the torch's comfortable reach was already too dim to register
+	// against the ambient floor, tonemapping, and 8-bit output -- so backing
+	// away read as the torch's light suddenly switching off rather than
+	// dimming out.
+	static constexpr float TORCH_LIGHT_BETA = 1.0f;
 	// Candles additionally shrink g (their falloff reach), on top of
 	// flames.json's own lightScale (their peak brightness): the two are
 	// independent knobs the same way sizeScale/lightScale are (see
@@ -2366,11 +2413,11 @@ class Skeleton26ReplaceName : public BaseProject {
 	// logic that already lives in exactly one place.
 	void computeShadowMatrices() {
 		// A torch's far plane (cubeFaceMatricesFor() -> TORCH_SHADOW_FAR_CONST):
-		// past this it contributes almost nothing anyway -- with g = 3.0 and
-		// beta = 1.4 (lights.json) it is down to about 8% of its stated
-		// colour. createCubeShadowMaps() needs the same number for the color
-		// attachment's clear value, which is why it's a member and not a
-		// local here.
+		// now sized to the dungeon's own footprint rather than "wherever the
+		// torch has faded to nothing", see that constant's own comment for
+		// why a falloff-sized far plane went wrong. createCubeShadowMaps()
+		// needs the same number for the color attachment's clear value,
+		// which is why it's a member and not a local here.
 
 		// The sun has no position, only a travel direction (SceneLights.hpp),
 		// so its shadow camera needs a stand-in position: back away from a
@@ -3381,6 +3428,14 @@ class Skeleton26ReplaceName : public BaseProject {
 		gubo.ambientUpper = amb.upper;
 		gubo.ambientLower = amb.lower;
 		gubo.ambientDir = amb.dir;
+		// With the Ambient Light cheat off, ambient() hands back black colors.
+		// Under the old sum that was enough to remove the term; under E17's
+		// blend it is not, because the direct half is scaled by (1 - weight)
+		// and would still lose its share to an ambient that contributes
+		// nothing -- the cheat would DARKEN the scene instead of just taking
+		// the indirect light out of it. Zeroing the weight gives the direct
+		// lights the whole frame back, which is what the cheat means.
+		gubo.ambientWeight = sceneLights.ambientEnabled ? amb.weight : 0.0f;
 
 		// The lighting debug cheats, packed into the one int the shader reads.
 		// Note the two inversions: the cheat says what the frame should still
@@ -3635,6 +3690,8 @@ class Skeleton26ReplaceName : public BaseProject {
 				ubo.F0 = m.F0;
 				ubo.k = m.k;
 				ubo.flatNormals = m.flatNormals;
+				ubo.interiorAmbient = m.interiorAmbient;
+				ubo.ambientWeight = m.ambientWeight;
 				ubo.time = simTime;
 
 				Instance &inst = SC.TI[techniqueId].I[instanceId];

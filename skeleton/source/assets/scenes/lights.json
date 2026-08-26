@@ -16,13 +16,34 @@
 	// receives, "lower" what one pointing at the ground receives, "direction" is
 	// the axis they blend along, i.e. world up.
 	//
-	// Cool and dim above, warm and darker below: skylight is blue, bounce off a
-	// dirt courtyard is brown. Getting these two the same color would throw away
-	// the entire point of the model and leave a constant ambient term.
+	// Cool above, warm below: skylight is blue, bounce off a dirt courtyard is
+	// brown. Getting these two the same color would throw away the entire point
+	// of the model and leave a constant ambient term.
+	//
+	// These are COLORS ONLY, near 1, not the radiance itself. "weight" carries
+	// the brightness, because CookTorrance.frag blends the ambient against the
+	// direct light (E17's LambertBlinnTexture.frag) instead of adding it on
+	// top: direct keeps (1 - weight), ambient takes weight. Adding it was what
+	// made the ambient a floor under every pixel -- see the shader's comment at
+	// the blend for why a ceiling could not stop it.
+	//
+	// "weight" is the scene DEFAULT, and it is the INDOOR value, because the
+	// game is played indoors: the player is inside the dungeon from the start
+	// and only leaves it by winning. So the common case is an enclosed room,
+	// the default matches it, and the handful of models under the open sky
+	// carry an override in materials.json instead. The other way round -- which
+	// this file briefly had -- leaves anything not listed there, i.e. the small
+	// dungeon props, silently lit as if the ceiling weren't there.
+	//
+	// 0.05 is E17's value for its enclosed maze. For reference, the outdoor
+	// override is 0.20, and 0.20 x [0.50, 0.65, 1.00] is exactly the
+	// [0.10, 0.13, 0.20] this file carried back when the ambient was summed --
+	// so the castle exterior still looks as it always did.
 	"ambient": {
-		"upper": [0.10, 0.13, 0.20],
-		"lower": [0.07, 0.055, 0.04],
-		"direction": [0.0, 1.0, 0.0]
+		"upper": [0.50, 0.65, 1.00],
+		"lower": [0.35, 0.275, 0.20],
+		"direction": [0.0, 1.0, 0.0],
+		"weight": 0.05
 	},
 
 	"lights": [

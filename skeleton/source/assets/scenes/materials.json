@@ -15,53 +15,109 @@
 //                       High for dielectrics, low for metals, which have almost
 //                       no diffuse component at all.
 //
+// Plus one parameter that isn't a BRDF term at all:
+//
+//   ambientWeight       this model's share of INDIRECT light, overriding the
+//                       scene's "weight" in lights.json. Set to 0.20 on the
+//                       models under the open sky; left off everywhere else,
+//                       so anything enclosed inherits the scene's indoor 0.05.
+//                       It exists because hemispheric ambient has no visibility
+//                       term: nothing in it can tell a corridor from a
+//                       courtyard, so the number has to be authored.
+//
+//                       The default is the INDOOR one because the game is
+//                       played indoors -- a model added here and left alone
+//                       should come out lit like the room it sits in, not like
+//                       a courtyard.
+//
 // Anything not listed here gets "default".
 {
 	"default": { "specularColor": [1.0, 1.0, 1.0], "roughness": 0.6, "F0": 0.04, "k": 0.9 },
 
 	"models": {
+		// Everything from here down to the dungeon set is OUTDOORS, and carries
+		// "ambientWeight": 0.20 for it -- four times the scene's indoor default,
+		// because these surfaces really can see the sky. See the header above
+		// for why the default is the indoor value and this is the exception.
+		//
 		// Ground. Dry dirt and cobbles: about as rough as a surface gets, and
 		// almost purely diffuse.
-		"floor": { "roughness": 0.92, "F0": 0.04, "k": 0.96 },
-		"road":  { "roughness": 0.92, "F0": 0.04, "k": 0.96 },
+		"floor": { "roughness": 0.92, "F0": 0.04, "k": 0.96, "ambientWeight": 0.20 },
+		"road":  { "roughness": 0.92, "F0": 0.04, "k": 0.96, "ambientWeight": 0.20 },
 
 		// Castle stone. Rough, but not as much as bare earth: enough of a sheen
 		// left to pick out the curvature of the towers.
-		"castleWall01": { "roughness": 0.78, "F0": 0.04, "k": 0.93 },
-		"castleWall02": { "roughness": 0.78, "F0": 0.04, "k": 0.93 },
-		"castleTower":  { "roughness": 0.78, "F0": 0.04, "k": 0.93 },
-		"castleGate":   { "roughness": 0.78, "F0": 0.04, "k": 0.93 },
-		"castleKeep":   { "roughness": 0.78, "F0": 0.04, "k": 0.93 },
+		"castleWall01": { "roughness": 0.78, "F0": 0.04, "k": 0.93, "ambientWeight": 0.20 },
+		"castleWall02": { "roughness": 0.78, "F0": 0.04, "k": 0.93, "ambientWeight": 0.20 },
+		"castleTower":  { "roughness": 0.78, "F0": 0.04, "k": 0.93, "ambientWeight": 0.20 },
+		"castleGate":   { "roughness": 0.78, "F0": 0.04, "k": 0.93, "ambientWeight": 0.20 },
+		"castleKeep":   { "roughness": 0.78, "F0": 0.04, "k": 0.93, "ambientWeight": 0.20 },
 		// flatNormals: this mesh averages its vertex normals across the hard
 		// edges of every tread and riser, so each face shades with a gradient
 		// across it instead of one value, and the whole flight looks smeared.
 		// With the flag on, the shader derives the face's own normal. Only set
 		// where the geometry really is hard-edged: the towers are cylinders and
 		// want the averaged normals they came with.
-		"castleSteps":  { "roughness": 0.78, "F0": 0.04, "k": 0.93, "flatNormals": true },
+		"castleSteps":  { "roughness": 0.78, "F0": 0.04, "k": 0.93, "flatNormals": true, "ambientWeight": 0.20 },
 
 		// Wood. Old varnish, so smoother than stone and a touch more reflective.
-		"barrel": { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
-		"box01":  { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
-		"box02":  { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
-		"box03":  { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
+		"barrel": { "roughness": 0.55, "F0": 0.05, "k": 0.90, "ambientWeight": 0.20 },
+		"box01":  { "roughness": 0.55, "F0": 0.05, "k": 0.90, "ambientWeight": 0.20 },
+		"box02":  { "roughness": 0.55, "F0": 0.05, "k": 0.90, "ambientWeight": 0.20 },
+		"box03":  { "roughness": 0.55, "F0": 0.05, "k": 0.90, "ambientWeight": 0.20 },
 
 		// Cloth. Very rough and essentially all diffuse.
-		"flag": { "roughness": 0.95, "F0": 0.03, "k": 0.97 },
+		"flag": { "roughness": 0.95, "F0": 0.03, "k": 0.97, "ambientWeight": 0.20 },
 
 		// The gate lanterns, in brass. This is the entry that shows what these
 		// parameters are for: a metal has no meaningful diffuse component (low
 		// k), reflects strongly even head-on (high F0), and tints its highlight
 		// with its own color instead of the lamp's (mS is not white).
-		"light": { "specularColor": [0.95, 0.78, 0.42], "roughness": 0.32, "F0": 0.65, "k": 0.15 },
+		"light": { "specularColor": [0.95, 0.78, 0.42], "roughness": 0.32, "F0": 0.65, "k": 0.15, "ambientWeight": 0.20 },
 
 		// Dungeon set (Dracula's Castle Assetpack, see README credits). Same
 		// categories as the castle above: rougher/more-diffuse for the stone
 		// pieces, a touch of sheen for the wood, near-fully-diffuse for cloth.
 		// Candle, plate, skull and torch are left on "default": too small and
 		// varied in surface (wax, bone, metal+wood) to lump into one entry.
+		//
+		// Nothing below sets "ambientWeight": these are the enclosed models, so
+		// they inherit the scene's indoor 0.05 from lights.json, and that is the
+		// whole reason the default is the indoor value. This is the answer to
+		// "the rooms have a ceiling, so why is there sky light in them":
+		// hemispheric ambient has no visibility term at all, so before the E17
+		// blend the sealed corridors collected exactly as much indirect light as
+		// the open courtyard, and the ceiling overhead changed nothing.
+		//
+		// It is an authored guess at enclosure, not real occlusion. The honest
+		// version is the AO map E14 samples ([TODO 5b], aoMap); the MGCG pack
+		// ships albedo only, so that has to be baked before it can be read.
 		"dungeonFloor":   { "roughness": 0.85, "F0": 0.04, "k": 0.93 },
 		"dungeonWall":    { "roughness": 0.80, "F0": 0.04, "k": 0.93 },
+		// Coffered stone ceiling (SM_StoneCeiling_01, modelled for this project
+		// on the kit's 7.2 grid). Its texture is ours too: the kit has none for
+		// a ceiling, and every stone it does have reads wrong overhead -- the
+		// floor's is far too light, and the wall's plain brick field sits at
+		// luminance 63 against the 50 of the wall surface a player actually
+		// sees, because that surface gets its darkness from mortar lines and
+		// arch recesses with the AO baked in, which a flat ceiling has none of.
+		// tools/make_ceiling_texture.py crops that same brick field and scales
+		// it down to 50, so it is literally the wall's stone at the wall's
+		// tone. Hence the same BRDF values as "dungeonWall". Instances sit at
+		// "interior" is the flag that actually made it match: without it the
+		// hemispheric ambient hands a downward-facing surface ambientLower on
+		// its own, which lights.json wrote as bounce off a dirt courtyard --
+		// 1.80x darker than what the walls get, and brown against their cool.
+		// No texture can compensate for that, which is why two earlier attempts
+		// at re-tinting this ceiling failed. See Material::interiorAmbient in
+		// SceneMaterials.hpp for the measurement behind it. The floor
+		// has the mirrored problem (it collects pure ambientUpper, i.e. sky,
+		// indoors) but it reads fine, so it is left alone. Instances sit at
+		// y = 6.213,
+		// i.e. 0.02 (the common riser) + 6.1929, the exact height of
+		// SM_WallStraight_01, so the beams seat flush on the wall tops with no
+		// overlapping coplanar faces to z-fight.
+		"dungeonCeiling": { "roughness": 0.80, "F0": 0.04, "k": 0.93, "interior": true },
 		"dungeonCorner":  { "roughness": 0.80, "F0": 0.04, "k": 0.93 },
 		// Split door (see scene.json): stone wall half keeps the same values
 		// as the other dungeon stone; the wood-and-iron leaf gets the same
