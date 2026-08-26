@@ -22,10 +22,14 @@ direzione senza orientamento obbligato, e lo smusso da' alle torce una
 superficie inclinata su cui l'intensita' cambia, invece di un lastrone piatto
 che sotto la Cook-Torrance resterebbe di un colore solo.
 
-Nessun materiale: come tutti i pezzi del kit la texture arriva da scene.json,
-e le UV sono mappate dentro l'atlante di SM_StoneFloor_01.png alla stessa
-densita' del pavimento (0.4936 UV ogni 7.2 unita'), cosi' i corsi di pietra
-hanno la stessa scala su pavimento e soffitto e non serve una texture nuova.
+Nessun materiale: come tutti i pezzi del kit la texture arriva da scene.json.
+Qui e' SM_StoneCeiling_01.png, prodotta da make_ceiling_texture.py ritagliando
+i mattoni regolari dall'atlante del muro e portandoli al tono della parete --
+quel file spiega perche' non bastava riusare una texture del kit cosi' com'e'.
+Copre una piastrella intera, quindi le UV sono semplicemente la posizione sulla
+piastrella normalizzata su 7.2, e ogni faccia (travi, smusso, fondo) e' presa
+dalla stessa proiezione dall'alto: la pietra corre continua, il cassettone
+sembra scavato in un pezzo solo.
 
 Uso:
     blender --background --python tools/make_ceiling.py
@@ -51,12 +55,13 @@ CH_H = 0.30     # altezza dello smusso
 CH_W = 0.20     # rientro orizzontale dello smusso
 SLAB = 0.55     # spessore totale della lastra
 
-# L'atlante di SM_StoneFloor_01.png ha la pietra nei due quadranti di sinistra:
-# quello in basso e' il piano di calpestio, quello in alto e' quello che il
-# pavimento usa sui fianchi. Il quadrante in alto a destra e' nero e va evitato.
-K      = 0.4936 / 7.2     # UV per unita', misurata sul top del pavimento
-U0, V0 = 0.0032, 0.5032   # quadrante "piano"
-U1, V1 = 0.0032, 0.0032   # quadrante "fianchi"
+# SM_StoneCeiling_01.png e' dedicata e copre esattamente una piastrella, quindi
+# non serve ritagliare niente dentro un atlante: le UV sono la posizione sulla
+# piastrella divisa per il modulo. I corsi di pietra risultano il 16% piu'
+# grandi che sulle pareti, perche' il ritaglio da cui nasce la texture copriva
+# 6.19 unita' di muro e qui viene steso su 7.2 -- lastroni un filo piu' grandi
+# sopra la testa sono plausibili e la differenza non si legge.
+K = 1.0 / TS
 
 
 def build():
@@ -68,10 +73,10 @@ def build():
 
     def down(x, y, z):
         """Proiezione dall'alto: la pietra corre continua su trave, smusso e fondo."""
-        return (U0 + (x + TS) * K, V0 + z * K)
+        return ((x + TS) * K, z * K)
 
     def side(u, y):
-        return (U1 + u * K, V1 + (SLAB - y) * K)
+        return (u * K, (SLAB - y) * K)
 
     faces = []   # ogni quad e' gia' avvolto nel verso della sua normale
 
@@ -139,7 +144,8 @@ def check(obj):
     assert [round(c, 4) for c in lo] == [-TS, -TS, 0.0], lo
     assert [round(c, 4) for c in hi] == [0.0, 0.0, SLAB], hi
     uvs = [l.uv for l in me.uv_layers[0].data]
-    assert all(0.003 <= u <= 0.497 for u, _ in uvs), "UV fuori dalla pietra dell'atlante"
+    assert all(-1e-6 <= u <= 1 + 1e-6 and -1e-6 <= v <= 1 + 1e-6 for u, v in uvs), \
+        "UV fuori dalla texture"
     print("mesh chiusa, %d facce, bbox e UV verificate" % len(me.polygons))
 
 

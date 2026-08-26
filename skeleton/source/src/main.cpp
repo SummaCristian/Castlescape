@@ -53,13 +53,26 @@ struct UniformBufferObject {
 	// A mat4 rather than a mat3 to avoid std140's column-padding rules.
 	alignas(16) glm::mat4 nMat;
 	// Cook-Torrance material. mD isn't here, it's the albedo texture.
-	// Must match the GLSL block field for field; the floats after the vec3 fill
-	// std140's padding, so no explicit padding of ours is needed.
+	//
+	// Must match, field for field, the block declared by the four shaders that
+	// see it: PosNormUV.vert and CookTorrance.frag at set 1, Shadow.vert and
+	// ShadowCube.vert at set 0. (Flame.vert and Spark.vert sit at the same
+	// binding but read a FlameUniformBufferObject of their own, so they are not
+	// bound by this layout.)
+	//
+	// No explicit padding of ours: the scalars below fall into std140's vec4
+	// slots on their own, as [mS.xyz | roughness], [F0 | k | flatNormals |
+	// interiorAmbient], [time | - | - | -]. The struct's 16-byte alignment
+	// rounds its size to those same 240 bytes, so C++ and GLSL agree.
 	alignas(16) glm::vec3 mS;	// specular color
 	float roughness;			// rho: width of the microfacet distribution
 	float F0;					// reflectance seen head-on
 	float k;					// diffuse share of the BRDF
 	int flatNormals;			// 1: derive the face normal in the shader
+	// 1: take the hemispheric ambient of a vertical surface instead of the one
+	// this surface's normal implies. For interiors, where the sky/ground blend
+	// the model is built on has no meaning. See SceneMaterials.hpp.
+	int interiorAmbient;
 	// Seconds since startup, the same value for every instance in a frame.
 	// Piggybacks the per-object UBO instead of going in
 	// GlobalUniformBufferObject, which would shift LightData[] off the offset
@@ -3635,6 +3648,7 @@ class Skeleton26ReplaceName : public BaseProject {
 				ubo.F0 = m.F0;
 				ubo.k = m.k;
 				ubo.flatNormals = m.flatNormals;
+				ubo.interiorAmbient = m.interiorAmbient;
 				ubo.time = simTime;
 
 				Instance &inst = SC.TI[techniqueId].I[instanceId];

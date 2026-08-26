@@ -63,12 +63,29 @@
 		"dungeonFloor":   { "roughness": 0.85, "F0": 0.04, "k": 0.93 },
 		"dungeonWall":    { "roughness": 0.80, "F0": 0.04, "k": 0.93 },
 		// Coffered stone ceiling (SM_StoneCeiling_01, modelled for this project
-		// on the kit's 7.2 grid). Dressed stone like the walls, not the rougher
-		// floor: same values as "dungeonWall". Its instances sit at y = 6.213,
+		// on the kit's 7.2 grid). Its texture is ours too: the kit has none for
+		// a ceiling, and every stone it does have reads wrong overhead -- the
+		// floor's is far too light, and the wall's plain brick field sits at
+		// luminance 63 against the 50 of the wall surface a player actually
+		// sees, because that surface gets its darkness from mortar lines and
+		// arch recesses with the AO baked in, which a flat ceiling has none of.
+		// tools/make_ceiling_texture.py crops that same brick field and scales
+		// it down to 50, so it is literally the wall's stone at the wall's
+		// tone. Hence the same BRDF values as "dungeonWall". Instances sit at
+		// "interior" is the flag that actually made it match: without it the
+		// hemispheric ambient hands a downward-facing surface ambientLower on
+		// its own, which lights.json wrote as bounce off a dirt courtyard --
+		// 1.80x darker than what the walls get, and brown against their cool.
+		// No texture can compensate for that, which is why two earlier attempts
+		// at re-tinting this ceiling failed. See Material::interiorAmbient in
+		// SceneMaterials.hpp for the measurement behind it. The floor
+		// has the mirrored problem (it collects pure ambientUpper, i.e. sky,
+		// indoors) but it reads fine, so it is left alone. Instances sit at
+		// y = 6.213,
 		// i.e. 0.02 (the common riser) + 6.1929, the exact height of
 		// SM_WallStraight_01, so the beams seat flush on the wall tops with no
 		// overlapping coplanar faces to z-fight.
-		"dungeonCeiling": { "roughness": 0.80, "F0": 0.04, "k": 0.93 },
+		"dungeonCeiling": { "roughness": 0.80, "F0": 0.04, "k": 0.93, "interior": true },
 		"dungeonCorner":  { "roughness": 0.80, "F0": 0.04, "k": 0.93 },
 		// Split door (see scene.json): stone wall half keeps the same values
 		// as the other dungeon stone; the wood-and-iron leaf gets the same

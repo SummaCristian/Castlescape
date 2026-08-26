@@ -45,7 +45,8 @@ layout(binding = 0, set = 1) uniform UniformBufferObject {
     float roughness;  // rho on the slides. 0 = mirror, 1 = matte
     float F0;         // reflectance head-on
     float k;          // diffuse share, specular gets (1 - k)
-    int flatNormals;  // 1: ignore the vertex normal, use the face's own
+    int flatNormals;      // 1: ignore the vertex normal, use the face's own
+    int interiorAmbient;  // 1: ambient as if the surface were vertical
     // Unused here, declared to keep this block identical to the one Flame.vert
     // and Flame.frag see: both pipelines share DSLlocal and one C++ struct.
     float time;
@@ -319,8 +320,17 @@ const float PI = 3.14159265359;
 
 // Hemispheric ambient, E07 s.47-54. Indirect light, blended by which way the
 // surface faces: aligned with ambientDir is all sky, opposite is all ground.
+//
+// interiorAmbient pins the blend at 0.5, the weight a vertical surface gets,
+// instead of deriving it from the normal. Indoors the two ends of the model
+// don't exist -- a dungeon ceiling has no sky above it and no courtyard below
+// -- and taking the ground end literally made it collect ambientLower alone:
+// 1.80x darker than the walls it meets, and brown where they are cool. Only
+// the models that ask for it in materials.json; outdoors the real blend is
+// what puts the sky on the tower tops.
 vec3 hemisphericAmbient(vec3 N, vec3 mD) {
     float w = (dot(N, gubo.ambientDir) + 1.0) / 2.0;   // dot is -1..1, w is 0..1
+    if(ubo.interiorAmbient == 1) w = 0.5;
     return mix(gubo.ambientLower, gubo.ambientUpper, w) * mD;
 }
 

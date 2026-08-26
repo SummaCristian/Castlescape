@@ -41,6 +41,7 @@ layout(binding = 0, set = 0) uniform UniformBufferObject {
 	float F0;
 	float k;
 	int flatNormals;
+	int interiorAmbient;
 	float time;
 } ubo;
 

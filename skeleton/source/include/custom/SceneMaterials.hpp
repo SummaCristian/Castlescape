@@ -69,6 +69,25 @@ struct Material {
 	// Getting that honestly needs the light moved out of the fixture, or the
 	// fixture's own shadow faked separately.
 	bool castsShadow = true;
+
+	// Hemispheric ambient blends between "faces the sky" and "faces the ground"
+	// by the surface's own normal (CookTorrance.frag's hemisphericAmbient). That
+	// is right outdoors and wrong inside a closed room, where there is neither:
+	// a ceiling points straight down, so it collects ambientLower alone, which
+	// lights.json authored as bounce off a dirt courtyard -- dark and brown.
+	// Measured on the current values, that is 1.80x less ambient than a wall of
+	// the same stone gets, plus a warm cast the walls don't have, which is
+	// exactly what made the first ceiling read as a different colour no matter
+	// which texture it wore.
+	//
+	// Set this and the shader uses the weight of a vertical surface instead, so
+	// the ceiling gets the same ambient as the walls it sits on. Opt-in per
+	// model: the castle outdoors wants the real thing, and this is a lie that
+	// only interiors need.
+	//
+	// int rather than bool for the same reason as flatNormals above: it is
+	// copied straight into the uniform buffer, and GLSL has no bool in std140.
+	int interiorAmbient = 0;
 };
 
 class SceneMaterials {
@@ -112,6 +131,7 @@ void SceneMaterials::readInto(const nlohmann::json &js, Material &m) {
 	if(js.contains("k"))         m.k = js["k"].get<float>();
 	if(js.contains("flatNormals")) m.flatNormals = js["flatNormals"].get<bool>() ? 1 : 0;
 	if(js.contains("castsShadow")) m.castsShadow = js["castsShadow"].get<bool>();
+	if(js.contains("interior"))    m.interiorAmbient = js["interior"].get<bool>() ? 1 : 0;
 
 	// roughness 0 divides by zero in GGX. Caught here rather than guarded per
 	// fragment: it's a data error.
