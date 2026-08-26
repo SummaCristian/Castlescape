@@ -50,6 +50,10 @@ layout(binding = 0, set = 1) uniform UniformBufferObject {
     // Unused here, declared to keep this block identical to the one Flame.vert
     // and Flame.frag see: both pipelines share DSLlocal and one C++ struct.
     float time;
+    // This model's share of ambient, overriding gubo.ambientWeight. Negative
+    // means "no override", which is the default: only the models that need a
+    // different share from the scene's carry one. See ambientShare() below.
+    float ambientWeight;
 } ubo;
 
 layout(binding = 1, set = 1) uniform sampler2D albedoMap;
@@ -81,6 +85,9 @@ layout(binding = 0, set = 0) uniform GlobalUniformBufferObject {
     vec3 ambientDir;     // axis the two blend along, i.e. world up
     int debugFlags;      // LIGHT_DEBUG_* bits, set by the cheat menu
     float time;          // seconds since startup, unused here (see Flame.vert)
+    // The scene's default share of ambient, 0..1. See ambientShare() below.
+    // Rides in the padding before lights[], like debugFlags and time.
+    float ambientWeight;
     Light lights[MAX_LIGHTS];
 } gubo;
 
@@ -334,6 +341,17 @@ vec3 hemisphericAmbient(vec3 N, vec3 mD) {
     return mix(gubo.ambientLower, gubo.ambientUpper, w) * mD;
 }
 
+// How much of this fragment's light is indirect, 0..1. Per-model if the
+// material set one, the scene's default otherwise.
+//
+// This is E17's gubo.ambientLight (LambertBlinnTexture.frag), the maze lab's
+// one knob for an enclosed space, made per-model so a dungeon corridor and an
+// open courtyard can hold different values in the same frame. The maze runs at
+// 0.05; lights.json documents what the two ends of this scene use and why.
+float ambientShare() {
+    return ubo.ambientWeight >= 0.0 ? ubo.ambientWeight : gubo.ambientWeight;
+}
+
 // lx: direction towards the light. Constant for a direct light, per-fragment
 // for the others, which is why a point light wraps around an object.
 vec3 lightDirection(Light lt, vec3 pos) {
@@ -526,7 +544,22 @@ void main() {
             * shadowFactor(gubo.lights[i].shadowIndex, gubo.lights[i].type, fragPos, gubo.lights[i].pos, NdotL);
     }
 
-    vec3 color = Lo + hemisphericAmbient(N, mD);
+    // E17's blend (LambertBlinnTexture.frag:51-52), not a sum: ambient is a
+    // SHARE of the light at this fragment, and the direct term gives up
+    // exactly what ambient takes. Summing the two, as this did before, made
+    // hemisphericAmbient() a brightness floor under every pixel in the scene
+    // -- it has no visibility term, so a sealed room collected the same
+    // indirect light as the open courtyard, and no ceiling could stop it. The
+    // blend can't do that: at w the ambient never contributes more than w of
+    // the frame, and the total can never exceed what the direct lights alone
+    // would have given.
+    //
+    // Note this is still not occlusion. It is a per-model authored guess at
+    // how enclosed a surface is, which is what E17 does and what the assets
+    // allow -- the MGCG pack ships albedo only, so the AO map E14/E15 sample
+    // (aoMap, [TODO 5b]) has nothing to read. Baking one is the honest fix.
+    float aw = ambientShare();
+    vec3 color = Lo * (1.0 - aw) + hemisphericAmbient(N, mD) * aw;
 
     if(heatmap) {
         float intensity = dot(color, vec3(0.2126, 0.7152, 0.0722));

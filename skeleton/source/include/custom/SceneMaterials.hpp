@@ -88,6 +88,33 @@ struct Material {
 	// int rather than bool for the same reason as flatNormals above: it is
 	// copied straight into the uniform buffer, and GLSL has no bool in std140.
 	int interiorAmbient = 0;
+
+	// This model's share of indirect light, overriding AmbientLight::weight.
+	// Negative means "inherit the scene's", which is the default and the
+	// common case.
+	//
+	// Inheriting is the common case because the scene's own weight is the
+	// INDOOR one: the game is played inside the dungeon, so it is the castle
+	// exterior that is the exception and carries the override. A model added to
+	// materials.json and left alone comes out lit like the room it sits in.
+	//
+	// Separate from interiorAmbient above on purpose, even though both say
+	// something about being indoors. That one changes the DIRECTION the
+	// hemisphere is sampled from; this one changes HOW MUCH of the result is
+	// used. The ceiling wants both, the dungeon walls want only this, and the
+	// dungeon floor wants only this -- materials.json records that the floor's
+	// sky-facing blend reads fine and should be left alone, which one shared
+	// flag could not express.
+	//
+	// What it is for: hemispheric ambient has no visibility term, so before
+	// the E17 blend a sealed room collected exactly as much indirect light as
+	// the open courtyard and the ceiling above it changed nothing. There is no
+	// value of upper/lower that fixes that, because the problem is that the
+	// term is unoccluded, not that it is too bright. Until an AO map exists
+	// (E14 [TODO 5b] samples one; the MGCG pack ships albedo only), this is
+	// the authored stand-in for occlusion: one number per model saying roughly
+	// how enclosed its surfaces are.
+	float ambientWeight = -1.0f;
 };
 
 class SceneMaterials {
@@ -132,6 +159,9 @@ void SceneMaterials::readInto(const nlohmann::json &js, Material &m) {
 	if(js.contains("flatNormals")) m.flatNormals = js["flatNormals"].get<bool>() ? 1 : 0;
 	if(js.contains("castsShadow")) m.castsShadow = js["castsShadow"].get<bool>();
 	if(js.contains("interior"))    m.interiorAmbient = js["interior"].get<bool>() ? 1 : 0;
+	// Not clamped to 0 at the bottom: negative is the sentinel for "inherit
+	// the scene's", so only the top end is a data error.
+	if(js.contains("ambientWeight")) m.ambientWeight = glm::min(js["ambientWeight"].get<float>(), 1.0f);
 
 	// roughness 0 divides by zero in GGX. Caught here rather than guarded per
 	// fragment: it's a data error.
