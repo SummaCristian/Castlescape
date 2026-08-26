@@ -47,11 +47,19 @@
 	// the level: there is no exit door modelled yet. When one exists, move this
 	// box onto it -- nothing else needs to change.
 	//
-	// requiresKey gates it behind dhKey, which is what finally gives the key a
-	// job. Set it false to make the exit unconditional.
+	// requiresKey gates it behind a key the player is carrying, which is what
+	// finally gives the key a job. Set it false to make the exit unconditional.
+	//
+	// keyId names WHICH key opens it, matching the id given to addPickup() in
+	// main.cpp ("dungeon" is dhKey's). Omit it (or leave it "") and any key on
+	// the ring will do -- fine while there's only one key in the level, but
+	// name it as soon as a door padlock wants a key too: keys are one-shot, so
+	// the exit must not accept a key the player is meant to spend elsewhere.
+	// Unlike a door lock, the exit does not consume what it checks.
 	"exit": {
 		"box": [21.0, -1.0, 20.0, 25.0, 5.0, 30.0],
-		"requiresKey": true
+		"requiresKey": true,
+		"keyId": "dungeon"
 	},
 
 	// The ghosts. One entry per "ghost*" instance in scene.json.

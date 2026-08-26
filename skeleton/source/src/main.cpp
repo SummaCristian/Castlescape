@@ -667,6 +667,25 @@ class Skeleton26ReplaceName : public BaseProject {
 		float openAngleDeg = 100.0f;	// target angle when open; sign picks swing direction
 		bool open = false;
 		float angle = 0.0f;	// current animated angle, eases toward the target
+		// Padlock. Empty lockKeyId = no lock at all, which is every door as
+		// shipped: E just toggles it. A non-empty id means the door won't
+		// budge until the player is carrying a key pickup whose keyId matches
+		// (see Pickup::keyId and keyRing) -- matching by id rather than by
+		// "any key" so a two-key level can't be opened in the wrong order.
+		// The padlock MODEL isn't wired here on purpose: the lock is a state,
+		// not a mesh, so when the asset arrives it's one more instance
+		// registered next to the leaf and parked/hidden on unlock, and none of
+		// this logic changes.
+		std::string lockKeyId;
+		// Human-readable name for the locked prompt ("needs the <lockLabel>").
+		// Defaults to lockKeyId in addDoor() when not given.
+		std::string lockLabel;
+		// Runtime state: true while the padlock still holds. Set from
+		// lockKeyId at load and again in restartRun(), cleared for good (for
+		// this run) the moment a matching key is spent on it -- keys are
+		// one-shot, so a door that has been unlocked must never re-lock, or
+		// the key would be gone with the door shut behind it.
+		bool locked = false;
 	};
 	std::vector<Door> doors;
 
@@ -699,8 +718,31 @@ class Skeleton26ReplaceName : public BaseProject {
 		// serve: dropping the key overwrites it.
 		glm::mat4 spawnWm{1.0f};
 		glm::vec3 spawnPos{0.0f};
+		// Non-empty => this pickup IS a key, and it opens every Door whose
+		// lockKeyId is this same string (plus the exit, see exitKeyId). Empty
+		// => an ordinary item that just gets carried.
+		std::string keyId;
+		// Spent on a lock and gone for the rest of the run. Distinct from
+		// `collected`: a collected key is in hand and can still be dropped
+		// (G) or spent, a consumed one is off the board entirely and only
+		// restartRun() brings it back. Keys are usa e getta, so this is the
+		// flag that enforces it.
+		bool consumed = false;
+		// Uniform world scale, read once at load out of the authored matrix
+		// (column 0's length) so scene.json's "scale" stays the only place
+		// that number is written. Per-pickup rather than one key-specific
+		// constant: with several keys in a level they need not be one size,
+		// and the held/dropped poses both rebuild the matrix from scratch and
+		// so both need it back.
+		float worldScale = 1.0f;
 	};
 	std::vector<Pickup> pickups;
+	// The player's key ring: indices into `pickups`, in the order collected.
+	// A vector and not a set of ids because two keys can share an id (a level
+	// with two identical padlocks and two identical keys is legal) and because
+	// the ring has to remember WHICH instance each key was, to drop it or park
+	// it on use. keyRing.back() is the one drawn in the hand.
+	std::vector<int> keyRing;
 	// Measured in 3D (unlike DOOR_INTERACT_RADIUS's XZ-only check): a pickup
 	// can sit at table height, well above the player's feet.
 	static constexpr float PICKUP_INTERACT_RADIUS = 2.5f;
@@ -709,23 +751,45 @@ class Skeleton26ReplaceName : public BaseProject {
 	// something should win over interacting with whatever's behind it.
 	int nearbyPickup = -1;
 
-	// The dungeon key (assets/models/Miscellaneous/Key.mgcg, "dhKey" in
-	// scene.json). Index into `pickups`, set once in localInit(), so the
-	// held-key block in GameLogic() can reach the same Instance the world
-	// pickup used -- picking it up doesn't spawn a second copy, it just
-	// stops drawing this one where the table left it and starts drawing it
-	// in the player's hand instead (see the "collected" handling below).
-	int keyPickupIdx = -1;
-	bool hasKey = false;
 	// Edge-detection for the drop key, same reason as interactKeyWasPressed.
 	bool dropKeyWasPressed = false;
-	// World-pose scale for the key, whether sitting on a table or just
-	// dropped. NOT a separate authored number: read once in localInit() out
-	// of dhKey's own instance matrix (i.e. straight from scene.json's
-	// "scale"), so scene.json stays the only place that number is written --
-	// changing it there is enough, nothing in this file needs to be kept in
-	// step by hand.
-	float keyWorldScale = 1.0f;
+
+	// Whichever key is currently drawn in the player's hand: the most
+	// recently collected one, or -1 with an empty ring. Index into `pickups`,
+	// never a copy of the Instance -- picking a key up doesn't spawn a second
+	// model, it just stops drawing the world one where the table left it and
+	// starts drawing it off the camera instead (see the held-key block in
+	// GameLogic()).
+	int heldKeyIdx() const {
+		return keyRing.empty() ? -1 : keyRing.back();
+	}
+	// Position IN keyRing (not in `pickups`) of a carried key matching `id`,
+	// or -1. An empty `id` means "any key at all", which is what the exit
+	// uses when gameplay.json doesn't name one -- that's the pre-lock
+	// behaviour of requiresKey, kept working unchanged.
+	// Searches back to front so the key in hand is the one spent first: with
+	// two interchangeable keys on the ring, spending the one you're visibly
+	// holding is the only reading that isn't a surprise.
+	int findKeyInRing(const std::string &id) const {
+		for(int slot = (int)keyRing.size() - 1; slot >= 0; slot--) {
+			if(id.empty() || pickups[keyRing[slot]].keyId == id) return slot;
+		}
+		return -1;
+	}
+	// Spend a carried key: off the ring, off the board, permanently for this
+	// run. `slot` is an index INTO keyRing (what findKeyInRing returns), not
+	// into pickups. Parking the instance below the map is how everything else
+	// here hides a mesh (Starter draws every instance every frame, there's no
+	// per-instance visibility flag), and it's what stops the held-key block
+	// from drawing this one in the hand from the next frame on.
+	void consumeKey(int slot) {
+		if(slot < 0 || slot >= (int)keyRing.size()) return;
+		Pickup &p = pickups[keyRing[slot]];
+		p.consumed = true;
+		p.collected = true;
+		p.inst->Wm = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
+		keyRing.erase(keyRing.begin() + slot);
+	}
 	// Held pose. Negative X puts it in the LEFT hand (mirrors
 	// HAND_TORCH_OFFSET's +0.5, which is the right); the torch already owns
 	// the right hand and a torch-carrying explorer would hold a found key in
@@ -743,8 +807,8 @@ class Skeleton26ReplaceName : public BaseProject {
 	// tip-down instead, negate this to -90.
 	static constexpr glm::vec3 HAND_KEY_TILT_DEG = glm::vec3(90.0f, -20.0f, 0.0f);
 	// No separate raw-mesh fix or hand-only size lives here: the held pose
-	// reads the same size as the table/dropped one (keyWorldScale, read once
-	// in localInit() out of dhKey's own authored matrix -- see there). If a
+	// reads the same size as the table/dropped one (Pickup::worldScale, read
+	// once in addPickup() out of that key's own authored matrix -- see there). If a
 	// held key ever needs to look bigger/smaller than the world one, that's
 	// a multiplier to reintroduce here, not before.
 
@@ -1352,6 +1416,15 @@ class Skeleton26ReplaceName : public BaseProject {
 	glm::vec3 exitBoxMax{0.0f};
 	bool exitHasBox = false;
 	bool exitRequiresKey = true;
+	// Which key opens the way out, from gameplay.json's "exit"."keyId". Empty
+	// (the default) means ANY key on the ring does, which is exactly what
+	// requiresKey meant before doors had locks -- so a level that names no id
+	// behaves as it always did. Name one here as soon as a door lock competes
+	// for the same key: keys are one-shot, and a player who spends the only
+	// key on a side door would otherwise reach an exit they can never open.
+	// The exit does NOT consume the key it checks: the run is over the moment
+	// it passes, so there's nothing left to spend it on.
+	std::string exitKeyId;
 	// Set every frame in GameLogic() when the player is standing in a locked
 	// exit without the key, read by updateUniformBuffer() to explain why
 	// nothing happened. Same pattern as nearbyDoor/nearbyPickup.
@@ -1939,7 +2012,14 @@ class Skeleton26ReplaceName : public BaseProject {
 		// openAngleDeg's sign picks which way it swings open; chosen without
 		// being able to see the render from here, so if it swings the wrong
 		// way, negate it.
-		auto addDoor = [&](const char *id, glm::vec3 promptOffset, float openAngleDeg) {
+		//
+		// lockKeyId is the padlock: leave it "" for a door that just opens,
+		// or name the keyId of the pickup that opens it (see addPickup
+		// below). lockLabel is what the prompt calls that key and defaults to
+		// the id itself. Locking a door is therefore one extra argument on
+		// the addDoor() line, not new plumbing -- same as adding the door was.
+		auto addDoor = [&](const char *id, glm::vec3 promptOffset, float openAngleDeg,
+						   const char *lockKeyId = "", const char *lockLabel = "") {
 			auto it = SC.InstanceIds.find(id);
 			if(it == SC.InstanceIds.end()) {
 				std::cout << "Door instance '" << id << "' not found, skipping\n";
@@ -1951,6 +2031,9 @@ class Skeleton26ReplaceName : public BaseProject {
 			d.baseWm = d.inst->Wm;
 			d.promptPos = glm::vec3(d.baseWm * glm::vec4(promptOffset, 1.0f));
 			d.openAngleDeg = openAngleDeg;
+			d.lockKeyId = lockKeyId;
+			d.lockLabel = (lockLabel[0] != '\0') ? lockLabel : lockKeyId;
+			d.locked = !d.lockKeyId.empty();
 			doors.push_back(d);
 		};
 		addDoor("dhDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f);
@@ -1962,6 +2045,13 @@ class Skeleton26ReplaceName : public BaseProject {
 		// first door, so the same promptOffset/openAngleDeg apply unchanged.
 		addDoor("dlDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f);
 		addDoor("dlDoorPanel2", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f);
+		// To padlock one of these, add the key id (and optionally a label) --
+		// e.g. addDoor("dlDoorPanel", ..., 100.0f, "dungeon", "dungeon key").
+		// Left unlocked for now on purpose: "dungeon" is the ONLY key in the
+		// level right now and gameplay.json's exit already wants it, so a
+		// padlock here would eat it and strand the player at the exit. Lock a
+		// door once there's a second key instance in scene.json (or once
+		// exit.keyId names a different one).
 
 		// The watching skulls, one per torch (see scene.json "torchSkull"
 		// instances). One addWatchingSkull() call per skull, same reasoning as
@@ -1987,7 +2077,11 @@ class Skeleton26ReplaceName : public BaseProject {
 		// World pickups. worldPos is read from the instance's own Wm, same as
 		// WatchingSkull does, since dhKey's position already lives in
 		// scene.json and shouldn't be repeated here.
-		auto addPickup = [&](const char *id) {
+		// Passing a keyId makes the pickup a key: it goes on the ring when
+		// collected and opens any Door whose lockKeyId matches (and the exit,
+		// if exit.keyId names it). It is spent on first use -- one lock per
+		// key, no take-backs.
+		auto addPickup = [&](const char *id, const char *keyId = "") {
 			auto it = SC.InstanceIds.find(id);
 			if(it == SC.InstanceIds.end()) {
 				std::cout << "Pickup instance '" << id << "' not found, skipping\n";
@@ -1999,21 +2093,17 @@ class Skeleton26ReplaceName : public BaseProject {
 			p.worldPos = glm::vec3(p.inst->Wm[3]);
 			p.spawnWm = p.inst->Wm;
 			p.spawnPos = p.worldPos;
+			p.keyId = keyId;
+			// Read the uniform scale straight out of the authored world
+			// matrix -- column 0's length, which is the scale for any
+			// instance scaled uniformly, rotated or not. This is the single
+			// read that makes scene.json's "scale" the only place that number
+			// has to live: the held and dropped poses rebuild the matrix from
+			// scratch and take it back from here.
+			p.worldScale = glm::length(glm::vec3(p.inst->Wm[0]));
 			pickups.push_back(p);
 		};
-		keyPickupIdx = (int)pickups.size();
-		addPickup("dhKey");
-		if(keyPickupIdx >= (int)pickups.size()) {
-			keyPickupIdx = -1;	// addPickup skipped it
-		} else {
-			// Read the uniform scale straight out of the authored world
-			// matrix -- column 0's length, since dhKey carries no rotation
-			// (see HAND_KEY_OFFSET/TILT_DEG's declaration a few hundred
-			// lines up) so Wm[0] is exactly (scale, 0, 0, 0). This is the
-			// single read that makes scene.json's "scale" on dhKey the only
-			// place that number has to live.
-			keyWorldScale = glm::length(glm::vec3(pickups[keyPickupIdx].inst->Wm[0]));
-		}
+		addPickup("dhKey", "dungeon");
 
 		// The player's spawn pose, captured before anything can move it. See
 		// spawnPos's declaration: this is what restartRun() puts them back to.
@@ -2060,6 +2150,7 @@ class Skeleton26ReplaceName : public BaseProject {
 						std::cout << "gameplay.json: \"exit\" needs a 6-number \"box\", the run can't be won\n";
 					}
 					exitRequiresKey = e.value("requiresKey", true);
+					exitKeyId = e.value("keyId", std::string(""));
 				}
 
 				for(const auto &g : js.value("ghosts", nlohmann::json::array())) {
@@ -2112,7 +2203,7 @@ class Skeleton26ReplaceName : public BaseProject {
 					// fitAABB reads the raw mesh, which knows nothing about
 					// scene.json's "scale" on the instance -- so a scaled-down
 					// ghost would otherwise keep a full-size collider. Same
-					// trick as keyWorldScale above: the length of the world
+					// trick as Pickup::worldScale above: the length of the world
 					// matrix's first column IS the instance's uniform scale
 					// factor, so multiplying it in here is what makes shrinking
 					// a ghost in scene.json actually shrink what it collides
@@ -3789,9 +3880,23 @@ class Skeleton26ReplaceName : public BaseProject {
 		// game-over text still inviting a keypress that does nothing.
 		bool showInteractPrompt = runState == RunState::Running &&
 								  (nearbyDoor >= 0 || nearbyPickup >= 0 || atLockedExit);
-		std::string wantedPromptText = atLockedExit      ? "The way out is locked - find the key"
-									 : (nearbyPickup >= 0) ? "[E] Pick up"
-														   : "[E] Interact";
+		// Door prompts split three ways once locks exist: a padlock the
+		// player can open ("[E] Unlock", and the wording warns the key is
+		// spent, since it can't be got back), one they can't (what to go find
+		// -- by lockLabel, not the raw id), and a plain door.
+		std::string wantedPromptText;
+		if(atLockedExit) {
+			wantedPromptText = "The way out is locked - find the key";
+		} else if(nearbyPickup >= 0) {
+			wantedPromptText = "[E] Pick up";
+		} else if(nearbyDoor >= 0 && doors[nearbyDoor].locked) {
+			const Door &d = doors[nearbyDoor];
+			wantedPromptText = (findKeyInRing(d.lockKeyId) >= 0)
+							 ? "[E] Unlock (uses the " + d.lockLabel + ")"
+							 : "Locked - needs the " + d.lockLabel;
+		} else {
+			wantedPromptText = "[E] Interact";
+		}
 		if(showInteractPrompt && (!interactPromptShown || wantedPromptText != interactPromptText)) {
 			if(interactPromptShown) txt.removeText(3);
 			float sx, sy;
@@ -4113,6 +4218,10 @@ class Skeleton26ReplaceName : public BaseProject {
 		for(Door &d : doors) {
 			d.open = false;
 			d.angle = 0.0f;
+			// Padlocks come back with the run: a key spent last run is back
+			// on its table below, so the lock it opened has to be shut again
+			// or the level would get easier every restart.
+			d.locked = !d.lockKeyId.empty();
 			d.inst->Wm = d.baseWm;
 			if(d.inst->C != nullptr) {
 				d.inst->C->setWorldMatrix(d.inst->Wm);
@@ -4121,10 +4230,11 @@ class Skeleton26ReplaceName : public BaseProject {
 
 		for(Pickup &p : pickups) {
 			p.collected = false;
+			p.consumed = false;
 			p.worldPos = p.spawnPos;
 			p.inst->Wm = p.spawnWm;
 		}
-		hasKey = false;
+		keyRing.clear();
 		nearbyDoor = -1;
 		nearbyPickup = -1;
 		atLockedExit = false;
@@ -4388,7 +4498,7 @@ class Skeleton26ReplaceName : public BaseProject {
 			nearbyPickup = -1;
 			float bestPickupDist = PICKUP_INTERACT_RADIUS;
 			for(int i = 0; i < (int)pickups.size(); i++) {
-				if(pickups[i].collected) continue;
+				if(pickups[i].collected || pickups[i].consumed) continue;
 				float dx = camPos.x - pickups[i].worldPos.x;
 				float dy = camPos.y - pickups[i].worldPos.y;
 				float dz = camPos.z - pickups[i].worldPos.z;
@@ -4411,9 +4521,32 @@ class Skeleton26ReplaceName : public BaseProject {
 					// frame from here on (see the held-key block below);
 					// a pickup with no such block just stays parked here.
 					p.inst->Wm = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
-					if(nearbyPickup == keyPickupIdx) hasKey = true;
+					// Keys additionally go on the ring, which is what makes
+					// the newest one show up in the hand and what the locks
+					// below are checked against.
+					if(!p.keyId.empty()) keyRing.push_back(nearbyPickup);
 				} else if(nearbyDoor >= 0) {
-					doors[nearbyDoor].open = !doors[nearbyDoor].open;
+					Door &d = doors[nearbyDoor];
+					if(d.locked) {
+						// Padlocked: E spends a matching key instead of
+						// toggling. The key is destroyed by the unlock (usa e
+						// getta), and the door swings open in the same press
+						// rather than needing a second one -- a player who
+						// just gave up a key expects the door to move.
+						// Without a match nothing happens at all: the prompt
+						// (see updateUniformBuffer) is already telling them
+						// what's missing, so there's nothing to report here.
+						int slot = findKeyInRing(d.lockKeyId);
+						if(slot >= 0) {
+							std::cout << "[door] unlocked '" << d.instanceId
+									  << "' with key '" << d.lockKeyId << "'\n";
+							consumeKey(slot);
+							d.locked = false;
+							d.open = true;
+						}
+					} else {
+						d.open = !d.open;
+					}
 				}
 			}
 			interactKeyWasPressed = interactKey;
@@ -4423,9 +4556,12 @@ class Skeleton26ReplaceName : public BaseProject {
 			// walking up to it again shows the pick-up prompt like any
 			// other pickup. Re-parks the SAME instance the held-key block
 			// was drawing in the hand, same one-instance reasoning as pickup.
+			// Drops the key in hand (the last one collected); the rest of the
+			// ring stays put, so pressing G repeatedly puts them down one at
+			// a time in reverse order of pickup.
 			bool dropKey = glfwGetKey(window, GLFW_KEY_G);
-			if(hasKey && keyPickupIdx >= 0 && dropKey && !dropKeyWasPressed) {
-				Pickup &p = pickups[keyPickupIdx];
+			if(heldKeyIdx() >= 0 && dropKey && !dropKeyWasPressed) {
+				Pickup &p = pickups[heldKeyIdx()];
 				const float EYE_HEIGHT = 1.8f;	// same eye height used throughout GameLogic()
 
 				glm::vec2 faceDir(front.x, front.z);
@@ -4441,10 +4577,10 @@ class Skeleton26ReplaceName : public BaseProject {
 
 				p.worldPos = dropPos;
 				p.collected = false;
-				hasKey = false;
+				keyRing.pop_back();
 				p.inst->Wm = glm::translate(glm::mat4(1.0f), dropPos)
 							* glm::rotate(glm::mat4(1.0f), yaw, glm::vec3(0.0f, 1.0f, 0.0f))
-							* glm::scale(glm::mat4(1.0f), glm::vec3(keyWorldScale));
+							* glm::scale(glm::mat4(1.0f), glm::vec3(p.worldScale));
 			}
 			dropKeyWasPressed = dropKey;
 
@@ -4720,7 +4856,7 @@ class Skeleton26ReplaceName : public BaseProject {
 							  camPos.y >= exitBoxMin.y && camPos.y <= exitBoxMax.y &&
 							  camPos.z >= exitBoxMin.z && camPos.z <= exitBoxMax.z;
 				if(inside) {
-					if(exitRequiresKey && !hasKey) {
+					if(exitRequiresKey && findKeyInRing(exitKeyId) < 0) {
 						atLockedExit = true;
 					} else {
 						runState = RunState::Escaped;
@@ -4885,7 +5021,11 @@ class Skeleton26ReplaceName : public BaseProject {
 		// the SAME sign as the torch's: both hands swing left together and
 		// right together (not toward/away from center), which is what the
 		// held-key sway is meant to match here.
-		if(hasKey && keyPickupIdx >= 0) {
+		//
+		// Only the newest key on the ring is drawn: there's one free hand,
+		// and a key spent on a lock leaves the ring (and is parked below the
+		// map by consumeKey) so it stops being drawn on the very next frame.
+		if(heldKeyIdx() >= 0) {
 			float bobLateral = sinf(walkBobPhase) * WALK_BOB_LATERAL * walkBobBlend;
 			float bobVertical = sinf(walkBobPhase * 2.0f) * WALK_BOB_VERTICAL * walkBobBlend;
 			float bobRollDeg = bobLateral * 90.0f;
@@ -4895,10 +5035,11 @@ class Skeleton26ReplaceName : public BaseProject {
 							* glm::rotate(glm::mat4(1.0f), glm::radians(HAND_KEY_TILT_DEG.z + bobRollDeg), glm::vec3(0.0f, 0.0f, 1.0f));
 			glm::vec3 bobbedOffset = HAND_KEY_OFFSET + glm::vec3(bobLateral, bobVertical, 0.0f);
 
-			pickups[keyPickupIdx].inst->Wm = camWm
+			Pickup &held = pickups[heldKeyIdx()];
+			held.inst->Wm = camWm
 				* glm::translate(glm::mat4(1.0f), bobbedOffset)
 				* grip
-				* glm::scale(glm::mat4(1.0f), glm::vec3(keyWorldScale));
+				* glm::scale(glm::mat4(1.0f), glm::vec3(held.worldScale));
 		}
 
 		return deltaT;
