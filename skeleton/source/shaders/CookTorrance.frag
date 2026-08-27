@@ -435,29 +435,6 @@ vec3 lightRadiance(Light lt, vec3 pos) {
     float distSoft = sqrt(dist * dist + NEAR_RADIUS * NEAR_RADIUS);
     vec3 radiance = lt.color * pow(lt.g / distSoft, lt.beta);
 
-    // NEAR_RADIUS only bounds the last few centimetres right at the flame --
-    // between there and ~g units out, g/distSoft is still essentially raw
-    // 1/dist, and raising TORCH_LIGHT_G (main.cpp) to extend the torch's
-    // reach stretched that steep middle section out to distances you
-    // actually walk through, not just brush against. Composite.frag's
-    // tonemap (c/(Y+1)) approaches white asymptotically, so most of a
-    // surface's visible "climb to fully lit" ends up backloaded into
-    // whatever's left of that steep section once you're within a couple of
-    // units of the light -- which is what reads as the wall suddenly
-    // lighting up rather than gradually brightening as you approach.
-    //
-    // RADIANCE_CAP compresses the raw value itself, before it ever reaches
-    // the tonemap, the same soft-knee shape BloomBright.frag's
-    // softThreshold() uses for the opposite problem: unaffected below the
-    // cap (radiance << CAP leaves the scale factor ~1), smoothly bending
-    // over as it approaches CAP instead of racing on to whatever raw value
-    // 1/dist would otherwise produce. That spreads the same total
-    // brightness increase over the whole approach instead of dumping most
-    // of it into the last stretch before saturation.
-    const float RADIANCE_CAP = 1.8;
-    float peak = max(radiance.r, max(radiance.g, radiance.b));
-    radiance *= RADIANCE_CAP * (1.0 - exp(-peak / RADIANCE_CAP)) / max(peak, 1e-4);
-
     if(lt.type == LIGHT_SPOT) {
         // lt.dir is where the lamp POINTS, so a lamp aimed down is [0,-1,0].
         // The slides write this against lx, hence the negation here.

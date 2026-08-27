@@ -977,20 +977,18 @@ class Skeleton26ReplaceName : public BaseProject {
 	// a much smaller, closer source than a lamp head.
 	static constexpr glm::vec3 TORCH_LIGHT_COLOR = glm::vec3(1.0f, 0.5f, 0.16f);
 	// With the falloff (g/d)^beta, g = 2.1 makes the torches genuinely carry
-	// into the room instead of only rimming their own wall. Raised to 3.5 to
-	// extend how far a torch reaches -- g is the distance at which the light
-	// is exactly its authored color, so a bigger g pushes that "full
-	// brightness" boundary further out and correspondingly pushes the whole
-	// falloff tail out with it.
-	static constexpr float TORCH_LIGHT_G = 3.5f;
-	// Lower beta = a gentler power curve, so the fade into darkness is spread
-	// over more distance instead of most of the drop happening in a short
-	// band right past g. The old 1.4 was steep enough that a surface just
-	// past the torch's comfortable reach was already too dim to register
-	// against the ambient floor, tonemapping, and 8-bit output -- so backing
-	// away read as the torch's light suddenly switching off rather than
-	// dimming out.
-	static constexpr float TORCH_LIGHT_BETA = 1.0f;
+	// into the room instead of only rimming their own wall.
+	//
+	// Both g and beta got tuned up (g to 3.5, beta down from 1.4) partway
+	// through tracking down what turned out to be the real bug: torches
+	// looked like they went dark past a hard-edged radius because
+	// TORCH_SHADOW_FAR_CONST's shadow-cube far plane was too short, not
+	// because of anything about this falloff curve. That's fixed now (see
+	// TORCH_SHADOW_FAR_CONST's comment), so both are back to their original,
+	// separately-authored values instead of ones that were compensating for
+	// a shadow bug.
+	static constexpr float TORCH_LIGHT_G = 2.1f;
+	static constexpr float TORCH_LIGHT_BETA = 1.4f;
 	// Candles additionally shrink g (their falloff reach), on top of
 	// flames.json's own lightScale (their peak brightness): the two are
 	// independent knobs the same way sizeScale/lightScale are (see
