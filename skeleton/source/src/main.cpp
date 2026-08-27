@@ -62,8 +62,9 @@ struct UniformBufferObject {
 	//
 	// No explicit padding of ours: the scalars below fall into std140's vec4
 	// slots on their own, as [mS.xyz | roughness], [F0 | k | flatNormals |
-	// interiorAmbient], [time | ambientWeight | - | -]. The struct's 16-byte
-	// alignment rounds its size to those same 240 bytes, so C++ and GLSL agree.
+	// interiorAmbient], [time | ambientWeight | glow | -]. The struct's
+	// 16-byte alignment rounds its size to those same 240 bytes, so C++ and
+	// GLSL agree.
 	alignas(16) glm::vec3 mS;	// specular color
 	float roughness;			// rho: width of the microfacet distribution
 	float F0;					// reflectance seen head-on
@@ -84,6 +85,12 @@ struct UniformBufferObject {
 	// means "inherit gubo.ambientWeight", and that is the common case: only
 	// the interior models carry one. See Material::ambientWeight.
 	float ambientWeight;
+	// 0..1: this instance's currently-gazed-at focus highlight strength. Set
+	// per-instance (not per-model, unlike the fields above) in
+	// updateUniformBuffer()'s per-instance loop by comparing against
+	// gazedInstance. Read only by CookTorrance.frag; the other three shaders
+	// that share this layout declare and ignore it, same as time above.
+	float glow;
 };
 
 // Everything that's the same for every object drawn this frame. Split from the
@@ -503,6 +510,27 @@ class Skeleton26ReplaceName : public BaseProject {
 	// Flat-colored quads: background/highlight panel behind the cheat HUD's text.
 	UiQuad uiQuad;
 
+	// Flat-colored quad: the always-on center-screen dot used to aim
+	// look-based interactions (see GameLogic()'s gaze test). Separate
+	// UiQuad instance/named command buffer from uiQuad above, since the two
+	// draw independent, unrelated content.
+	UiQuad crosshair;
+
+	// (Re)builds the crosshair dot centered on the current windowWidth/
+	// windowHeight. Called once at init and again on every resize, since
+	// the dot's pixel position depends on screen size; never needs to
+	// change frame to frame otherwise, so it isn't called from the main
+	// per-frame loop.
+	void setCrosshairQuad() {
+		const float dotSize = 4.0f;
+		float cx = (float)windowWidth / 2.0f;
+		float cy = (float)windowHeight / 2.0f;
+		crosshair.setQuads({
+			UiRect{cx - dotSize / 2.0f, cy - dotSize / 2.0f, dotSize, dotSize,
+				   glm::vec4(1.0f, 1.0f, 1.0f, 0.5f)}
+		});
+	}
+
 	// Toggle-based pause menu for the cheats below, opened/closed with L.
 	CheatHud hud;
 
@@ -672,9 +700,17 @@ class Skeleton26ReplaceName : public BaseProject {
 
 	// How close (world units, measured to the doorway centre) the player has
 	// to be before a door's prompt appears and E does anything.
-	static constexpr float DOOR_INTERACT_RADIUS = 3.5f;
+	static constexpr float DOOR_INTERACT_RADIUS = 10.0f;
 	// Degrees/second the door animates open/closed at.
 	static constexpr float DOOR_OPEN_SPEED = 120.0f;
+	// How far away (world units) a door can still be picked as a gaze
+	// candidate. Larger than DOOR_INTERACT_RADIUS, which still gates whether
+	// it's actually close enough to interact with once aimed at -- see
+	// findGazedDoor() and the gaze+proximity AND in GameLogic().
+	static constexpr float DOOR_LOOK_DISTANCE = 15.0f;
+	// Half-width (world units) of the doorway used to turn promptPos into an
+	// angular aiming tolerance -- wide, since a doorway is a big target.
+	static constexpr float DOOR_AIM_RADIUS = 1.2f;
 
 	// Edge-detection for the interact key, same reason as jumpKeyWasPressed:
 	// holding E shouldn't toggle the door every frame.
@@ -703,11 +739,88 @@ class Skeleton26ReplaceName : public BaseProject {
 	std::vector<Pickup> pickups;
 	// Measured in 3D (unlike DOOR_INTERACT_RADIUS's XZ-only check): a pickup
 	// can sit at table height, well above the player's feet.
-	static constexpr float PICKUP_INTERACT_RADIUS = 2.5f;
+	static constexpr float PICKUP_INTERACT_RADIUS = 7.0f;
 	// Index into `pickups` of whichever one is currently in range, or -1.
 	// Mirrors nearbyDoor; checked first in GameLogic() since grabbing
 	// something should win over interacting with whatever's behind it.
 	int nearbyPickup = -1;
+	// How far away (world units) a pickup can still be picked as a gaze
+	// candidate. See DOOR_LOOK_DISTANCE for the same reasoning.
+	static constexpr float PICKUP_LOOK_DISTANCE = 11.0f;
+	// Half-width (world units) of a pickup used for its angular aiming
+	// tolerance -- tight, since pickups are small props, not doorways.
+	static constexpr float PICKUP_AIM_RADIUS = 0.35f;
+
+	// Base half-angle (degrees) of the aiming cone, before an object's own
+	// aim radius widens it at range. Shared by doors and pickups.
+	static constexpr float GAZE_CONE_DEG = 7.0f;
+
+	// The single Instance* (a door's or a pickup's) the crosshair is
+	// currently resting on within interact range, or nullptr. Resolved once
+	// per frame in GameLogic() right after nearbyDoor/nearbyPickup, and read
+	// by updateUniformBuffer()'s per-instance UBO loop to set ubo.glow.
+	Instance *gazedInstance = nullptr;
+
+	// True if `front` (the camera's normalized forward vector) is aimed
+	// closely enough at the point `target` to select it: within lookDist,
+	// and within a cone whose half-angle is GAZE_CONE_DEG widened by the
+	// angular size aimRadius subtends at the target's distance (so a wide
+	// door forgives worse aim than a small pickup, without needing a real
+	// bounding box for either -- same "point + radius" trick already used
+	// for interact ranges). smallerCosAngleWins lets a caller comparing
+	// multiple candidates track the best (smallest-angle) one via cosAngle.
+	bool isGazedAt(const glm::vec3 &front, const glm::vec3 &target,
+				   float lookDist, float aimRadius, float &cosAngleOut) const {
+		glm::vec3 to = target - camPos;
+		float dist = glm::length(to);
+		if(dist < 1e-4f || dist > lookDist) return false;
+		float cosAngle = glm::dot(front, to / dist);
+		float angularTolerance = std::atan(aimRadius / dist);
+		float minCos = std::cos(glm::radians(GAZE_CONE_DEG) + angularTolerance);
+		if(cosAngle < minCos) return false;
+		cosAngleOut = cosAngle;
+		return true;
+	}
+
+	// Index into `doors` the player is currently aiming at within look
+	// range, or -1. Does NOT check DOOR_INTERACT_RADIUS -- that's re-checked
+	// by the caller once a gaze candidate is found, keeping "can be
+	// targeted at all" (this) and "close enough to actually interact"
+	// (DOOR_INTERACT_RADIUS) as two separately named, separately tuned gates.
+	int findGazedDoor(const glm::vec3 &front) const {
+		int best = -1;
+		float bestCos = -1.0f;
+		for(int i = 0; i < (int)doors.size(); i++) {
+			float cosAngle;
+			if(isGazedAt(front, doors[i].promptPos, DOOR_LOOK_DISTANCE,
+						 DOOR_AIM_RADIUS, cosAngle)) {
+				if(best < 0 || cosAngle > bestCos) {
+					best = i;
+					bestCos = cosAngle;
+				}
+			}
+		}
+		return best;
+	}
+
+	// Same as findGazedDoor, for pickups. Skips already-collected ones, same
+	// as the old proximity scan did.
+	int findGazedPickup(const glm::vec3 &front) const {
+		int best = -1;
+		float bestCos = -1.0f;
+		for(int i = 0; i < (int)pickups.size(); i++) {
+			if(pickups[i].collected) continue;
+			float cosAngle;
+			if(isGazedAt(front, pickups[i].worldPos, PICKUP_LOOK_DISTANCE,
+						 PICKUP_AIM_RADIUS, cosAngle)) {
+				if(best < 0 || cosAngle > bestCos) {
+					best = i;
+					bestCos = cosAngle;
+				}
+			}
+		}
+		return best;
+	}
 
 	// The dungeon key (assets/models/Miscellaneous/Key.mgcg, "dhKey" in
 	// scene.json). Index into `pickups`, set once in localInit(), so the
@@ -1434,6 +1547,8 @@ class Skeleton26ReplaceName : public BaseProject {
 		// updates the textual output
 		txt.resizeScreen(w, h);
 		uiQuad.resizeScreen(w, h);
+		crosshair.resizeScreen(w, h);
+		setCrosshairQuad();
 		// The collider visualizer owns a swapchain-attached render pass too
 		// (Colliders.hpp), and it was never being told about resizes -- its own
 		// resizeScreen() carries a comment saying it is called when the window
@@ -2337,6 +2452,11 @@ class Skeleton26ReplaceName : public BaseProject {
 		txt.init(this, windowWidth, windowHeight);
 		// initializes the flat-quad background/highlight layer for the cheat HUD
 		uiQuad.init(this, windowWidth, windowHeight);
+		// initializes the always-on center-screen crosshair dot; distinct
+		// submitOrder/buffer name from uiQuad above so the two don't collide
+		// over the same named command buffer
+		crosshair.init(this, windowWidth, windowHeight, 9002, "crosshair");
+		setCrosshairQuad();
 
 		// submits the main command buffer
 		submitCommandBuffer("main", 0, populateCommandBufferAccess, this);
@@ -2878,6 +2998,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		SC.pipelinesAndDescriptorSetsInit();
 		txt.pipelinesAndDescriptorSetsInit();
 		uiQuad.pipelinesAndDescriptorSetsInit();
+		crosshair.pipelinesAndDescriptorSetsInit();
 		// Same RP as the scene: the flame draws inside it, right after the
 		// scene geometry, so it shares the depth buffer instead of needing its
 		// own render pass the way UiQuad's 2D overlay does -- and so its
@@ -2914,6 +3035,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		SC.pipelinesAndDescriptorSetsCleanup();
 		txt.pipelinesAndDescriptorSetsCleanup();
 		uiQuad.pipelinesAndDescriptorSetsCleanup();
+		crosshair.pipelinesAndDescriptorSetsCleanup();
 		flame.pipelinesAndDescriptorSetsCleanup();
 		lightDebug.pipelinesAndDescriptorSetsCleanup();
 	}
@@ -2972,6 +3094,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		SC.localCleanup();
 		txt.localCleanup();
 		uiQuad.localCleanup();
+		crosshair.localCleanup();
 		flame.localCleanup();
 		lightDebug.localCleanup();
 	}
@@ -3693,6 +3816,12 @@ class Skeleton26ReplaceName : public BaseProject {
 				ubo.time = simTime;
 
 				Instance &inst = SC.TI[techniqueId].I[instanceId];
+				// The one instance the crosshair is currently aimed at (see
+				// gazedInstance in GameLogic()) glows; every other instance,
+				// including other instances of the same model, doesn't --
+				// this is why the flag lives here per-instance rather than
+				// in Material, which is shared per-model.
+				ubo.glow = (&inst == gazedInstance) ? 1.0f : 0.0f;
 				// DS[1] = Pchar pass (main render): set0=DSLglobal, set1=DSLlocal
 				inst.DS[0][0]->map(currentImage, &gubo, 0); // global (light/camera)
 				inst.DS[0][1]->map(currentImage, &ubo, 0); // camera MVPs
@@ -3865,6 +3994,7 @@ class Skeleton26ReplaceName : public BaseProject {
 
 		txt.updateCommandBuffer();
 		uiQuad.updateCommandBuffer();
+		crosshair.updateCommandBuffer();
 	}
 	
 	// --- Ghost navigation ---------------------------------------------------
@@ -4125,6 +4255,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		hasKey = false;
 		nearbyDoor = -1;
 		nearbyPickup = -1;
+		gazedInstance = nullptr;
 		atLockedExit = false;
 
 		runState = RunState::Running;
@@ -4361,41 +4492,53 @@ class Skeleton26ReplaceName : public BaseProject {
 			}
 			jumpKeyWasPressed = fire;
 
-			// Interaction: find the nearest door within range of its doorway
-			// centre, toggle it open/closed on E (edge-triggered, same
-			// pattern as jump), then ease every door's animated angle
-			// toward its target and push the result into both the render
-			// transform and its collider, so an open door is actually
-			// walkable and a closed one still blocks.
+			// Interaction: find the door the player is aiming the crosshair
+			// at (findGazedDoor), then re-confirm it's within
+			// DOOR_INTERACT_RADIUS -- gaze picks the target, proximity still
+			// gates whether it's actually reachable, so staring down a long
+			// hallway at a far door doesn't light it up early. Toggle on E
+			// (edge-triggered, same pattern as jump), then ease every door's
+			// animated angle toward its target and push the result into both
+			// the render transform and its collider, so an open door is
+			// actually walkable and a closed one still blocks.
 			nearbyDoor = -1;
-			float bestDoorDist = DOOR_INTERACT_RADIUS;
-			for(int i = 0; i < (int)doors.size(); i++) {
-				float dx = camPos.x - doors[i].promptPos.x;
-				float dz = camPos.z - doors[i].promptPos.z;
-				float dist = std::sqrt(dx * dx + dz * dz);
-				if(dist < bestDoorDist) {
-					bestDoorDist = dist;
-					nearbyDoor = i;
+			{
+				int gazed = findGazedDoor(front);
+				if(gazed >= 0) {
+					float dx = camPos.x - doors[gazed].promptPos.x;
+					float dz = camPos.z - doors[gazed].promptPos.z;
+					float dist = std::sqrt(dx * dx + dz * dz);
+					if(dist < DOOR_INTERACT_RADIUS) {
+						nearbyDoor = gazed;
+					}
 				}
 			}
 
-			// Pickups: same edge-triggered E as the door, checked first so
-			// grabbing something wins if a pickup and a door both happen to
-			// be in range. 3D distance (not XZ-only like the door check),
-			// since a pickup can sit at table height above the feet.
+			// Pickups: same gaze-then-proximity check as the door, and same
+			// edge-triggered E. Checked independently of the door above; a
+			// pickup found here still wins over a door below via the E-key
+			// handling's own priority order, same as before.
 			nearbyPickup = -1;
-			float bestPickupDist = PICKUP_INTERACT_RADIUS;
-			for(int i = 0; i < (int)pickups.size(); i++) {
-				if(pickups[i].collected) continue;
-				float dx = camPos.x - pickups[i].worldPos.x;
-				float dy = camPos.y - pickups[i].worldPos.y;
-				float dz = camPos.z - pickups[i].worldPos.z;
-				float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-				if(dist < bestPickupDist) {
-					bestPickupDist = dist;
-					nearbyPickup = i;
+			{
+				int gazed = findGazedPickup(front);
+				if(gazed >= 0) {
+					const Pickup &p = pickups[gazed];
+					float dx = camPos.x - p.worldPos.x;
+					float dy = camPos.y - p.worldPos.y;
+					float dz = camPos.z - p.worldPos.z;
+					float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+					if(dist < PICKUP_INTERACT_RADIUS) {
+						nearbyPickup = gazed;
+					}
 				}
 			}
+
+			// Whichever single instance is currently targeted (pickup wins
+			// over door, same priority as the E-key handling below), for the
+			// per-instance focus glow -- see ubo.glow in updateUniformBuffer().
+			gazedInstance = nullptr;
+			if(nearbyPickup >= 0) gazedInstance = pickups[nearbyPickup].inst;
+			else if(nearbyDoor >= 0) gazedInstance = doors[nearbyDoor].inst;
 
 			bool interactKey = glfwGetKey(window, GLFW_KEY_E);
 			if(interactKey && !interactKeyWasPressed) {
