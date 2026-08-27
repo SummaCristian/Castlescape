@@ -1,0 +1,108 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "convert_assets.py"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "SM_Padlock_01",
+   "mesh": 0
+  }
+ ],
+ "meshes": [
+  {
+   "name": "SM_Padlock_01",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "mode": 4
+    }
+   ]
+  }
+ ],
+ "buffers": [
+  {
+   "uri": "SM_Padlock_01.bin",
+   "byteLength": 15008
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 4152,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 4152,
+   "byteLength": 4152,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 8304,
+   "byteLength": 2768,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 11072,
+   "byteLength": 3936,
+   "target": 34963
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 346,
+   "type": "VEC3",
+   "min": [
+    0.46000000834465027,
+    1.9411081075668335,
+    -1.4398919343948364
+   ],
+   "max": [
+    0.6399999856948853,
+    2.6050000190734863,
+    -1.0221080780029297
+   ]
+  },
+  {
+   "bufferView": 1,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 346,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 346,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 3,
+   "byteOffset": 0,
+   "componentType": 5125,
+   "count": 984,
+   "type": "SCALAR"
+  }
+ ]
+}

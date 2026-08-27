@@ -4,6 +4,7 @@
 #include <sstream>
 #include <limits>
 #include <array>
+#include <algorithm>
 
 #include <json.hpp>
 
@@ -672,10 +673,6 @@ class Skeleton26ReplaceName : public BaseProject {
 		// budge until the player is carrying a key pickup whose keyId matches
 		// (see Pickup::keyId and keyRing) -- matching by id rather than by
 		// "any key" so a two-key level can't be opened in the wrong order.
-		// The padlock MODEL isn't wired here on purpose: the lock is a state,
-		// not a mesh, so when the asset arrives it's one more instance
-		// registered next to the leaf and parked/hidden on unlock, and none of
-		// this logic changes.
 		std::string lockKeyId;
 		// Human-readable name for the locked prompt ("needs the <lockLabel>").
 		// Defaults to lockKeyId in addDoor() when not given.
@@ -686,6 +683,14 @@ class Skeleton26ReplaceName : public BaseProject {
 		// one-shot, so a door that has been unlocked must never re-lock, or
 		// the key would be gone with the door shut behind it.
 		bool locked = false;
+		// The visible padlock: SM_DoorChains_01 and SM_Padlock_01 (tools/
+		// make_door_lock.py), or anything else registered with addLockProp().
+		// Both are modelled in the LEAF's own local frame, so their world
+		// matrix is just the leaf's -- which is why nothing here reads their
+		// authored transform, and why they'd swing with the door if a locked
+		// one ever could. Shown while locked, parked below the map the moment
+		// the key is spent: that's the whole "the padlock is off" effect.
+		std::vector<Instance *> lockProps;
 	};
 	std::vector<Door> doors;
 
@@ -2044,14 +2049,57 @@ class Skeleton26ReplaceName : public BaseProject {
 		// with no way through. Same leaf asset, same hinge geometry as the
 		// first door, so the same promptOffset/openAngleDeg apply unchanged.
 		addDoor("dlDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f);
-		addDoor("dlDoorPanel2", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f);
-		// To padlock one of these, add the key id (and optionally a label) --
-		// e.g. addDoor("dlDoorPanel", ..., 100.0f, "dungeon", "dungeon key").
-		// Left unlocked for now on purpose: "dungeon" is the ONLY key in the
-		// level right now and gameplay.json's exit already wants it, so a
-		// padlock here would eat it and strand the player at the exit. Lock a
-		// door once there's a second key instance in scene.json (or once
-		// exit.keyId names a different one).
+		// The one padlocked door in the level. The northern of the pair, i.e.
+		// the one the player walks straight into: they spawn at z = 29 facing
+		// +X and this leaf sits at z = 28.779, while its twin is seven units
+		// south. Which also means the lock costs them nothing if they'd rather
+		// not look for the key -- the other doorway is open, and a chained
+		// door with a way around it is the only kind that can't strand anyone.
+		//
+		// It takes "iron", dhKey: the key on the table in the starting hall,
+		// i.e. the FIRST one the player picks up, spent on the first lock they
+		// meet. Which door takes which key is not a free choice -- keys are
+		// one-shot, and handing this padlock the other key (dcKey, for the
+		// exit) meant walking up to a chained door holding a key that bounced
+		// off it. Correct by the rules, and indistinguishable from a bug: both
+		// keys are the same mesh, so nothing tells the player which is which
+		// until the prompt refuses. Locks want the key that is already in the
+		// player's hand when they arrive.
+		addDoor("dlDoorPanel2", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f, "iron", "iron key");
+		// Hangs a scene instance on a door as lock hardware. Separate from
+		// addDoor() rather than another argument on it because a door can
+		// carry several (the chains and the padlock are two models: the
+		// loader allows one texture per file, and they want different ones --
+		// door iron for the chains, the key's brass for the lock).
+		//
+		// Don't give these instances a "collider" in scene.json: the leaf
+		// already has one, and a prop's would stay behind under the map once
+		// the door is unlocked and the prop is parked there.
+		auto addLockProp = [&](const char *doorId, const char *propId) {
+			auto d = std::find_if(doors.begin(), doors.end(),
+								  [&](const Door &x) { return x.instanceId == doorId; });
+			auto it = SC.InstanceIds.find(propId);
+			if(d == doors.end() || it == SC.InstanceIds.end()) {
+				std::cout << "Lock prop '" << propId << "' or its door '" << doorId
+						  << "' not found, skipping\n";
+				return;
+			}
+			d->lockProps.push_back(SC.I[it->second]);
+		};
+		// Both instances carry the SAME translate/eulerAngles as the leaf in
+		// scene.json, which is all the placement they need: the models live in
+		// its local frame. Note the models are handed to the leaf they were
+		// generated FOR -- make_door_lock.py builds them against whichever
+		// face the player approaches from, so moving them to a door reached
+		// from the other side means regenerating, not re-instancing.
+		addLockProp("dlDoorPanel2", "dlDoorChains2");
+		addLockProp("dlDoorPanel2", "dlDoorPadlock2");
+
+		// The other two doors are left unlocked: with two keys in the level and
+		// two locks already claiming them (the cell door above, the exit), a
+		// third padlock would have nothing to open it. Adding one means adding
+		// a key instance for it too -- that pairing is the whole constraint,
+		// because a spent key never comes back.
 
 		// The watching skulls, one per torch (see scene.json "torchSkull"
 		// instances). One addWatchingSkull() call per skull, same reasoning as
@@ -2103,7 +2151,14 @@ class Skeleton26ReplaceName : public BaseProject {
 			p.worldScale = glm::length(glm::vec3(p.inst->Wm[0]));
 			pickups.push_back(p);
 		};
-		addPickup("dhKey", "dungeon");
+		// Two keys, spent in the order they're found, each on the lock that
+		// comes next: the iron key on the hall table opens the chained door at
+		// the antechamber's far end, the gate key on the antechamber barrel
+		// opens the way out (gameplay.json). Both are the same mesh -- the
+		// level has one key model -- so nothing but that order tells them
+		// apart, which is why the order is the design and not an accident.
+		addPickup("dhKey", "iron");
+		addPickup("dcKey", "gate");
 
 		// The player's spawn pose, captured before anything can move it. See
 		// spawnPos's declaration: this is what restartRun() puts them back to.
@@ -4597,6 +4652,17 @@ class Skeleton26ReplaceName : public BaseProject {
 				d.inst->Wm = d.baseWm * glm::rotate(glm::mat4(1.0f), glm::radians(d.angle), glm::vec3(0.0f, 1.0f, 0.0f));
 				if(d.inst->C != nullptr) {
 					d.inst->C->setWorldMatrix(d.inst->Wm);
+				}
+
+				// Chains and padlock: the leaf's own matrix while the lock
+				// holds (they're modelled in its local frame, so that IS
+				// their pose), parked below the map once it doesn't. Driven
+				// from here every frame rather than only on the unlock press,
+				// so restartRun() re-locking a door brings them back with no
+				// extra bookkeeping.
+				for(Instance *prop : d.lockProps) {
+					prop->Wm = d.locked ? d.inst->Wm
+										: glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
 				}
 			}
 

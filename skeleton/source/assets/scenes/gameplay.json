@@ -51,15 +51,16 @@
 	// finally gives the key a job. Set it false to make the exit unconditional.
 	//
 	// keyId names WHICH key opens it, matching the id given to addPickup() in
-	// main.cpp ("dungeon" is dhKey's). Omit it (or leave it "") and any key on
-	// the ring will do -- fine while there's only one key in the level, but
-	// name it as soon as a door padlock wants a key too: keys are one-shot, so
-	// the exit must not accept a key the player is meant to spend elsewhere.
+	// main.cpp. "gate" is dcKey, on the barrel in the antechamber -- the SECOND
+	// key on the route, because the first one (dhKey, "iron", on the hall
+	// table) is spent on the chained door in between. Naming it matters now
+	// that there are two: keys are one-shot, and an exit that accepted any key
+	// would happily eat the one the padlock needs.
 	// Unlike a door lock, the exit does not consume what it checks.
 	"exit": {
 		"box": [21.0, -1.0, 20.0, 25.0, 5.0, 30.0],
 		"requiresKey": true,
-		"keyId": "dungeon"
+		"keyId": "gate"
 	},
 
 	// The ghosts. One entry per "ghost*" instance in scene.json.
