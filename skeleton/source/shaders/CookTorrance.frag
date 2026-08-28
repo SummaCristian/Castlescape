@@ -54,6 +54,12 @@ layout(binding = 0, set = 1) uniform UniformBufferObject {
     // means "no override", which is the default: only the models that need a
     // different share from the scene's carry one. See ambientShare() below.
     float ambientWeight;
+    // 1: shade this model as a METAL. Two things follow from it, both in
+    // main(): the diffuse term goes away entirely (k is forced to 0, a metal
+    // has no subsurface scattering to produce one), and the indirect term
+    // becomes metalAmbient() -- a reflection of the room -- instead of the
+    // hemisphere times the albedo. See Material::metallic in SceneMaterials.hpp.
+    int metallic;
 } ubo;
 
 layout(binding = 1, set = 1) uniform sampler2D albedoMap;
@@ -382,10 +388,61 @@ const float PI = 3.14159265359;
 // 1.80x darker than the walls it meets, and brown where they are cool. Only
 // the models that ask for it in materials.json; outdoors the real blend is
 // what puts the sky on the tower tops.
-vec3 hemisphericAmbient(vec3 N, vec3 mD) {
-    float w = (dot(N, gubo.ambientDir) + 1.0) / 2.0;   // dot is -1..1, w is 0..1
+//
+// Split in two: hemisphereColor() is the incoming indirect light along a
+// direction, with no surface in it at all, because the metals below need it
+// sampled along their REFLECTED direction rather than along the normal.
+// hemisphericAmbient() is that light landing on a diffuse surface, which is
+// what every dielectric in the scene wants and what this function used to be.
+vec3 hemisphereColor(vec3 dir) {
+    float w = (dot(dir, gubo.ambientDir) + 1.0) / 2.0;   // dot is -1..1, w is 0..1
     if(ubo.interiorAmbient == 1) w = 0.5;
-    return mix(gubo.ambientLower, gubo.ambientUpper, w) * mD;
+    return mix(gubo.ambientLower, gubo.ambientUpper, w);
+}
+
+vec3 hemisphericAmbient(vec3 N, vec3 mD) {
+    return hemisphereColor(N) * mD;
+}
+
+// The indirect term for a METAL, standing in for hemisphericAmbient() on the
+// models that set ubo.metallic.
+//
+// What a lock and a chain actually look like is mostly not their own colour:
+// a metal has no diffuse component to scatter light back with, so nearly
+// everything the eye gets off one is a REFLECTION of what is around it. The
+// diffuse ambient above cannot express that -- it hands the surface a colour
+// picked by where the surface FACES, times an albedo, which is the one thing a
+// metal does not do. Left on it, the chain came out very close to black
+// wherever no torch reached it directly (its UVs sample the door texture's
+// wrought-iron band, albedo ~0.03 linear, so mD kills the term outright) and
+// the padlock came out as flat orange fill, i.e. painted plastic.
+//
+// The scene has no environment map, so the hemisphere IS the environment here:
+// the same two colours lights.json authored, read along the mirror direction.
+// That is the cheapest honest form of the split-sum ambient specular (E07's
+// hemisphere in place of a prefiltered cube map); a real one needs a capture
+// pass the project does not have.
+vec3 metalAmbient(vec3 N, vec3 V, vec3 mS, float roughness, float F0) {
+    vec3 R = reflect(-V, N);
+
+    // A rough metal reflects a BLURRED room, not a sharp one, and with a
+    // two-colour hemisphere and no mip chain there is nothing to blur. The
+    // stand-in is to slide the sample direction from R (mirror) towards N
+    // (what a fully diffuse surface would use) as roughness grows: the two
+    // ends are exactly the two ends the real thing interpolates between.
+    vec3 D = normalize(mix(R, N, roughness));
+
+    // Schlick once more, but on N.V: there is no half vector here, since the
+    // "light" is the whole hemisphere rather than one direction. The ceiling
+    // is max(1 - roughness, F0) instead of the plain 1.0 the direct term uses
+    // -- a rough metal does not turn into a perfect mirror at the horizon, and
+    // letting it reach 1.0 puts a hard bright rim on exactly the pixels that
+    // outline a tube, which is the artefact the chains were already fighting.
+    float NdotV = clamp(dot(N, V), 0.0, 1.0);
+    float F = F0 + (max(1.0 - roughness, F0) - F0) * pow(1.0 - NdotV, 5.0);
+
+    // mS, not mD: for a metal the specular colour IS the material's colour.
+    return hemisphereColor(D) * mS * F;
 }
 
 // How much of this fragment's light is indirect, 0..1. Per-model if the
@@ -585,11 +642,26 @@ void main() {
         mD = vec3(1.0);
     }
 
+    // Both debug views want the specular gone, and the heatmap additionally
+    // wants nothing about the material in the result. Named once because the
+    // metal path below has to stand down for both of them: a "no specular"
+    // view of a surface whose whole response is specular has to show the
+    // diffuse fallback, not the metal.
+    bool specularOff = debugOn(LIGHT_DEBUG_NO_SPECULAR) || heatmap;
+    bool metal = ubo.metallic == 1 && !specularOff;
+
     // k is the diffuse share, so forcing it to 1 leaves the specular term
     // multiplied by 0: the highlights go, everything else stays exactly as it
     // was. Done here rather than inside BRDF so that function keeps taking all
     // its inputs as arguments.
-    float k = (debugOn(LIGHT_DEBUG_NO_SPECULAR) || heatmap) ? 1.0 : ubo.k;
+    //
+    // A metal goes the other way, to 0: the diffuse lobe comes from light that
+    // entered the surface and scattered back out, and in a conductor the free
+    // electrons absorb that instead of re-emitting it. Forced here rather than
+    // written as "k": 0.0 in materials.json so the flag carries the whole
+    // definition of "this is a metal" in one place, and so no metal entry can
+    // be left with a stray diffuse share by accident.
+    float k = specularOff ? 1.0 : (metal ? 0.0 : ubo.k);
 
     // Rendering equation: sum over the sources of radiance times BRDF, each
     // term zeroed by shadowFactor() wherever that one light doesn't reach
@@ -646,8 +718,15 @@ void main() {
     // how enclosed a surface is, which is what E17 does and what the assets
     // allow -- the MGCG pack ships albedo only, so the AO map E14/E15 sample
     // (aoMap, [TODO 5b]) has nothing to read. Baking one is the honest fix.
+    //
+    // The metals take the same share of the frame, spent on a reflection of
+    // the room instead of on a diffuse bounce -- see metalAmbient(). Same
+    // blend, same weight: what changes is only what the indirect light does
+    // once it lands.
     float aw = ambientShare();
-    vec3 color = Lo * (1.0 - aw) + hemisphericAmbient(N, mD) * aw;
+    vec3 ambient = metal ? metalAmbient(N, V, ubo.mS, ubo.roughness, ubo.F0)
+                         : hemisphericAmbient(N, mD);
+    vec3 color = Lo * (1.0 - aw) + ambient * aw;
 
     if(heatmap) {
         float intensity = dot(color, vec3(0.2126, 0.7152, 0.0722));

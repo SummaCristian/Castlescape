@@ -51,16 +51,20 @@
 	// finally gives the key a job. Set it false to make the exit unconditional.
 	//
 	// keyId names WHICH key opens it, matching the id given to addPickup() in
-	// main.cpp. "gate" is dcKey, on the barrel in the antechamber -- the SECOND
-	// key on the route, because the first one (dhKey, "iron", on the hall
-	// table) is spent on the chained door in between. Naming it matters now
-	// that there are two: keys are one-shot, and an exit that accepted any key
-	// would happily eat the one the padlock needs.
-	// Unlike a door lock, the exit does not consume what it checks.
+	// main.cpp. Both keys in the level are "iron" on purpose -- they are the
+	// same mesh, so no lock is allowed to prefer one over the other -- and so
+	// naming the id here says nothing more than "a key", it just says it
+	// explicitly rather than relying on the empty-string default.
+	// What gates the run is the count, not the id: two keys, two padlocked
+	// doors, and one key has to still be on the ring when the player gets
+	// here. Both padlocks are optional -- the one behind the spawn opens onto
+	// the outer wall, the one east of the antechamber has an unchained twin
+	// beside it -- so the budget works out, but only just. Unlike a door
+	// lock, the exit does not consume what it checks.
 	"exit": {
 		"box": [21.0, -1.0, 20.0, 25.0, 5.0, 30.0],
 		"requiresKey": true,
-		"keyId": "gate"
+		"keyId": "iron"
 	},
 
 	// The ghosts. One entry per "ghost*" instance in scene.json.

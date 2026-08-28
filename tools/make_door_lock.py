@@ -72,6 +72,13 @@ FACE_X = PANEL_X0        # faccia su cui si costruisce
 # quindi la loro x locale negativa guarda EST. Le porte di dl (x = -0.9) si
 # raggiungono da ovest, venendo dall'anticamera, e vogliono True; quella in
 # fondo alla sala iniziale (x = -36.9) si guarda da est e vuole False.
+#
+# In pratica serve UN solo export, quello con True: main.cpp sa girare le mesh
+# a runtime per l'altra faccia (addLockProp(..., flip=true), che applica una
+# rotazione di 180 gradi attorno alla verticale per (x medio spessore, z
+# mezzeria del vano)). Funziona perche' entrambi i pezzi sono simmetrici
+# rispetto a quella z. Se un pezzo futuro NON lo fosse, allora si', va
+# riesportato con la flag girata.
 FRONT_ON_PLUS_X = True
 DOOR_Z0, DOOR_Z1 = -2.462, 0.0
 DOOR_MID_Z = -1.231      # mezzeria del vano, la stessa che main.cpp usa per il prompt

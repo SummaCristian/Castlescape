@@ -63,8 +63,10 @@ struct UniformBufferObject {
 	//
 	// No explicit padding of ours: the scalars below fall into std140's vec4
 	// slots on their own, as [mS.xyz | roughness], [F0 | k | flatNormals |
-	// interiorAmbient], [time | ambientWeight | - | -]. The struct's 16-byte
-	// alignment rounds its size to those same 240 bytes, so C++ and GLSL agree.
+	// interiorAmbient], [time | ambientWeight | metallic | -]. The struct's
+	// 16-byte alignment rounds its size to those same 240 bytes, so C++ and
+	// GLSL agree. `metallic` was added into the third slot's spare room, which
+	// is why the size did not move when it appeared.
 	alignas(16) glm::vec3 mS;	// specular color
 	float roughness;			// rho: width of the microfacet distribution
 	float F0;					// reflectance seen head-on
@@ -85,6 +87,10 @@ struct UniformBufferObject {
 	// means "inherit gubo.ambientWeight", and that is the common case: only
 	// the interior models carry one. See Material::ambientWeight.
 	float ambientWeight;
+	// 1: shade this model as a metal -- no diffuse lobe, and an indirect term
+	// that reflects the room instead of scattering it. See Material::metallic
+	// in SceneMaterials.hpp and metalAmbient() in CookTorrance.frag.
+	int metallic;
 };
 
 // Everything that's the same for every object drawn this frame. Split from the
@@ -554,14 +560,8 @@ class Skeleton26ReplaceName : public BaseProject {
 	// Debug/cheat toggles, isolated in a utility struct.
 	// Not persisted across runs, reset to default values on launch.
 	struct CheatFlags {
-		// Global gravity
-		bool gravityEnabled = true;
 		// True: collisions (ground included), False: no-clip cheat
 		bool collisionEnabled = true;
-		// Jump flag
-		bool jumpEnabled = true;
-		// Sprint flag
-		bool sprintEnabled = true;
 		// Debug overlay: continuously prints the camera's world-space
 		// position/yaw in the bottom-right corner, meant as a live readout
 		// for hand-placing scene.json objects (see notes.md). Unlike the
@@ -577,14 +577,36 @@ class Skeleton26ReplaceName : public BaseProject {
 		// it's over the moment it starts working.
 		bool ghostsCanCatch = true;
 
+		// The two flame switches, read by flameLit() -- which is what every
+		// path that can show a flame goes through: its point light, its
+		// billboard, its shadow-slot candidacy and its stare-at glare.
+		//
+		// They live HERE and not in SceneLights next to directEnabled/
+		// spotEnabled because the flames never go through lights.json at all:
+		// every torch light in this scene is appended straight into gubo from
+		// updateUniformBuffer(), off the flame's own per-frame position (see
+		// the "Torch flames' point lights" block there and lights.json's note
+		// on why the static copies were removed). A switch in SceneLights
+		// could only drop lights SceneLights owns, which is why the old
+		// "Lanterns" row -- pointing at pointEnabled -- did nothing.
+		//
+		// Torches means the wall-mounted ones lighting the rooms; the candles
+		// are a separate, much dimmer set of flames and stay lit. Both default
+		// on, matching the authored scene.
+		bool roomTorchesEnabled = true;
+		// The torch in the player's hand: off hides the model too, not just
+		// its flame and light, since a dark stick in front of the camera is
+		// not what "no torch in hand" is meant to look like.
+		bool handTorchEnabled = true;
+
 		// Lighting debug views, all resolved into gubo.debugFlags in
 		// updateUniformBuffer() and read by CookTorrance.frag. Same convention
 		// as showCoordinates: these have no "legit" state to preserve, so each
 		// one defaults to whatever leaves the picture as authored.
 		//
-		// The switches for the light SOURCES (sun, lanterns, spot, ambient,
-		// sun orbit) aren't here: they live in SceneLights, next to the lights
-		// they drop, and the HUD points straight at them.
+		// The switches for the remaining light SOURCES (sun, spot, ambient)
+		// aren't here: they live in SceneLights, next to the lights they drop,
+		// and the HUD points straight at them.
 
 		// Albedo only, nothing lit. Separates "this texture is dark" from
 		// "no light is reaching this".
@@ -686,11 +708,20 @@ class Skeleton26ReplaceName : public BaseProject {
 		// The visible padlock: SM_DoorChains_01 and SM_Padlock_01 (tools/
 		// make_door_lock.py), or anything else registered with addLockProp().
 		// Both are modelled in the LEAF's own local frame, so their world
-		// matrix is just the leaf's -- which is why nothing here reads their
-		// authored transform, and why they'd swing with the door if a locked
-		// one ever could. Shown while locked, parked below the map the moment
-		// the key is spent: that's the whole "the padlock is off" effect.
-		std::vector<Instance *> lockProps;
+		// matrix is the leaf's times `local` below -- which is why nothing
+		// here reads their authored transform, and why they'd swing with the
+		// door if a locked one ever could. Shown while locked, parked below
+		// the map the moment the key is spent: that's the whole "the padlock
+		// is off" effect.
+		struct LockProp {
+			Instance *inst;
+			// Extra transform in the leaf's local frame. Identity for a door
+			// approached from the side the models were built for; the half
+			// turn below (see addLockProp's `flip`) for one approached from
+			// the other.
+			glm::mat4 local;
+		};
+		std::vector<LockProp> lockProps;
 	};
 	std::vector<Door> doors;
 
@@ -999,6 +1030,18 @@ class Skeleton26ReplaceName : public BaseProject {
 		glm::vec2 lean = glm::vec2(0.0f);
 	};
 	std::vector<TorchFlame> torchFlames;
+
+	// Is this flame currently burning at all? The single question the two
+	// flame cheats (CheatFlags::roomTorchesEnabled/handTorchEnabled) are asked
+	// through, so every consequence of a flame -- its point light, its
+	// billboard, its shadow-slot candidacy, its stare-at glare -- switches off
+	// together instead of each site testing a different flag and drifting.
+	// Candles answer true unconditionally: neither row claims them.
+	bool flameLit(const TorchFlame &tf) const {
+		if(tf.heldByCamera) return cheats.handTorchEnabled;
+		if(tf.isCandle)     return true;
+		return cheats.roomTorchesEnabled;
+	}
 
 	// Global glare level, 0..1: the max over every wall torch's own stare-at
 	// factor, smoothed asymmetrically (GLARE_TAU_RISE/FALL). Feeds the post
@@ -2041,7 +2084,17 @@ class Skeleton26ReplaceName : public BaseProject {
 			d.locked = !d.lockKeyId.empty();
 			doors.push_back(d);
 		};
-		addDoor("dhDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f);
+		// The door at the player's back. They spawn at x = -33.5 facing +X and
+		// this leaf sits at x = -36.883 in the hall's west wall, so it is the
+		// first thing they see if they turn around and the only lock they can
+		// meet before finding anything -- which is exactly why the chains go
+		// here: a padlock teaches what a padlock is far better where the
+		// player has no key yet and cannot try it.
+		//
+		// The models were built for the dl doors, which are approached from
+		// the other side; the `true` on its addLockProp lines below is what
+		// turns them round. See there.
+		addDoor("dhDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f, "iron", "iron key");
 		// Second and third doors, gating the two new rooms (dl, dv) added east
 		// of the antechamber. The full dc/dl boundary is two tiles wide, so it
 		// took two hole-wall + leaf pairs, not one wall tile left solid next
@@ -2049,22 +2102,19 @@ class Skeleton26ReplaceName : public BaseProject {
 		// with no way through. Same leaf asset, same hinge geometry as the
 		// first door, so the same promptOffset/openAngleDeg apply unchanged.
 		addDoor("dlDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f);
-		// The one padlocked door in the level. The northern of the pair, i.e.
+		// The other padlocked door. The northern of the pair, i.e.
 		// the one the player walks straight into: they spawn at z = 29 facing
 		// +X and this leaf sits at z = 28.779, while its twin is seven units
 		// south. Which also means the lock costs them nothing if they'd rather
 		// not look for the key -- the other doorway is open, and a chained
 		// door with a way around it is the only kind that can't strand anyone.
 		//
-		// It takes "iron", dhKey: the key on the table in the starting hall,
-		// i.e. the FIRST one the player picks up, spent on the first lock they
-		// meet. Which door takes which key is not a free choice -- keys are
-		// one-shot, and handing this padlock the other key (dcKey, for the
-		// exit) meant walking up to a chained door holding a key that bounced
-		// off it. Correct by the rules, and indistinguishable from a bug: both
-		// keys are the same mesh, so nothing tells the player which is which
-		// until the prompt refuses. Locks want the key that is already in the
-		// player's hand when they arrive.
+		// It takes "iron" like the hall door, and so do both pickups -- keys
+		// in this level are interchangeable, which is the only honest rule
+		// when both of them are the same mesh: nothing on screen could tell
+		// the player which padlock wanted which, so no padlock is allowed to
+		// care. What stays scarce is the COUNT: two keys, two chained doors
+		// and the exit, and only the exit gives its key back.
 		addDoor("dlDoorPanel2", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f, "iron", "iron key");
 		// Hangs a scene instance on a door as lock hardware. Separate from
 		// addDoor() rather than another argument on it because a door can
@@ -2075,7 +2125,21 @@ class Skeleton26ReplaceName : public BaseProject {
 		// Don't give these instances a "collider" in scene.json: the leaf
 		// already has one, and a prop's would stay behind under the map once
 		// the door is unlocked and the prop is parked there.
-		auto addLockProp = [&](const char *doorId, const char *propId) {
+		//
+		// `flip` puts the hardware on the leaf's OTHER face. make_door_lock.py
+		// builds chains and padlock against one face only (its FRONT_ON_PLUS_X),
+		// so a door the player walks up to from the opposite side would show
+		// them the bare leaf with the lock hidden behind it. A half turn about
+		// the leaf's local vertical axis through the middle of its thickness
+		// (x = (-0.037 + 0.430)/2) and the middle of the doorway (z = -1.231,
+		// the same mid-plane promptOffset uses) lands the pieces on the far
+		// face, and because both models are built symmetric about that same
+		// z -- the padlock sits on it, the chain plates straddle it -- the
+		// turned copy is the mirror image the script would have exported with
+		// the flag the other way. A rotation and not an actual mirror matrix
+		// on purpose: mirroring flips the winding, and the whole piece would
+		// turn inside out under backface culling.
+		auto addLockProp = [&](const char *doorId, const char *propId, bool flip = false) {
 			auto d = std::find_if(doors.begin(), doors.end(),
 								  [&](const Door &x) { return x.instanceId == doorId; });
 			auto it = SC.InstanceIds.find(propId);
@@ -2084,22 +2148,32 @@ class Skeleton26ReplaceName : public BaseProject {
 						  << "' not found, skipping\n";
 				return;
 			}
-			d->lockProps.push_back(SC.I[it->second]);
+			const glm::vec3 pivot = glm::vec3(0.1965f, 0.0f, -1.231f);
+			glm::mat4 local(1.0f);
+			if(flip) {
+				local = glm::translate(glm::mat4(1.0f), pivot)
+					  * glm::rotate(glm::mat4(1.0f), glm::radians(180.0f), glm::vec3(0.0f, 1.0f, 0.0f))
+					  * glm::translate(glm::mat4(1.0f), -pivot);
+			}
+			d->lockProps.push_back({SC.I[it->second], local});
 		};
 		// Both instances carry the SAME translate/eulerAngles as the leaf in
 		// scene.json, which is all the placement they need: the models live in
-		// its local frame. Note the models are handed to the leaf they were
-		// generated FOR -- make_door_lock.py builds them against whichever
-		// face the player approaches from, so moving them to a door reached
-		// from the other side means regenerating, not re-instancing.
+		// its local frame.
 		addLockProp("dlDoorPanel2", "dlDoorChains2");
 		addLockProp("dlDoorPanel2", "dlDoorPadlock2");
+		// The hall door's set, flipped: the dl leaves are reached from the
+		// west and this one from the east, and all three carry the same
+		// eulerAngles, so the models as exported would hang on the side the
+		// player never stands on.
+		addLockProp("dhDoorPanel", "dhDoorChains", true);
+		addLockProp("dhDoorPanel", "dhDoorPadlock", true);
 
-		// The other two doors are left unlocked: with two keys in the level and
-		// two locks already claiming them (the cell door above, the exit), a
-		// third padlock would have nothing to open it. Adding one means adding
-		// a key instance for it too -- that pairing is the whole constraint,
-		// because a spent key never comes back.
+		// dlDoorPanel, the southern leaf of the pair, is left unlocked on
+		// purpose: it is the way around its chained twin. Two keys exist, both
+		// are consumed on use and the exit needs one still on the ring, so
+		// exactly one of the two padlocks can be paid for -- leaving the pair
+		// half open is what keeps that from being a trap.
 
 		// The watching skulls, one per torch (see scene.json "torchSkull"
 		// instances). One addWatchingSkull() call per skull, same reasoning as
@@ -2151,14 +2225,17 @@ class Skeleton26ReplaceName : public BaseProject {
 			p.worldScale = glm::length(glm::vec3(p.inst->Wm[0]));
 			pickups.push_back(p);
 		};
-		// Two keys, spent in the order they're found, each on the lock that
-		// comes next: the iron key on the hall table opens the chained door at
-		// the antechamber's far end, the gate key on the antechamber barrel
-		// opens the way out (gameplay.json). Both are the same mesh -- the
-		// level has one key model -- so nothing but that order tells them
-		// apart, which is why the order is the design and not an accident.
+		// Two keys, and deliberately the SAME id: both are the one key mesh in
+		// the level, so a lock that accepted one and refused the other would
+		// read as a bug no matter how correct the rule was. Sharing an id is
+		// what keyRing is built for (see its declaration) -- the ring stores
+		// instances, not ids, so two "iron" keys are still two distinct
+		// objects to pick up, drop and spend.
+		// The scarcity is therefore arithmetic, not matching: two keys for
+		// the two chained doors plus the exit, and only the exit hands its
+		// key back.
 		addPickup("dhKey", "iron");
-		addPickup("dcKey", "gate");
+		addPickup("dcKey", "iron");
 
 		// The player's spawn pose, captured before anything can move it. See
 		// spawnPos's declaration: this is what restartRun() puts them back to.
@@ -2495,10 +2572,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		// Wires the cheat HUD to the actual cheat flags, so toggling a row
 		// in the menu flips the exact same bools GameLogic() reads.
 		hud.init(&txt, &uiQuad);
-		hud.addToggle("Gravity", &cheats.gravityEnabled);
 		hud.addToggle("Collision", &cheats.collisionEnabled);
-		hud.addToggle("Jump", &cheats.jumpEnabled);
-		hud.addToggle("Sprint", &cheats.sprintEnabled);
 		hud.addToggle("Show Coordinates", &cheats.showCoordinates);
 
 		// Gameplay rows. "Hunt" forces the cycle into its hunt phase and holds
@@ -2510,16 +2584,19 @@ class Skeleton26ReplaceName : public BaseProject {
 
 		// Lighting rows. Listed after the movement ones and in the order you'd
 		// use them: first which sources are on, then how they're being shaded.
-		// The first five point straight into sceneLights, which owns them (see
-		// SceneLights.hpp); the rest into cheats, which become gubo.debugFlags.
+		// "Sun"/"Spotlight"/"Ambient Light" point straight into sceneLights,
+		// which owns those lights (see SceneLights.hpp); "Torches"/"Holding
+		// Torch" into cheats, because the flames' point lights never go
+		// through SceneLights at all (see CheatFlags and flameLit()); the rest
+		// into cheats too, where they become gubo.debugFlags.
 		hud.addToggle("Sun", &sceneLights.directEnabled);
-		hud.addToggle("Lanterns", &sceneLights.pointEnabled);
+		hud.addToggle("Torches", &cheats.roomTorchesEnabled);
+		hud.addToggle("Holding Torch", &cheats.handTorchEnabled);
 		hud.addToggle("Spotlight", &sceneLights.spotEnabled);
 		hud.addToggle("Ambient Light", &sceneLights.ambientEnabled);
-		hud.addToggle("Sun Orbit", &sceneLights.orbitOverride);
 		hud.addToggle("Shadows", &cheats.shadowsEnabled);
-	hud.addToggle("Torch Shadows", &cheats.torchShadowsEnabled);
-	hud.addToggle("Candle Shadows", &cheats.candleShadowsEnabled);
+		hud.addToggle("Torch Shadows", &cheats.torchShadowsEnabled);
+		hud.addToggle("Candle Shadows", &cheats.candleShadowsEnabled);
 		hud.addToggle("Specular", &cheats.specularEnabled);
 		hud.addToggle("Tone Mapping", &cheats.toneMapEnabled);
 		hud.addToggle("Fullbright", &cheats.unlit);
@@ -2688,7 +2765,12 @@ class Skeleton26ReplaceName : public BaseProject {
 		// slot it already held gets freed here so switching a category off
 		// mid-game drops its shadow within this reassignment tick instead of
 		// waiting for something else to outbid it.
+		// A flame switched off entirely (the "Torches" row) is dropped by the
+		// same path rather than by a second one: it casts nothing because it
+		// isn't burning, and holding a cube slot for it would keep a shadow
+		// rendering for a light that no longer reaches gubo.
 		auto categoryEnabled = [&](const TorchFlame &tf) {
+			if(!flameLit(tf)) return false;
 			return tf.isCandle ? cheats.candleShadowsEnabled : cheats.torchShadowsEnabled;
 		};
 		for(int s = base; s < base + count; s++) {
@@ -3433,6 +3515,18 @@ class Skeleton26ReplaceName : public BaseProject {
 			// just the smoothed velocity negated. Only the horizontal part --
 			// riding a lift up or down doesn't bend a flame sideways.
 			glm::vec3 pos = glm::vec3(tf.inst->Wm * glm::vec4(tf.anchor, 1.0f));
+			// A flame that's currently switched off drops its velocity history
+			// instead of differencing against it. The held torch is parked
+			// 1000 units below the map while off (see GameLogic), so both the
+			// frame it goes away and the frame it comes back would otherwise
+			// read as an enormous velocity and bring the flame back folded
+			// over at its lean cap.
+			if(!flameLit(tf)) {
+				tf.velPrimed = false;
+				tf.smoothedVel = glm::vec3(0.0f);
+				tf.lean = glm::vec2(0.0f);
+				continue;
+			}
 			if(!tf.velPrimed) {
 				// First frame: no previous position to difference against, and
 				// the instance may still be sitting at its scene.json
@@ -3507,6 +3601,12 @@ class Skeleton26ReplaceName : public BaseProject {
 			nearest.reserve(torchFlames.size());
 			const float cullSq = TORCH_LIGHT_CULL_DIST * TORCH_LIGHT_CULL_DIST;
 			for(const TorchFlame &tf : torchFlames) {
+				// Switched-off flames never even enter the contest: not culled
+				// late, just absent, so they can't take a live slot from a
+				// torch that IS burning either.
+				if(!flameLit(tf)) {
+					continue;
+				}
 				glm::vec3 worldPos = glm::vec3(tf.inst->Wm * glm::vec4(tf.anchor, 1.0f));
 				glm::vec3 d = worldPos - eyePos;
 				float dSq = glm::dot(d, d);
@@ -3615,7 +3715,10 @@ class Skeleton26ReplaceName : public BaseProject {
 			float glareTarget = 0.0f;
 			for(TorchFlame &tf : torchFlames) {
 				float tfTarget = 0.0f;
-				if(!tf.heldByCamera) {
+				// An extinguished torch doesn't dazzle: without flameLit()
+				// here the exposure/bloom would still ramp up when the player
+				// stares at a torch that is no longer drawn at all.
+				if(!tf.heldByCamera && flameLit(tf)) {
 					glm::vec3 fpos = glm::vec3(tf.inst->Wm * glm::vec4(tf.anchor, 1.0f));
 					glm::vec3 to = fpos - eyePos;
 					float dist = glm::length(to);
@@ -3729,8 +3832,16 @@ class Skeleton26ReplaceName : public BaseProject {
 			// the scale factor, with no need to fully decompose Wm.
 			float instScale = glm::length(glm::vec3(tf.inst->Wm[0]));
 
-			float halfWidth = FLAME_HALF_WIDTH * instScale * tf.sizeScale;
-			float height = FLAME_HEIGHT * instScale * tf.sizeScale;
+			// A flame switched off by the cheat menu is collapsed to a point
+			// rather than skipped: Flame's per-flame descriptor set is
+			// recorded once into the command buffer and replayed every frame,
+			// so there is no "don't draw this one" to take here. Zero-sized
+			// basis columns put all three cards' vertices on the anchor, i.e.
+			// zero-area triangles the rasterizer produces no fragments for --
+			// well-defined, unlike leaving w degenerate.
+			float sizeScale = flameLit(tf) ? tf.sizeScale : 0.0f;
+			float halfWidth = FLAME_HALF_WIDTH * instScale * sizeScale;
+			float height = FLAME_HEIGHT * instScale * sizeScale;
 
 			const glm::vec3 &right = tf.heldByCamera ? handBbRight : bbRight;
 			const glm::vec3 &up    = tf.heldByCamera ? handBbUp    : bbUp;
@@ -3838,6 +3949,7 @@ class Skeleton26ReplaceName : public BaseProject {
 				ubo.flatNormals = m.flatNormals;
 				ubo.interiorAmbient = m.interiorAmbient;
 				ubo.ambientWeight = m.ambientWeight;
+				ubo.metallic = m.metallic;
 				ubo.time = simTime;
 
 				Instance &inst = SC.TI[techniqueId].I[instanceId];
@@ -4421,13 +4533,12 @@ class Skeleton26ReplaceName : public BaseProject {
 		// the same reason: the last frame the player saw is the one they should
 		// keep looking at while deciding whether to restart.
 		if(!hud.isOpen() && runState == RunState::Running) {
-			// Sprint: Ctrl multiplies movement speed, gated behind sprintEnabled like
-			// the other cheats/debug toggles. Polled directly (not through getSixAxis/
-			// "fire") since Starter.hpp doesn't wire Ctrl to anything.
+			// Sprint: Ctrl multiplies movement speed. Polled directly (not through
+			// getSixAxis/"fire") since Starter.hpp doesn't wire Ctrl to anything.
 			// Can only be started while grounded (no starting a sprint mid-jump), but
 			// releasing Ctrl always stops it right away, air or not.
 			bool ctrlHeld = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) || glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL);
-			if(!cheats.sprintEnabled || !ctrlHeld) {
+			if(!ctrlHeld) {
 				sprinting = false;
 			} else if(grounded) {
 				sprinting = true;
@@ -4514,17 +4625,13 @@ class Skeleton26ReplaceName : public BaseProject {
 			// Jump: spacebar (wired to "fire" in Starter.hpp) gives the camera an upward
 			// velocity impulse. Edge-triggered (only on the frame the key goes down) and
 			// only while grounded (refreshed each frame by the floor collision check
-			// below). Gated behind jumpEnabled like the other cheats/debug toggles.
-			// If gravity is off, the impulse gets reset straight back to 0 below, so
-			// jumping naturally has no effect without gravity to bring us back down.
-			if(cheats.jumpEnabled) {
-				if(fire && !jumpKeyWasPressed && grounded) {
-					camVerticalVelocity = movement.jumpSpeed;
-					// Drop any leftover step smoothing: jumping right after
-					// stepping up would otherwise start the jump from a view
-					// still trailing below the real eye height.
-					eyeStepOffset = 0.0f;
-				}
+			// below).
+			if(fire && !jumpKeyWasPressed && grounded) {
+				camVerticalVelocity = movement.jumpSpeed;
+				// Drop any leftover step smoothing: jumping right after
+				// stepping up would otherwise start the jump from a view
+				// still trailing below the real eye height.
+				eyeStepOffset = 0.0f;
 			}
 			jumpKeyWasPressed = fire;
 
@@ -4656,13 +4763,14 @@ class Skeleton26ReplaceName : public BaseProject {
 
 				// Chains and padlock: the leaf's own matrix while the lock
 				// holds (they're modelled in its local frame, so that IS
-				// their pose), parked below the map once it doesn't. Driven
+				// their pose, bar the half turn a flipped set carries),
+				// parked below the map once it doesn't. Driven
 				// from here every frame rather than only on the unlock press,
 				// so restartRun() re-locking a door brings them back with no
 				// extra bookkeeping.
-				for(Instance *prop : d.lockProps) {
-					prop->Wm = d.locked ? d.inst->Wm
-										: glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
+				for(const Door::LockProp &prop : d.lockProps) {
+					prop.inst->Wm = d.locked ? d.inst->Wm * prop.local
+											 : glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
 				}
 			}
 
@@ -4934,14 +5042,8 @@ class Skeleton26ReplaceName : public BaseProject {
 			// Gravity: constant downward acceleration, integrated into a vertical
 			// velocity each frame. Resolved against the ground below (collision
 			// block right after this), which zeroes the velocity out on landing.
-			if(cheats.gravityEnabled) {
-				camVerticalVelocity += movement.gravity * deltaT;
-				camPos.y += camVerticalVelocity * deltaT;
-			} else {
-				// Don't let velocity build up while gravity's off, so re-enabling
-				// it later doesn't suddenly slam the camera down/up
-				camVerticalVelocity = 0.0f;
-			}
+			camVerticalVelocity += movement.gravity * deltaT;
+			camPos.y += camVerticalVelocity * deltaT;
 
 			// (Floor) Collision detection.
 			// Wired-in using Scene.hpp and Colliders.hpp.
@@ -5061,7 +5163,14 @@ class Skeleton26ReplaceName : public BaseProject {
 		}
 
 		// Held torch: sits at a fixed offset from the eye, in that camera-local space.
-		if(handTorchInst != nullptr) {
+		// With the "Holding Torch" cheat off it's parked below the map instead,
+		// which is how everything else here hides a mesh (see consumeKey():
+		// Starter draws every instance every frame, there's no per-instance
+		// visibility flag). Its flame and light are dropped separately, through
+		// flameLit().
+		if(handTorchInst != nullptr && !cheats.handTorchEnabled) {
+			handTorchInst->Wm = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
+		} else if(handTorchInst != nullptr) {
 			float bobLateral = sinf(walkBobPhase) * WALK_BOB_LATERAL * walkBobBlend;
 			float bobVertical = sinf(walkBobPhase * 2.0f) * WALK_BOB_VERTICAL * walkBobBlend;
 			float bobRollDeg = bobLateral * 90.0f;
