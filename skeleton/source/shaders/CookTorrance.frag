@@ -58,6 +58,12 @@ layout(binding = 0, set = 1) uniform UniformBufferObject {
     // updateUniformBuffer() when it's the object the crosshair is aimed at.
     // See its use near the end of main() below.
     float glow;
+    // 1: shade this model as a METAL. Two things follow from it, both in
+    // main(): the diffuse term goes away entirely (k is forced to 0, a metal
+    // has no subsurface scattering to produce one), and the indirect term
+    // becomes metalAmbient() -- a reflection of the room -- instead of the
+    // hemisphere times the albedo. See Material::metallic in SceneMaterials.hpp.
+    int metallic;
 } ubo;
 
 layout(binding = 1, set = 1) uniform sampler2D albedoMap;
@@ -279,10 +285,80 @@ float shadowFromMap2D(int idx, vec3 pos, float bias) {
 // could tip the result either way -- which is exactly the "suddenly not
 // lit" pop reported. This version has a flat lit==1.0 plateau for every
 // occluderGap <= bias, matching the hard test's own unoccluded case.
-float shadowFromCube(int idx, vec3 pos, vec3 lightPos, float bias, float softEdge) {
-    vec3 toFrag = pos - lightPos;
+//
+// The bias is computed HERE rather than handed in, because the only honest
+// way to size it needs `dist`, which only this function has. It used to be a
+// pair of world-space constants interpolated by grazing angle (0.03 head-on to
+// 0.35 edge-on, with a matching 0.15..0.6 ramp), and that number was far too
+// large for what a bias is actually for: a door panel sits ~0.6 units in front
+// of the chains bolted to it, so a torch on the far side of a CLOSED door
+// still lit them through it wherever the surface faced the light obliquely --
+// which on a round chain link is most of what you see, and on a metal (no
+// diffuse term, all specular) it reads as the torch's colour smeared over the
+// links. The oversized bias was itself compensating for the bilinear cube
+// sampler, see createCubeShadowMaps(); with NEAREST filtering the bias only
+// has to cover the error that is genuinely there:
+//
+//   one texel of a cube face covers 2*dist/SHADOW_CUBE_RES of world space at
+//   distance dist (a face spans 90 degrees, so its width at dist is 2*dist),
+//
+//   and across that texel the recorded surface's own distance varies by that
+//   width times the slope of the surface as seen from the light, i.e. tan of
+//   the incidence angle -- which is what makes a grazing surface need more
+//   slack than a head-on one, the effect the old constants were reaching for
+//   but expressed in the units it actually happens in.
+//
+// That error, though, must NOT be paid for out of the depth bias, which is
+// the mistake the first attempt at this repeated in smaller units. Whatever
+// the bias is, it is a distance a real occluder is allowed to sit in front of
+// a surface without stopping the light -- so the moment it approaches the
+// ~0.65 units between a chain link and the far face of the door leaf it hangs
+// on, the door stops being a door. It grows with distance (the texel does),
+// the gap doesn't, so no cap on it is both large enough to cover a far wall
+// and small enough to respect a near door: at the chains' 5 units the first
+// version held, at the blue and purple torches' 10 and 12 it hit its cap and
+// let them through, which is exactly the two colours that survived.
+//
+// NORMAL OFFSET instead, which spends the same quantity in a direction where
+// it costs nothing: the lookup is moved along the surface's own normal,
+// off the surface and towards the light side, so it lands in a texel whose
+// recorded distance actually belongs to this surface rather than to the
+// stretch of it half a texel away. The depth threshold stays small and
+// distance-independent, so a door thickness always beats it.
+//
+// The offset is capped well under any real occluder gap in this scene, for
+// the same reason the bias is: pushed far enough along the normal the sample
+// point would eventually cross an occluder standing right in front of the
+// surface, which is the leak again by another route.
+float shadowFromCube(int idx, vec3 pos, vec3 N, vec3 lightPos, float NdotL) {
+    // Depth slack: a couple of texels' worth, floored so a surface right next
+    // to the light still gets some, capped far below the door-leaf gap.
+    const float CUBE_BIAS_MIN = 0.02;
+    const float CUBE_BIAS_MAX = 0.06;
+    const float CUBE_SOFT_MIN = 0.08;
+    const float NORMAL_OFFSET_MAX = 0.12;
+
+    float rawDist = length(pos - lightPos);
+    float texelWorld = 2.0 * rawDist / float(SHADOW_CUBE_RES);
+
+    // tan of the incidence angle, floored before the division: it goes to
+    // infinity at exactly 90 degrees, and a fragment that close to edge-on
+    // receives almost nothing from this light anyway (the BRDF's own NdotL
+    // factor), so there is nothing to protect there.
+    float cosI = max(NdotL, 0.15);
+    float slope = sqrt(1.0 - cosI * cosI) / cosI;
+
+    float offset = min(texelWorld * (1.0 + 2.0 * slope), NORMAL_OFFSET_MAX);
+    vec3 samplePos = pos + N * offset;
+
+    vec3 toFrag = samplePos - lightPos;
     float dist = length(toFrag);
     float closestDist = sampleShadowCube(idx, toFrag);
+
+    float bias = clamp(2.0 * texelWorld, CUBE_BIAS_MIN, CUBE_BIAS_MAX);
+    // The softening band (see the header above) scales with the bias for the
+    // same reason the bias scales: it absorbs the same uncertainty.
+    float softEdge = max(2.0 * bias, CUBE_SOFT_MIN);
 
     float occluderGap = dist - closestDist;
     return 1.0 - clamp((occluderGap - bias) / softEdge, 0.0, 1.0);
@@ -293,8 +369,9 @@ float shadowFromCube(int idx, vec3 pos, vec3 lightPos, float bias, float softEdg
 // the lookup and lights unconditionally, which is why a light without a slot
 // leaks through every wall it reaches.
 //
-// NdotL is only used to pick the 2D-map bias, see below.
-float shadowFactor(int shadowIndex, int type, vec3 pos, vec3 lightPos, float NdotL) {
+// NdotL picks the 2D-map bias below; on the cube path it also scales the
+// normal offset, which is why N has to come along too.
+float shadowFactor(int shadowIndex, int type, vec3 pos, vec3 N, vec3 lightPos, float NdotL) {
     // Shadows off (cheat menu): light everything as if no map existed. Reads
     // gubo.debugFlags directly rather than through debugOn(), which is
     // declared further down the file.
@@ -303,28 +380,11 @@ float shadowFactor(int shadowIndex, int type, vec3 pos, vec3 lightPos, float Ndo
     }
 
     if(type == LIGHT_POINT) {
-        // Slope-scaled, same reason the 2D path below does it: a flat bias
-        // was tuned for a surface facing roughly toward the light, but at a
-        // grazing angle -- exactly what you get brushing past a curved
-        // pillar at close range, held torch just centimetres from its
-        // surface -- one shadow-map texel covers a much larger stretch of
-        // that surface's true depth, so the stored "closest occluder"
-        // distance can be meaningfully off from any single fragment's real
-        // distance even with nothing actually occluding it. A flat 0.03 was
-        // nowhere near enough slack for that case: it read as a large,
-        // unstable black patch swimming across the pillar as the player
-        // walked past, not a fine-grained self-shadow flicker. Both the
-        // bias and the softening band widen together at grazing incidence,
-        // since the same growing depth-quantization error is what both are
-        // there to absorb.
-        const float CUBE_BIAS_MIN = 0.03;   // head-on
-        const float CUBE_BIAS_MAX = 0.35;   // edge-on
-        const float CUBE_SOFT_MIN = 0.15;
-        const float CUBE_SOFT_MAX = 0.6;
-        float grazing = clamp(1.0 - NdotL, 0.0, 1.0);
-        float bias = mix(CUBE_BIAS_MIN, CUBE_BIAS_MAX, grazing);
-        float softEdge = mix(CUBE_SOFT_MIN, CUBE_SOFT_MAX, grazing);
-        return shadowFromCube(shadowIndex, pos, lightPos, bias, softEdge);
+        // Bias, softening band and normal offset all live inside
+        // shadowFromCube() now: they are derived from the distance to the
+        // light, which is the one thing this function doesn't have and that
+        // one computes anyway. N and NdotL are what scale them, see there.
+        return shadowFromCube(shadowIndex, pos, N, lightPos, NdotL);
     }
 
     // The bias is per PROJECTION KIND, because one number cannot serve both.
@@ -386,10 +446,61 @@ const float PI = 3.14159265359;
 // 1.80x darker than the walls it meets, and brown where they are cool. Only
 // the models that ask for it in materials.json; outdoors the real blend is
 // what puts the sky on the tower tops.
-vec3 hemisphericAmbient(vec3 N, vec3 mD) {
-    float w = (dot(N, gubo.ambientDir) + 1.0) / 2.0;   // dot is -1..1, w is 0..1
+//
+// Split in two: hemisphereColor() is the incoming indirect light along a
+// direction, with no surface in it at all, because the metals below need it
+// sampled along their REFLECTED direction rather than along the normal.
+// hemisphericAmbient() is that light landing on a diffuse surface, which is
+// what every dielectric in the scene wants and what this function used to be.
+vec3 hemisphereColor(vec3 dir) {
+    float w = (dot(dir, gubo.ambientDir) + 1.0) / 2.0;   // dot is -1..1, w is 0..1
     if(ubo.interiorAmbient == 1) w = 0.5;
-    return mix(gubo.ambientLower, gubo.ambientUpper, w) * mD;
+    return mix(gubo.ambientLower, gubo.ambientUpper, w);
+}
+
+vec3 hemisphericAmbient(vec3 N, vec3 mD) {
+    return hemisphereColor(N) * mD;
+}
+
+// The indirect term for a METAL, standing in for hemisphericAmbient() on the
+// models that set ubo.metallic.
+//
+// What a lock and a chain actually look like is mostly not their own colour:
+// a metal has no diffuse component to scatter light back with, so nearly
+// everything the eye gets off one is a REFLECTION of what is around it. The
+// diffuse ambient above cannot express that -- it hands the surface a colour
+// picked by where the surface FACES, times an albedo, which is the one thing a
+// metal does not do. Left on it, the chain came out very close to black
+// wherever no torch reached it directly (its UVs sample the door texture's
+// wrought-iron band, albedo ~0.03 linear, so mD kills the term outright) and
+// the padlock came out as flat orange fill, i.e. painted plastic.
+//
+// The scene has no environment map, so the hemisphere IS the environment here:
+// the same two colours lights.json authored, read along the mirror direction.
+// That is the cheapest honest form of the split-sum ambient specular (E07's
+// hemisphere in place of a prefiltered cube map); a real one needs a capture
+// pass the project does not have.
+vec3 metalAmbient(vec3 N, vec3 V, vec3 mS, float roughness, float F0) {
+    vec3 R = reflect(-V, N);
+
+    // A rough metal reflects a BLURRED room, not a sharp one, and with a
+    // two-colour hemisphere and no mip chain there is nothing to blur. The
+    // stand-in is to slide the sample direction from R (mirror) towards N
+    // (what a fully diffuse surface would use) as roughness grows: the two
+    // ends are exactly the two ends the real thing interpolates between.
+    vec3 D = normalize(mix(R, N, roughness));
+
+    // Schlick once more, but on N.V: there is no half vector here, since the
+    // "light" is the whole hemisphere rather than one direction. The ceiling
+    // is max(1 - roughness, F0) instead of the plain 1.0 the direct term uses
+    // -- a rough metal does not turn into a perfect mirror at the horizon, and
+    // letting it reach 1.0 puts a hard bright rim on exactly the pixels that
+    // outline a tube, which is the artefact the chains were already fighting.
+    float NdotV = clamp(dot(N, V), 0.0, 1.0);
+    float F = F0 + (max(1.0 - roughness, F0) - F0) * pow(1.0 - NdotV, 5.0);
+
+    // mS, not mD: for a metal the specular colour IS the material's colour.
+    return hemisphereColor(D) * mS * F;
 }
 
 // How much of this fragment's light is indirect, 0..1. Per-model if the
@@ -513,6 +624,56 @@ vec3 BRDF(vec3 N, vec3 L, vec3 V, vec3 mD, vec3 mS, float roughness, float F0, f
 // just takes effect one pass later (gubo.debugFlags is forwarded to the
 // composite's own uniform block by updateUniformBuffer()).
 
+// ---------------------------------------------------------------------------
+// Procedural grime, for the interior metals (chains, padlock, key). Those
+// three have been underground long enough to tarnish -- dust settled in the
+// pits, a filmed-over patch here and there -- and none of it is in the flat
+// albedo the MGCG pack ships. With no second UV set and no dirt map to
+// sample, it is generated from world position: a few octaves of value noise
+// read where the fragment actually sits in the room, so neighbouring chain
+// links come out weathered differently instead of identically.
+//
+// main() uses it for two things: roughness UP (grime scatters what bare
+// metal would throw back sharply) and the reflection tint DOWN (a filmed
+// surface reflects less of the room). Albedo is left alone -- a metal's k is
+// forced to 0, so there is no diffuse term for dirt to darken.
+//
+// Gated in main() to metal && interiorAmbient, so it lands on those three
+// and not on the outdoor gate lanterns ("light"), which the weather rinses.
+float grimeHash(vec3 p) {
+    p = fract(p * 0.3183099 + vec3(0.1, 0.2, 0.3));
+    p += dot(p, p.yzx + 19.19);
+    return fract((p.x + p.y) * p.z);
+}
+
+// Value noise: hash the eight corners of the cell p falls in, smoothstep the
+// fractional position, trilinearly blend. Same idea as Flame.frag's noise2,
+// one dimension up.
+float grimeNoise(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = p - i;
+    f = f * f * (3.0 - 2.0 * f);
+    float n000 = grimeHash(i + vec3(0, 0, 0)), n100 = grimeHash(i + vec3(1, 0, 0));
+    float n010 = grimeHash(i + vec3(0, 1, 0)), n110 = grimeHash(i + vec3(1, 1, 0));
+    float n001 = grimeHash(i + vec3(0, 0, 1)), n101 = grimeHash(i + vec3(1, 0, 1));
+    float n011 = grimeHash(i + vec3(0, 1, 1)), n111 = grimeHash(i + vec3(1, 1, 1));
+    return mix(mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y),
+               mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y), f.z);
+}
+
+// 0 clean .. 1 filthy. The three objects are ~1-3 world units across, so
+// 6 / 18 / 50 per unit place the coarse blotches at a few centimetres and
+// the grain below that. smoothstep keeps clean metal genuinely clean and
+// drives the dirty patches most of the way, rather than a flat grey veil
+// over everything.
+float grime(vec3 worldPos) {
+    float g = grimeNoise(worldPos *  6.0) * 0.6
+            + grimeNoise(worldPos * 18.0) * 0.3
+            + grimeNoise(worldPos * 50.0) * 0.1;
+    return smoothstep(0.35, 0.80, g);
+}
+// ---------------------------------------------------------------------------
+
 void main() {
     // Interpolation shortens the normal wherever the corner normals diverge.
     vec3 N = normalize(fragNorm);
@@ -566,11 +727,49 @@ void main() {
         mD = vec3(1.0);
     }
 
+    // Both debug views want the specular gone, and the heatmap additionally
+    // wants nothing about the material in the result. Named once because the
+    // metal path below has to stand down for both of them: a "no specular"
+    // view of a surface whose whole response is specular has to show the
+    // diffuse fallback, not the metal.
+    bool specularOff = debugOn(LIGHT_DEBUG_NO_SPECULAR) || heatmap;
+    bool metal = ubo.metallic == 1 && !specularOff;
+
     // k is the diffuse share, so forcing it to 1 leaves the specular term
     // multiplied by 0: the highlights go, everything else stays exactly as it
     // was. Done here rather than inside BRDF so that function keeps taking all
     // its inputs as arguments.
-    float k = (debugOn(LIGHT_DEBUG_NO_SPECULAR) || heatmap) ? 1.0 : ubo.k;
+    //
+    // A metal goes the other way, to 0: the diffuse lobe comes from light that
+    // entered the surface and scattered back out, and in a conductor the free
+    // electrons absorb that instead of re-emitting it. Forced here rather than
+    // written as "k": 0.0 in materials.json so the flag carries the whole
+    // definition of "this is a metal" in one place, and so no metal entry can
+    // be left with a stray diffuse share by accident.
+    float k = specularOff ? 1.0 : (metal ? 0.0 : ubo.k);
+
+    // Grime, for the interior metals only (see grime() above). Everyone else
+    // takes ubo.roughness / ubo.mS unchanged: g is 0, so both mixes are the
+    // identity. Where it does apply, a dirty patch roughens the surface --
+    // ubo.roughness*2 + 0.20, capped short of fully matte -- and mutes the
+    // reflection tint towards 0.4 of itself.
+    //
+    // The wrought-iron chains wear it fully; the cast-brass padlock and key
+    // get much less. No per-model flag for that -- it reads the specular
+    // colour, which is already the tell: brass is warm (mS.b well under
+    // mS.r), steel is all but neutral (ratio ~1).
+    float warmth = ubo.mS.b / max(ubo.mS.r, 1e-4);          // ~0.46 brass, ~1.04 steel
+    float brassness = 1.0 - smoothstep(0.6, 0.95, warmth);  // 1 brass, 0 steel
+    // Two knobs, not one. grimeScale drops the overall bite; the pow() with
+    // an exponent above 1 for brass crushes the mid-grey coverage so only the
+    // few concentrated hotspots survive -- that is what breaks up the big
+    // soft blob rather than just fading it.
+    float grimeScale = mix(1.0, 0.30, brassness);
+    float g = grime(fragPos);
+    g = pow(g, mix(1.0, 2.5, brassness)) * grimeScale;
+    g = (metal && ubo.interiorAmbient == 1) ? g : 0.0;
+    float roughG = mix(ubo.roughness, min(ubo.roughness * 2.0 + 0.20, 0.95), g);
+    vec3  mSG    = ubo.mS * mix(1.0, 0.40, g);
 
     // Rendering equation: sum over the sources of radiance times BRDF, each
     // term zeroed by shadowFactor() wherever that one light doesn't reach
@@ -609,8 +808,8 @@ void main() {
         // shadowFactor scales its depth bias by it too.
         float NdotL = clamp(dot(N, L), 0.0, 1.0);
         Lo += radiance
-            * BRDF(N, L, V, mD, ubo.mS, ubo.roughness, ubo.F0, k)
-            * shadowFactor(gubo.lights[i].shadowIndex, gubo.lights[i].type, fragPos, gubo.lights[i].pos, NdotL);
+            * BRDF(N, L, V, mD, mSG, roughG, ubo.F0, k)
+            * shadowFactor(gubo.lights[i].shadowIndex, gubo.lights[i].type, fragPos, N, gubo.lights[i].pos, NdotL);
     }
 
     // E17's blend (LambertBlinnTexture.frag:51-52), not a sum: ambient is a
@@ -627,8 +826,15 @@ void main() {
     // how enclosed a surface is, which is what E17 does and what the assets
     // allow -- the MGCG pack ships albedo only, so the AO map E14/E15 sample
     // (aoMap, [TODO 5b]) has nothing to read. Baking one is the honest fix.
+    //
+    // The metals take the same share of the frame, spent on a reflection of
+    // the room instead of on a diffuse bounce -- see metalAmbient(). Same
+    // blend, same weight: what changes is only what the indirect light does
+    // once it lands.
     float aw = ambientShare();
-    vec3 color = Lo * (1.0 - aw) + hemisphericAmbient(N, mD) * aw;
+    vec3 ambient = metal ? metalAmbient(N, V, mSG, roughG, ubo.F0)
+                         : hemisphericAmbient(N, mD);
+    vec3 color = Lo * (1.0 - aw) + ambient * aw;
 
     if(heatmap) {
         float intensity = dot(color, vec3(0.2126, 0.7152, 0.0722));

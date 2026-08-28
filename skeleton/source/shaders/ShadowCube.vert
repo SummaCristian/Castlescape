@@ -45,6 +45,7 @@ layout(binding = 0, set = 0) uniform UniformBufferObject {
 	float time;
 	float ambientWeight;
 	float glow;
+	int metallic;
 } ubo;
 
 layout(binding = 0, set = 1) uniform ShadowCubeUniformBufferObject {

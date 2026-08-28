@@ -12,8 +12,18 @@
 //                       surface. It is ~0.04 for essentially EVERY dielectric,
 //                       so it is copied, not chosen. Metals are far higher.
 //   k                   diffuse share of the BRDF, specular gets (1 - k).
-//                       High for dielectrics, low for metals, which have almost
-//                       no diffuse component at all.
+//                       High for dielectrics. Ignored on the entries that set
+//                       "metallic", which have no diffuse component at all.
+//
+// Plus one switch that picks the lighting path rather than tuning it:
+//
+//   metallic            shade this model as a conductor: no diffuse lobe, and
+//                       an indirect term that REFLECTS the room instead of
+//                       scattering it (CookTorrance.frag, metalAmbient()).
+//                       With it on, specularColor is no longer "colour of the
+//                       highlight" but the material's own reflectance colour,
+//                       and mS * F0 should land on the metal's measured value.
+//                       See Material::metallic in SceneMaterials.hpp.
 //
 // Plus one parameter that isn't a BRDF term at all:
 //
@@ -69,11 +79,26 @@
 		// Cloth. Very rough and essentially all diffuse.
 		"flag": { "roughness": 0.95, "F0": 0.03, "k": 0.97, "ambientWeight": 0.20 },
 
-		// The gate lanterns, in brass. This is the entry that shows what these
-		// parameters are for: a metal has no meaningful diffuse component (low
-		// k), reflects strongly even head-on (high F0), and tints its highlight
-		// with its own color instead of the lamp's (mS is not white).
-		"light": { "specularColor": [0.95, 0.78, 0.42], "roughness": 0.32, "F0": 0.65, "k": 0.15, "ambientWeight": 0.20 },
+		// The gate lanterns, in brass, and the first of the three metals in the
+		// file. This is the entry that shows what these parameters are for: a
+		// metal has no diffuse component at all ("metallic", which forces k to
+		// 0 -- the 0.15 this used to carry was an approximation of that, and
+		// left enough albedo showing to read as painted rather than cast),
+		// reflects strongly even head-on (high F0), and colours what it
+		// reflects with itself instead of with the lamp (mS is not white).
+		//
+		// mS * F0 = (0.92, 0.72, 0.42), brass's measured reflectance to within
+		// the eye's ability to tell on a lantern across a courtyard. That
+		// product is the quantity to preserve if either number is retuned:
+		// F0 alone is how bright, mS alone is what hue, and only together are
+		// they "brass". Same pair on "padlock01" below, which is the same
+		// metal on a smaller object.
+		//
+		// No "interior": these hang outdoors, so their reflection really does
+		// take the sky at the top and the courtyard at the bottom, and that
+		// gradient is the point rather than an artefact. The dungeon metals
+		// below are the opposite case.
+		"light": { "specularColor": [1.00, 0.78, 0.46], "roughness": 0.32, "F0": 0.92, "metallic": true, "ambientWeight": 0.20 },
 
 		// Dungeon set (Dracula's Castle Assetpack, see README credits). Same
 		// categories as the castle above: rougher/more-diffuse for the stone
@@ -103,7 +128,8 @@
 		// arch recesses with the AO baked in, which a flat ceiling has none of.
 		// tools/make_ceiling_texture.py crops that same brick field and scales
 		// it down to 50, so it is literally the wall's stone at the wall's
-		// tone. Hence the same BRDF values as "dungeonWall". Instances sit at
+		// tone. Hence the same BRDF values as "dungeonWall".
+		//
 		// "interior" is the flag that actually made it match: without it the
 		// hemispheric ambient hands a downward-facing surface ambientLower on
 		// its own, which lights.json wrote as bounce off a dirt courtyard --
@@ -112,8 +138,9 @@
 		// at re-tinting this ceiling failed. See Material::interiorAmbient in
 		// SceneMaterials.hpp for the measurement behind it. The floor
 		// has the mirrored problem (it collects pure ambientUpper, i.e. sky,
-		// indoors) but it reads fine, so it is left alone. Instances sit at
-		// y = 6.213,
+		// indoors) but it reads fine, so it is left alone.
+		//
+		// Instances sit at y = 6.213,
 		// i.e. 0.02 (the common riser) + 6.1929, the exact height of
 		// SM_WallStraight_01, so the beams seat flush on the wall tops with no
 		// overlapping coplanar faces to z-fight.
@@ -124,6 +151,93 @@
 		// touch of sheen as the other wood pieces above.
 		"dungeonDoorWall":  { "roughness": 0.80, "F0": 0.04, "k": 0.93 },
 		"dungeonDoorPanel": { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
+		// The chains and padlock on a locked door (tools/make_door_lock.py):
+		// wrought iron and the same brass as "light" above, and the only metal
+		// indoors. Both carry "metallic", and it is the flag rather than the
+		// numbers that does the work here.
+		//
+		// The reason is what the two pieces are made of. Nearly everything you
+		// see on a real chain is a reflection of the room, not the chain's own
+		// colour, and the diffuse ambient every other entry in this file uses
+		// cannot produce that: it hands a surface a colour chosen by which way
+		// it FACES, multiplied by its albedo. On these two that failed at both
+		// ends. The chains' UVs sample the door texture's wrought-iron band
+		// (albedo ~0.03 linear), so the albedo multiply erased the term and
+		// every link out of direct torchlight went to black; the padlock's
+		// sample the key's solid brass, so the leftover diffuse share painted
+		// it flat orange, and it read as plastic. Neither is a tuning problem.
+		// "metallic" drops the diffuse lobe and swaps the indirect term for
+		// metalAmbient(), which reflects the hemisphere off the surface
+		// instead of scattering it -- the chain now catches the room the way
+		// iron does, and the brass is brass rather than orange.
+		//
+		// The numbers are then just the two metals, measured, with mS * F0
+		// landing on the real reflectance: (0.55, 0.56, 0.57) for iron, which
+		// is all but neutral and so leaves mS near white, and (0.92, 0.72,
+		// 0.42) for brass, the same pair as "light". Wrought iron on a dungeon
+		// door is rougher than a lantern's polished bowl, and rougher again
+		// than the cast padlock hanging off it, hence 0.62 against 0.40. The
+		// chains went from 0.45 to 0.62 deliberately: pitted iron on a cellar
+		// door barely catches a highlight, and the tighter lobe was reading as
+		// chrome. F0 stays on iron's measured 0.57 -- that is what keeps it
+		// metal; roughness is the "how polished" knob. No "k": the shader
+		// forces it to 0 for a metal, and writing one
+		// here would only look like it did something.
+		//
+		// "interior" stays, and now for one reason instead of two. It pins the
+		// hemisphere blend at 0.5 (Material::interiorAmbient), and that is
+		// simply true of these two -- they hang inside an archway and see no
+		// sky whatever, the same as dungeonCeiling above, so their reflection
+		// should be one constant dungeon colour rather than a sky-to-ground
+		// gradient. It also happens to settle the coloured fringe that several
+		// earlier passes chased through the specular values: upper minus lower
+		// is (0.15, 0.375, 0.80), eight times stronger in blue than in red, and
+		// the blend is driven purely by how far up the normal points, so around
+		// a tube -- whose normal sweeps the whole circle -- the ambient ALONE
+		// laid a cool edge along the top of every link and a warm one
+		// underneath. That gradient traced the silhouette exactly and was owed
+		// to no light at all, which is why no amount of specular tuning ever
+		// touched it. It is not the torches in the room beyond: those are
+		// behind a closed leaf and 1.24 units of wall, and every light's direct
+		// term is multiplied by shadowFactor().
+		//
+		// What "interior" is NOT is occlusion. It is the authored guess the
+		// header describes, and the honest fix is the baked AO the shader keeps
+		// asking for and the MGCG pack cannot supply.
+		//
+		// One artefact these values do not claim to cure, stated so nobody
+		// re-tunes them chasing it: a round silhouette is nearly all grazing
+		// angle, where Schlick's F climbs towards 1 and BRDF()'s denominator
+		// runs to its clamp, so the specular is at its strongest on exactly the
+		// pixels that outline the piece. Measured: making the chains nearly
+		// matte drops those pixels by 58%, which pins it on the specular term
+		// rather than on the ambient, the mesh density or the post chain (there
+		// is no chromatic aberration in Composite.frag). metalAmbient() at
+		// least does not add to it -- its Fresnel is capped at (1 - roughness)
+		// for this reason -- but the direct term still does. Anything further
+		// belongs in CookTorrance.frag as a change reviewed against every
+		// material in the game, not in this file and not by flattening the
+		// metals until the symptom goes quiet.
+		"doorChains01": { "specularColor": [0.96, 0.98, 1.00], "roughness": 0.62, "F0": 0.57, "metallic": true, "interior": true },
+		// Matched to "key" below: same brass, same measured mS * F0, and now
+		// the same 0.40 roughness so the lock and the key that opens it read as
+		// one metal. It had been 0.32 (a shade more polished), which only made
+		// the pair look like two different brasses side by side.
+		"padlock01":    { "specularColor": [1.00, 0.78, 0.46], "roughness": 0.40, "F0": 0.92, "metallic": true, "interior": true },
+
+		// The pickup key, same brass as "padlock01" and "light" -- it is the
+		// object whose albedo those two borrow, so leaving it on "default"
+		// was the same failure the padlock comment describes: the leftover
+		// diffuse share painted the solid-brass albedo flat orange and it read
+		// as a yellow plastic toy. "metallic" drops that lobe and reflects the
+		// room instead. mS * F0 = (0.92, 0.72, 0.42), the same measured brass.
+		//
+		// The pack ships Key_MetallicSmoothness / Key_Normal beside the albedo
+		// (assets/textures/Miscellaneous/), which this renderer has no sampler
+		// for; roughness 0.40 is that smoothness map's mean (1 - 0.60), so the
+		// one number we can carry matches the texture we cannot. "interior":
+		// the key lives and is carried in the dungeon, same as the padlock.
+		"key":          { "specularColor": [1.00, 0.78, 0.46], "roughness": 0.40, "F0": 0.92, "metallic": true, "interior": true },
 		"dungeonBarrel":  { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
 		"dungeonTable":   { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
 		"dungeonChair":   { "roughness": 0.55, "F0": 0.05, "k": 0.90 },

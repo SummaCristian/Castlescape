@@ -1,0 +1,108 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "convert_assets.py"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "SM_DoorChains_01",
+   "mesh": 0
+  }
+ ],
+ "meshes": [
+  {
+   "name": "SM_DoorChains_01",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "mode": 4
+    }
+   ]
+  }
+ ],
+ "buffers": [
+  {
+   "uri": "SM_DoorChains_01.bin",
+   "byteLength": 153792
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 34272,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 34272,
+   "byteLength": 34272,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 68544,
+   "byteLength": 22848,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 91392,
+   "byteLength": 62400,
+   "target": 34963
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 2856,
+   "type": "VEC3",
+   "min": [
+    0.4099999964237213,
+    1.4600000381469727,
+    -2.380000114440918
+   ],
+   "max": [
+    0.6549569964408875,
+    2.9600000381469727,
+    -0.07999999821186066
+   ]
+  },
+  {
+   "bufferView": 1,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 2856,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 2856,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 3,
+   "byteOffset": 0,
+   "componentType": 5125,
+   "count": 15600,
+   "type": "SCALAR"
+  }
+ ]
+}
