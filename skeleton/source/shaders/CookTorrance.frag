@@ -620,6 +620,56 @@ vec3 BRDF(vec3 N, vec3 L, vec3 V, vec3 mD, vec3 mS, float roughness, float F0, f
 // just takes effect one pass later (gubo.debugFlags is forwarded to the
 // composite's own uniform block by updateUniformBuffer()).
 
+// ---------------------------------------------------------------------------
+// Procedural grime, for the interior metals (chains, padlock, key). Those
+// three have been underground long enough to tarnish -- dust settled in the
+// pits, a filmed-over patch here and there -- and none of it is in the flat
+// albedo the MGCG pack ships. With no second UV set and no dirt map to
+// sample, it is generated from world position: a few octaves of value noise
+// read where the fragment actually sits in the room, so neighbouring chain
+// links come out weathered differently instead of identically.
+//
+// main() uses it for two things: roughness UP (grime scatters what bare
+// metal would throw back sharply) and the reflection tint DOWN (a filmed
+// surface reflects less of the room). Albedo is left alone -- a metal's k is
+// forced to 0, so there is no diffuse term for dirt to darken.
+//
+// Gated in main() to metal && interiorAmbient, so it lands on those three
+// and not on the outdoor gate lanterns ("light"), which the weather rinses.
+float grimeHash(vec3 p) {
+    p = fract(p * 0.3183099 + vec3(0.1, 0.2, 0.3));
+    p += dot(p, p.yzx + 19.19);
+    return fract((p.x + p.y) * p.z);
+}
+
+// Value noise: hash the eight corners of the cell p falls in, smoothstep the
+// fractional position, trilinearly blend. Same idea as Flame.frag's noise2,
+// one dimension up.
+float grimeNoise(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = p - i;
+    f = f * f * (3.0 - 2.0 * f);
+    float n000 = grimeHash(i + vec3(0, 0, 0)), n100 = grimeHash(i + vec3(1, 0, 0));
+    float n010 = grimeHash(i + vec3(0, 1, 0)), n110 = grimeHash(i + vec3(1, 1, 0));
+    float n001 = grimeHash(i + vec3(0, 0, 1)), n101 = grimeHash(i + vec3(1, 0, 1));
+    float n011 = grimeHash(i + vec3(0, 1, 1)), n111 = grimeHash(i + vec3(1, 1, 1));
+    return mix(mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y),
+               mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y), f.z);
+}
+
+// 0 clean .. 1 filthy. The three objects are ~1-3 world units across, so
+// 6 / 18 / 50 per unit place the coarse blotches at a few centimetres and
+// the grain below that. smoothstep keeps clean metal genuinely clean and
+// drives the dirty patches most of the way, rather than a flat grey veil
+// over everything.
+float grime(vec3 worldPos) {
+    float g = grimeNoise(worldPos *  6.0) * 0.6
+            + grimeNoise(worldPos * 18.0) * 0.3
+            + grimeNoise(worldPos * 50.0) * 0.1;
+    return smoothstep(0.35, 0.80, g);
+}
+// ---------------------------------------------------------------------------
+
 void main() {
     // Interpolation shortens the normal wherever the corner normals diverge.
     vec3 N = normalize(fragNorm);
@@ -694,6 +744,29 @@ void main() {
     // be left with a stray diffuse share by accident.
     float k = specularOff ? 1.0 : (metal ? 0.0 : ubo.k);
 
+    // Grime, for the interior metals only (see grime() above). Everyone else
+    // takes ubo.roughness / ubo.mS unchanged: g is 0, so both mixes are the
+    // identity. Where it does apply, a dirty patch roughens the surface --
+    // ubo.roughness*2 + 0.20, capped short of fully matte -- and mutes the
+    // reflection tint towards 0.4 of itself.
+    //
+    // The wrought-iron chains wear it fully; the cast-brass padlock and key
+    // get much less. No per-model flag for that -- it reads the specular
+    // colour, which is already the tell: brass is warm (mS.b well under
+    // mS.r), steel is all but neutral (ratio ~1).
+    float warmth = ubo.mS.b / max(ubo.mS.r, 1e-4);          // ~0.46 brass, ~1.04 steel
+    float brassness = 1.0 - smoothstep(0.6, 0.95, warmth);  // 1 brass, 0 steel
+    // Two knobs, not one. grimeScale drops the overall bite; the pow() with
+    // an exponent above 1 for brass crushes the mid-grey coverage so only the
+    // few concentrated hotspots survive -- that is what breaks up the big
+    // soft blob rather than just fading it.
+    float grimeScale = mix(1.0, 0.30, brassness);
+    float g = grime(fragPos);
+    g = pow(g, mix(1.0, 2.5, brassness)) * grimeScale;
+    g = (metal && ubo.interiorAmbient == 1) ? g : 0.0;
+    float roughG = mix(ubo.roughness, min(ubo.roughness * 2.0 + 0.20, 0.95), g);
+    vec3  mSG    = ubo.mS * mix(1.0, 0.40, g);
+
     // Rendering equation: sum over the sources of radiance times BRDF, each
     // term zeroed by shadowFactor() wherever that one light doesn't reach
     // this point. Ambient below is untouched by it on purpose: shadow mapping
@@ -731,7 +804,7 @@ void main() {
         // shadowFactor scales its depth bias by it too.
         float NdotL = clamp(dot(N, L), 0.0, 1.0);
         Lo += radiance
-            * BRDF(N, L, V, mD, ubo.mS, ubo.roughness, ubo.F0, k)
+            * BRDF(N, L, V, mD, mSG, roughG, ubo.F0, k)
             * shadowFactor(gubo.lights[i].shadowIndex, gubo.lights[i].type, fragPos, N, gubo.lights[i].pos, NdotL);
     }
 
@@ -755,7 +828,7 @@ void main() {
     // blend, same weight: what changes is only what the indirect light does
     // once it lands.
     float aw = ambientShare();
-    vec3 ambient = metal ? metalAmbient(N, V, ubo.mS, ubo.roughness, ubo.F0)
+    vec3 ambient = metal ? metalAmbient(N, V, mSG, roughG, ubo.F0)
                          : hemisphericAmbient(N, mD);
     vec3 color = Lo * (1.0 - aw) + ambient * aw;
 

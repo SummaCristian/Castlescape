@@ -175,8 +175,13 @@
 		// landing on the real reflectance: (0.55, 0.56, 0.57) for iron, which
 		// is all but neutral and so leaves mS near white, and (0.92, 0.72,
 		// 0.42) for brass, the same pair as "light". Wrought iron on a dungeon
-		// door is rougher than a lantern's polished bowl, hence 0.45 against
-		// 0.32. No "k": the shader forces it to 0 for a metal, and writing one
+		// door is rougher than a lantern's polished bowl, and rougher again
+		// than the cast padlock hanging off it, hence 0.62 against 0.40. The
+		// chains went from 0.45 to 0.62 deliberately: pitted iron on a cellar
+		// door barely catches a highlight, and the tighter lobe was reading as
+		// chrome. F0 stays on iron's measured 0.57 -- that is what keeps it
+		// metal; roughness is the "how polished" knob. No "k": the shader
+		// forces it to 0 for a metal, and writing one
 		// here would only look like it did something.
 		//
 		// "interior" stays, and now for one reason instead of two. It pins the
@@ -213,8 +218,26 @@
 		// belongs in CookTorrance.frag as a change reviewed against every
 		// material in the game, not in this file and not by flattening the
 		// metals until the symptom goes quiet.
-		"doorChains01": { "specularColor": [0.96, 0.98, 1.00], "roughness": 0.45, "F0": 0.57, "metallic": true, "interior": true },
-		"padlock01":    { "specularColor": [1.00, 0.78, 0.46], "roughness": 0.32, "F0": 0.92, "metallic": true, "interior": true },
+		"doorChains01": { "specularColor": [0.96, 0.98, 1.00], "roughness": 0.62, "F0": 0.57, "metallic": true, "interior": true },
+		// Matched to "key" below: same brass, same measured mS * F0, and now
+		// the same 0.40 roughness so the lock and the key that opens it read as
+		// one metal. It had been 0.32 (a shade more polished), which only made
+		// the pair look like two different brasses side by side.
+		"padlock01":    { "specularColor": [1.00, 0.78, 0.46], "roughness": 0.40, "F0": 0.92, "metallic": true, "interior": true },
+
+		// The pickup key, same brass as "padlock01" and "light" -- it is the
+		// object whose albedo those two borrow, so leaving it on "default"
+		// was the same failure the padlock comment describes: the leftover
+		// diffuse share painted the solid-brass albedo flat orange and it read
+		// as a yellow plastic toy. "metallic" drops that lobe and reflects the
+		// room instead. mS * F0 = (0.92, 0.72, 0.42), the same measured brass.
+		//
+		// The pack ships Key_MetallicSmoothness / Key_Normal beside the albedo
+		// (assets/textures/Miscellaneous/), which this renderer has no sampler
+		// for; roughness 0.40 is that smoothness map's mean (1 - 0.60), so the
+		// one number we can carry matches the texture we cannot. "interior":
+		// the key lives and is carried in the dungeon, same as the padlock.
+		"key":          { "specularColor": [1.00, 0.78, 0.46], "roughness": 0.40, "F0": 0.92, "metallic": true, "interior": true },
 		"dungeonBarrel":  { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
 		"dungeonTable":   { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
 		"dungeonChair":   { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
