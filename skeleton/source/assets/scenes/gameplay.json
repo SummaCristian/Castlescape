@@ -91,11 +91,14 @@
 			"instance": "ghost",
 			"speed": 1.5,
 			"chaseSpeed": 3.4,
+			// The north leg sits at z 24.5 rather than 23: the barrel at
+			// (-19.5, 22.5) reaches far enough into that corner for the loop to
+			// walk through it.
 			"waypoints": [
-				[-33.0, 2.2, 23.0],
+				[-33.0, 2.2, 24.5],
 				[-33.0, 2.2, 37.0],
 				[-19.0, 2.2, 37.0],
-				[-19.0, 2.2, 23.0]
+				[-19.0, 2.2, 24.5]
 			]
 		},
 		{
@@ -105,9 +108,11 @@
 			"instance": "ghost2",
 			"speed": 1.3,
 			"chaseSpeed": 3.4,
+			// z 23.5 on the north leg, not 22: at 22 the leg ran straight over
+			// the barrel the second key sits on.
 			"waypoints": [
-				[-12.0, 2.2, 22.0],
-				[-4.0, 2.2, 22.0],
+				[-12.0, 2.2, 23.5],
+				[-4.0, 2.2, 23.5],
 				[-4.0, 2.2, 28.0],
 				[-12.0, 2.2, 28.0]
 			]
@@ -116,14 +121,23 @@
 			// The east room, between the player and the way out. The fastest
 			// of the three, because by the time the player reaches it they
 			// know what a violet torch means.
+			//
+			// The north leg is at z 23, not up against the wall: that room's
+			// north wall occupies z 19.2 to 20.44, and a leg outside it put
+			// the ghost through the wall on patrol (which the patrol allows,
+			// it never resolves walls) and then wedged it there the moment a
+			// hunt started and Chase began steering. Every waypoint here now
+			// sits at least two units clear of the room's inner faces
+			// (x -0.36 to 18.76, z 20.44 to 32.36) and clear of the barrel at
+			// (15.5, 22.5).
 			"instance": "ghost3",
 			"speed": 1.6,
 			"chaseSpeed": 3.7,
 			"waypoints": [
-				[4.0, 2.2, 19.0],
-				[14.0, 2.2, 19.0],
-				[14.0, 2.2, 28.0],
-				[4.0, 2.2, 28.0]
+				[4.0, 2.2, 23.0],
+				[14.0, 2.2, 23.0],
+				[14.0, 2.2, 29.0],
+				[4.0, 2.2, 29.0]
 			]
 		}
 	]

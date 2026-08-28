@@ -2378,6 +2378,30 @@ class Skeleton26ReplaceName : public BaseProject {
 					std::cout << "Ghost collision fitted from mesh (scale " << instScale
 							  << "): radius " << ghostRadius
 							  << ", vertical [" << ghostBodyBottom << ", " << ghostBodyTop << "]\n";
+
+					// Patrol legs are walked without any wall resolution (see the
+					// Patrol branch in GameLogic), so a leg authored through a wall
+					// doesn't fail loudly: the ghost simply glides through it, and
+					// only the next hunt shows the damage, as a Chase that finds
+					// every heading blocked and stands still. Checked here, once,
+					// now that the radius is known -- it costs nothing at load time
+					// and turns that into a line anyone can read.
+					for(const Ghost &g : ghosts) {
+						int n = (int)g.waypoints.size();
+						for(int i = 0; i < n; i++) {
+							const glm::vec3 &from = g.waypoints[i];
+							const glm::vec3 &to = g.waypoints[(i + 1) % n];
+							glm::vec2 delta(to.x - from.x, to.z - from.z);
+							float len = glm::length(delta);
+							if(len < 1e-4f) continue;
+							if(!ghostPathClear(from, delta / len, len, ghostRadius)) {
+								std::cout << "gameplay.json: ghost '" << g.instanceId
+										  << "' patrols through a collider between waypoint "
+										  << i << " and " << ((i + 1) % n)
+										  << " -- it will clip that geometry and can wedge itself there on a hunt\n";
+							}
+						}
+					}
 				}
 			}
 		}
