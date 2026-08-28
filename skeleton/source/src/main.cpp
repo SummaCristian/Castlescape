@@ -725,6 +725,26 @@ class Skeleton26ReplaceName : public BaseProject {
 			glm::mat4 local;
 		};
 		std::vector<LockProp> lockProps;
+		// Which face of the leaf the hardware ended up on, as a sign on the
+		// leaf's local X axis: +1 for the models as make_door_lock.py exports
+		// them (FRONT_ON_PLUS_X), -1 for the half-turned copy. Set by
+		// addLockProp() from its `flip`, and the reason a lock has a side at
+		// all: the padlock is reachable only from the face it hangs on, so
+		// the player standing behind the door meets a door that simply won't
+		// move, key or no key.
+		float lockFaceSign = 1.0f;
+		// True when `p` stands on the padlock's face of the leaf. Measured
+		// against baseWm rather than the live Wm because a locked door never
+		// swings, so the closed pose is the only one this ever has to answer
+		// for -- and it stays right even mid-animation on the frame the lock
+		// comes off. XZ only: the sign shouldn't change with the player's
+		// height (jumping, or the eye above a doorway's mid-plane).
+		bool onLockSide(const glm::vec3 &p) const {
+			glm::vec3 axis(baseWm[0].x, 0.0f, baseWm[0].z);	// leaf local +X, in world
+			if(glm::length(axis) < 1e-6f) return true;	// degenerate: don't lock anyone out
+			glm::vec3 d(p.x - promptPos.x, 0.0f, p.z - promptPos.z);
+			return glm::dot(d, glm::normalize(axis)) * lockFaceSign > 0.0f;
+		}
 	};
 	std::vector<Door> doors;
 
@@ -2159,6 +2179,11 @@ class Skeleton26ReplaceName : public BaseProject {
 					  * glm::translate(glm::mat4(1.0f), -pivot);
 			}
 			d->lockProps.push_back({SC.I[it->second], local});
+			// Same flag decides where the hardware is drawn and which side E
+			// works from, so the prompt can never disagree with what's on
+			// screen. Every prop on one door is flipped the same way (they're
+			// two halves of one lock), so the last one in wins harmlessly.
+			d->lockFaceSign = flip ? -1.0f : 1.0f;
 		};
 		// Both instances carry the SAME translate/eulerAngles as the leaf in
 		// scene.json, which is all the placement they need: the models live in
@@ -4066,10 +4091,13 @@ class Skeleton26ReplaceName : public BaseProject {
 		// game-over text still inviting a keypress that does nothing.
 		bool showInteractPrompt = runState == RunState::Running &&
 								  (nearbyDoor >= 0 || nearbyPickup >= 0 || atLockedExit);
-		// Door prompts split three ways once locks exist: a padlock the
+		// Door prompts split four ways once locks exist: a padlock the
 		// player can open ("[E] Unlock", and the wording warns the key is
 		// spent, since it can't be got back), one they can't (what to go find
-		// -- by lockLabel, not the raw id), and a plain door.
+		// -- by lockLabel, not the raw id), one they're standing behind (no
+		// key named at all: from this side there is no padlock in sight, and
+		// naming one would be telling them something they can't see), and a
+		// plain door.
 		std::string wantedPromptText;
 		if(atLockedExit) {
 			wantedPromptText = "The way out is locked - find the key";
@@ -4077,9 +4105,13 @@ class Skeleton26ReplaceName : public BaseProject {
 			wantedPromptText = "[E] Pick up";
 		} else if(nearbyDoor >= 0 && doors[nearbyDoor].locked) {
 			const Door &d = doors[nearbyDoor];
-			wantedPromptText = (findKeyInRing(d.lockKeyId) >= 0)
-							 ? "[E] Unlock (uses the " + d.lockLabel + ")"
-							 : "Locked - needs the " + d.lockLabel;
+			if(!d.onLockSide(camPos)) {
+				wantedPromptText = "This door is blocked";
+			} else {
+				wantedPromptText = (findKeyInRing(d.lockKeyId) >= 0)
+								 ? "[E] Unlock (uses the " + d.lockLabel + ")"
+								 : "Locked - needs the " + d.lockLabel;
+			}
 		} else {
 			wantedPromptText = "[E] Interact";
 		}
@@ -4717,7 +4749,12 @@ class Skeleton26ReplaceName : public BaseProject {
 						// Without a match nothing happens at all: the prompt
 						// (see updateUniformBuffer) is already telling them
 						// what's missing, so there's nothing to report here.
-						int slot = findKeyInRing(d.lockKeyId);
+						// ...and only from the face the padlock hangs on: a
+						// key can't be turned in a lock on the far side of a
+						// closed door. The prompt on the blind side says so
+						// (see updateUniformBuffer), so again nothing to
+						// report here.
+						int slot = d.onLockSide(camPos) ? findKeyInRing(d.lockKeyId) : -1;
 						if(slot >= 0) {
 							std::cout << "[door] unlocked '" << d.instanceId
 									  << "' with key '" << d.lockKeyId << "'\n";
