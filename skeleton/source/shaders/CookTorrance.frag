@@ -281,10 +281,80 @@ float shadowFromMap2D(int idx, vec3 pos, float bias) {
 // could tip the result either way -- which is exactly the "suddenly not
 // lit" pop reported. This version has a flat lit==1.0 plateau for every
 // occluderGap <= bias, matching the hard test's own unoccluded case.
-float shadowFromCube(int idx, vec3 pos, vec3 lightPos, float bias, float softEdge) {
-    vec3 toFrag = pos - lightPos;
+//
+// The bias is computed HERE rather than handed in, because the only honest
+// way to size it needs `dist`, which only this function has. It used to be a
+// pair of world-space constants interpolated by grazing angle (0.03 head-on to
+// 0.35 edge-on, with a matching 0.15..0.6 ramp), and that number was far too
+// large for what a bias is actually for: a door panel sits ~0.6 units in front
+// of the chains bolted to it, so a torch on the far side of a CLOSED door
+// still lit them through it wherever the surface faced the light obliquely --
+// which on a round chain link is most of what you see, and on a metal (no
+// diffuse term, all specular) it reads as the torch's colour smeared over the
+// links. The oversized bias was itself compensating for the bilinear cube
+// sampler, see createCubeShadowMaps(); with NEAREST filtering the bias only
+// has to cover the error that is genuinely there:
+//
+//   one texel of a cube face covers 2*dist/SHADOW_CUBE_RES of world space at
+//   distance dist (a face spans 90 degrees, so its width at dist is 2*dist),
+//
+//   and across that texel the recorded surface's own distance varies by that
+//   width times the slope of the surface as seen from the light, i.e. tan of
+//   the incidence angle -- which is what makes a grazing surface need more
+//   slack than a head-on one, the effect the old constants were reaching for
+//   but expressed in the units it actually happens in.
+//
+// That error, though, must NOT be paid for out of the depth bias, which is
+// the mistake the first attempt at this repeated in smaller units. Whatever
+// the bias is, it is a distance a real occluder is allowed to sit in front of
+// a surface without stopping the light -- so the moment it approaches the
+// ~0.65 units between a chain link and the far face of the door leaf it hangs
+// on, the door stops being a door. It grows with distance (the texel does),
+// the gap doesn't, so no cap on it is both large enough to cover a far wall
+// and small enough to respect a near door: at the chains' 5 units the first
+// version held, at the blue and purple torches' 10 and 12 it hit its cap and
+// let them through, which is exactly the two colours that survived.
+//
+// NORMAL OFFSET instead, which spends the same quantity in a direction where
+// it costs nothing: the lookup is moved along the surface's own normal,
+// off the surface and towards the light side, so it lands in a texel whose
+// recorded distance actually belongs to this surface rather than to the
+// stretch of it half a texel away. The depth threshold stays small and
+// distance-independent, so a door thickness always beats it.
+//
+// The offset is capped well under any real occluder gap in this scene, for
+// the same reason the bias is: pushed far enough along the normal the sample
+// point would eventually cross an occluder standing right in front of the
+// surface, which is the leak again by another route.
+float shadowFromCube(int idx, vec3 pos, vec3 N, vec3 lightPos, float NdotL) {
+    // Depth slack: a couple of texels' worth, floored so a surface right next
+    // to the light still gets some, capped far below the door-leaf gap.
+    const float CUBE_BIAS_MIN = 0.02;
+    const float CUBE_BIAS_MAX = 0.06;
+    const float CUBE_SOFT_MIN = 0.08;
+    const float NORMAL_OFFSET_MAX = 0.12;
+
+    float rawDist = length(pos - lightPos);
+    float texelWorld = 2.0 * rawDist / float(SHADOW_CUBE_RES);
+
+    // tan of the incidence angle, floored before the division: it goes to
+    // infinity at exactly 90 degrees, and a fragment that close to edge-on
+    // receives almost nothing from this light anyway (the BRDF's own NdotL
+    // factor), so there is nothing to protect there.
+    float cosI = max(NdotL, 0.15);
+    float slope = sqrt(1.0 - cosI * cosI) / cosI;
+
+    float offset = min(texelWorld * (1.0 + 2.0 * slope), NORMAL_OFFSET_MAX);
+    vec3 samplePos = pos + N * offset;
+
+    vec3 toFrag = samplePos - lightPos;
     float dist = length(toFrag);
     float closestDist = sampleShadowCube(idx, toFrag);
+
+    float bias = clamp(2.0 * texelWorld, CUBE_BIAS_MIN, CUBE_BIAS_MAX);
+    // The softening band (see the header above) scales with the bias for the
+    // same reason the bias scales: it absorbs the same uncertainty.
+    float softEdge = max(2.0 * bias, CUBE_SOFT_MIN);
 
     float occluderGap = dist - closestDist;
     return 1.0 - clamp((occluderGap - bias) / softEdge, 0.0, 1.0);
@@ -295,8 +365,9 @@ float shadowFromCube(int idx, vec3 pos, vec3 lightPos, float bias, float softEdg
 // the lookup and lights unconditionally, which is why a light without a slot
 // leaks through every wall it reaches.
 //
-// NdotL is only used to pick the 2D-map bias, see below.
-float shadowFactor(int shadowIndex, int type, vec3 pos, vec3 lightPos, float NdotL) {
+// NdotL picks the 2D-map bias below; on the cube path it also scales the
+// normal offset, which is why N has to come along too.
+float shadowFactor(int shadowIndex, int type, vec3 pos, vec3 N, vec3 lightPos, float NdotL) {
     // Shadows off (cheat menu): light everything as if no map existed. Reads
     // gubo.debugFlags directly rather than through debugOn(), which is
     // declared further down the file.
@@ -305,28 +376,11 @@ float shadowFactor(int shadowIndex, int type, vec3 pos, vec3 lightPos, float Ndo
     }
 
     if(type == LIGHT_POINT) {
-        // Slope-scaled, same reason the 2D path below does it: a flat bias
-        // was tuned for a surface facing roughly toward the light, but at a
-        // grazing angle -- exactly what you get brushing past a curved
-        // pillar at close range, held torch just centimetres from its
-        // surface -- one shadow-map texel covers a much larger stretch of
-        // that surface's true depth, so the stored "closest occluder"
-        // distance can be meaningfully off from any single fragment's real
-        // distance even with nothing actually occluding it. A flat 0.03 was
-        // nowhere near enough slack for that case: it read as a large,
-        // unstable black patch swimming across the pillar as the player
-        // walked past, not a fine-grained self-shadow flicker. Both the
-        // bias and the softening band widen together at grazing incidence,
-        // since the same growing depth-quantization error is what both are
-        // there to absorb.
-        const float CUBE_BIAS_MIN = 0.03;   // head-on
-        const float CUBE_BIAS_MAX = 0.35;   // edge-on
-        const float CUBE_SOFT_MIN = 0.15;
-        const float CUBE_SOFT_MAX = 0.6;
-        float grazing = clamp(1.0 - NdotL, 0.0, 1.0);
-        float bias = mix(CUBE_BIAS_MIN, CUBE_BIAS_MAX, grazing);
-        float softEdge = mix(CUBE_SOFT_MIN, CUBE_SOFT_MAX, grazing);
-        return shadowFromCube(shadowIndex, pos, lightPos, bias, softEdge);
+        // Bias, softening band and normal offset all live inside
+        // shadowFromCube() now: they are derived from the distance to the
+        // light, which is the one thing this function doesn't have and that
+        // one computes anyway. N and NdotL are what scale them, see there.
+        return shadowFromCube(shadowIndex, pos, N, lightPos, NdotL);
     }
 
     // The bias is per PROJECTION KIND, because one number cannot serve both.
@@ -701,7 +755,7 @@ void main() {
         float NdotL = clamp(dot(N, L), 0.0, 1.0);
         Lo += radiance
             * BRDF(N, L, V, mD, ubo.mS, ubo.roughness, ubo.F0, k)
-            * shadowFactor(gubo.lights[i].shadowIndex, gubo.lights[i].type, fragPos, gubo.lights[i].pos, NdotL);
+            * shadowFactor(gubo.lights[i].shadowIndex, gubo.lights[i].type, fragPos, N, gubo.lights[i].pos, NdotL);
     }
 
     // E17's blend (LambertBlinnTexture.frag:51-52), not a sum: ambient is a

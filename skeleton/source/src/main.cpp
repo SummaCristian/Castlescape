@@ -339,7 +339,10 @@ class Skeleton26ReplaceName : public BaseProject {
 	// then bumped once more in localInit() if the held torch exists, to also
 	// cover HAND_TORCH_SHADOW_INDEX.
 	int activeCubeShadows = 0;
-	static constexpr int SHADOW_MAP_RES = 1024;
+	// SHADOW_CUBE_RES rather than a literal: CookTorrance.frag derives the cube
+	// path's depth bias from the world size of one texel of this map, so the
+	// shader has to know the same number. See LightConstants.glsl.
+	static constexpr int SHADOW_MAP_RES = SHADOW_CUBE_RES;
 	// Far clip for every torch's cube map (computeShadowMatrices()) and the
 	// clear value ShadowCube.frag's output gets reset to before each face
 	// pass: with nothing drawn a fragment's "distance" should read as
@@ -2953,9 +2956,25 @@ class Skeleton26ReplaceName : public BaseProject {
 	// rather than in a free-standing helper.
 	void createCubeShadowMaps() {
 		// Shared by every torch: same resolution, same format, so one
-		// CLAMP_TO_EDGE/linear sampler serves them all. No mipmaps (a shadow
-		// lookup always samples level 0), hence maxLod = 1.
-		cubeShadowSampler.init(this, VK_FILTER_LINEAR, VK_FILTER_LINEAR,
+		// CLAMP_TO_EDGE sampler serves them all. No mipmaps (a shadow lookup
+		// always samples level 0), hence maxLod = 1.
+		//
+		// NEAREST, not LINEAR. What these cubes store is a DISTANCE, not a
+		// colour, and averaging four neighbouring distances is only meaningful
+		// where they describe the same surface. Across a silhouette -- a texel
+		// on the door and the texel next to it looking past its edge into the
+		// far wall -- bilinear filtering returns a distance that belongs to
+		// NEITHER, somewhere in between, and every fragment compared against it
+		// gets the wrong answer: too near, and an unoccluded surface reads as
+		// shadowed; too far, and a genuinely occluded one reads as lit. The
+		// error is proportional to the depth GAP across the edge, i.e. metres,
+		// not texels, which is why it used to need a bias of the same order to
+		// paper over (the 0.35 grazing bias shadowFromCube() carried) -- and
+		// that bias is what let a torch light the chains through a closed door,
+		// since the door is only ~0.6 units in front of them. Sampling one
+		// texel with no blending makes the comparison honest again and lets the
+		// bias be what it should be: a texel-sized quantity.
+		cubeShadowSampler.init(this, VK_FILTER_NEAREST, VK_FILTER_NEAREST,
 								VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
 								VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
 								VK_SAMPLER_MIPMAP_MODE_LINEAR,

@@ -63,6 +63,14 @@
 // SHADOW_SWAP_MARGIN (main.cpp) just has more candidates to arbitrate.
 #define NUM_SHADOW_CUBES 32
 
+// Side, in texels, of one face of a cube shadow map. Shared with main.cpp's
+// SHADOW_MAP_RES (which is what actually sizes the images) because
+// CookTorrance.frag needs it too: the depth bias for the cube path is derived
+// from how much WORLD space one texel of that map covers at the distance being
+// shaded, and that derivation is meaningless without the resolution. See
+// shadowFromCube() there.
+#define SHADOW_CUBE_RES 1024
+
 #define LIGHT_DIRECT 0
 #define LIGHT_POINT  1
 #define LIGHT_SPOT   2
