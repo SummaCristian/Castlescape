@@ -28,6 +28,7 @@ layout(binding = 0, set = 1) uniform UniformBufferObject {
 	int interiorAmbient;
 	float time;
 	float ambientWeight;
+	int metallic;
 } ubo;
 
 layout(location = 0) in vec3 inPosition;

@@ -42,6 +42,7 @@ layout(binding = 0, set = 0) uniform UniformBufferObject {
 	int interiorAmbient;
 	float time;
 	float ambientWeight;
+	int metallic;
 } ubo;
 
 layout(push_constant) uniform ShadowPushConstant {

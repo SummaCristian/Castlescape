@@ -20,7 +20,12 @@
 //                  0.04 for every non-metal there is, so it gets copied rather
 //                  than chosen. Metals are far higher.
 //   k              how much of the surface's response is plain colour versus
-//                  highlight. High for ordinary materials, low for metals.
+//                  highlight. High for ordinary materials, ignored for the
+//                  ones that set "metallic" (see below), which have none.
+//
+// Plus one switch that changes which lighting path a model takes at all:
+//   metallic       shade it as a conductor rather than as a dielectric. See
+//                  Material::metallic.
 //
 // The base colour isn't here: it comes from the texture, per pixel.
 //
@@ -115,6 +120,37 @@ struct Material {
 	// the authored stand-in for occlusion: one number per model saying roughly
 	// how enclosed its surfaces are.
 	float ambientWeight = -1.0f;
+
+	// Shade this model as a METAL. The four numbers above describe a dielectric
+	// and can only ever approximate one: a conductor differs from a stone in
+	// kind, not in degree, and two of the differences cannot be written as a
+	// value of roughness/F0/k at all.
+	//
+	// What the flag actually switches, both in CookTorrance.frag:
+	//
+	//   no diffuse lobe. k is forced to 0, ignoring whatever this entry says.
+	//   The diffuse term is light that entered the surface and scattered back
+	//   out; in a conductor the free electrons absorb it instead. A low k gets
+	//   close, but "low" is a number somebody has to keep re-picking, and any
+	//   leftover share paints the object with its albedo texture -- which is
+	//   how the padlock read as orange plastic rather than as brass.
+	//
+	//   the indirect term becomes a REFLECTION (metalAmbient()) instead of the
+	//   hemisphere times the albedo. This is the one that matters for looking
+	//   like metal: what you see on a lock or a chain is mostly the room
+	//   around it, and a diffuse ambient cannot produce that no matter how it
+	//   is tuned. It also fixes the case the diffuse ambient handles worst --
+	//   dark metal out of direct light, where albedo ~0.03 multiplied the term
+	//   away and the chains went black.
+	//
+	// With this on, specularColor stops being "colour of the highlight" and
+	// becomes the material's own reflectance colour (mS * F0 should come out
+	// at the metal's measured reflectance -- iron ~0.56/0.57/0.58, brass
+	// ~0.95/0.64/0.37), and it is no longer optional: a metal left at white mS
+	// reflects like polished chrome.
+	//
+	// int rather than bool for the same reason as flatNormals above.
+	int metallic = 0;
 };
 
 class SceneMaterials {
@@ -159,6 +195,7 @@ void SceneMaterials::readInto(const nlohmann::json &js, Material &m) {
 	if(js.contains("flatNormals")) m.flatNormals = js["flatNormals"].get<bool>() ? 1 : 0;
 	if(js.contains("castsShadow")) m.castsShadow = js["castsShadow"].get<bool>();
 	if(js.contains("interior"))    m.interiorAmbient = js["interior"].get<bool>() ? 1 : 0;
+	if(js.contains("metallic"))    m.metallic = js["metallic"].get<bool>() ? 1 : 0;
 	// Not clamped to 0 at the bottom: negative is the sentinel for "inherit
 	// the scene's", so only the top end is a data error.
 	if(js.contains("ambientWeight")) m.ambientWeight = glm::min(js["ambientWeight"].get<float>(), 1.0f);
