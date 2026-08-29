@@ -54,6 +54,10 @@ layout(binding = 0, set = 1) uniform UniformBufferObject {
     // means "no override", which is the default: only the models that need a
     // different share from the scene's carry one. See ambientShare() below.
     float ambientWeight;
+    // 0..1: this instance's focus-glow strength, set per-instance in
+    // updateUniformBuffer() when it's the object the crosshair is aimed at.
+    // See its use near the end of main() below.
+    float glow;
     // 1: shade this model as a METAL. Two things follow from it, both in
     // main(): the diffuse term goes away entirely (k is forced to 0, a metal
     // has no subsurface scattering to produce one), and the indirect term
@@ -836,6 +840,84 @@ void main() {
         float intensity = dot(color, vec3(0.2126, 0.7152, 0.0722));
         outColor = vec4(heatmapRamp(intensity), 1.0);
         return;
+    }
+
+    // Focus glow: a whimsical gold "magic field" aura on the silhouette of
+    // whichever single door/pickup instance the player's crosshair is
+    // currently aimed at (ubo.glow, set per-instance in main.cpp's
+    // updateUniformBuffer loop -- see gazedInstance), chosen to stay clear
+    // of the ghost attack mode's own color cue. Purely a per-fragment color
+    // addition on this instance's own surface -- it doesn't cast any light
+    // onto anything else nearby (an earlier version injected a point light
+    // for that; removed, so the effect stays exactly on the model).
+    //
+    // A Fresnel/rim term (grazing angles between the surface normal and the
+    // view direction) concentrates this at the model's silhouette rather
+    // than washing the whole surface, like a field clinging to its edges.
+    // `flow` rides a sine wave over world position instead of just fragment
+    // time, so as the term sweeps 0..1 it reads as travelling around the
+    // object's surface rather than the whole thing pulsing in place
+    // together.
+    if(ubo.glow != 0.0) {
+        // ubo.glow (set in main.cpp's updateUniformBuffer, see gazedGlowKind
+        // and gazedInteractionDisabled there) packs two things into one
+        // scalar: rounded magnitude selects the category color (1 = Door,
+        // gold; 2 = Pickup, blue/purple), then a negative sign overrides
+        // that with red -- the player is aimed at something disabled right
+        // now (e.g. a locked door with no matching key). Same aura either
+        // way, just a different color, so everything below is shared.
+        const vec3 GLOW_COLOR_DOOR = vec3(1.0, 0.78, 0.25);
+        const vec3 GLOW_COLOR_PICKUP = vec3(0.55, 0.35, 1.0);
+        const vec3 GLOW_COLOR_DISABLED = vec3(1.0, 0.15, 0.1);
+        vec3 GLOW_COLOR;
+        if(ubo.glow < 0.0) {
+            GLOW_COLOR = GLOW_COLOR_DISABLED;
+        } else if(abs(ubo.glow) > 1.5) {
+            GLOW_COLOR = GLOW_COLOR_PICKUP;
+        } else {
+            GLOW_COLOR = GLOW_COLOR_DOOR;
+        }
+        float glowStrength = (ubo.glow != 0.0) ? 1.0 : 0.0;
+        float ndotv = clamp(dot(N, V), 0.0, 1.0);
+        float edgeTerm = 1.0 - ndotv;
+
+        // A bit wider than the original pow(edgeTerm, 3.0): on its own this
+        // still wasn't enough contrast on small, shiny props like the key,
+        // whose own specular highlights compete with a thin gold rim for
+        // attention -- see the dark outline below for the rest of the fix.
+        float rim = pow(edgeTerm, 2.2);
+
+        // A thin, near-black separator right at the true geometric
+        // silhouette -- a much sharper power than the gold rim, so it only
+        // shows in the last couple of degrees -- darkening the surface
+        // there BEFORE the gold is added. A reflective surface like the
+        // key's can otherwise bounce a bright highlight straight through
+        // right where the gold band sits, washing the two together into one
+        // gold-on-gold blur; giving the gold something duller immediately
+        // underneath it at the very edge is what actually separates it from
+        // the model, the way an outline separates a sticker from its
+        // background.
+        float edgeOutline = pow(edgeTerm, 12.0);
+        color = mix(color, color * 0.15, edgeOutline * glowStrength);
+
+        float flow = 0.5 + 0.5 * sin(dot(fragPos, vec3(1.3, 0.9, 1.1)) * 2.2 - ubo.time * 2.0);
+        vec3 glowRaw = GLOW_COLOR * glowStrength * rim * flow * 0.9;
+
+        // Composite.frag's tone map (toneMap() there) divides everything at
+        // a pixel by that SAME pixel's own total luminance, so a plain
+        // additive glow gets proportionally crushed wherever the surface
+        // underneath is already bright, and shows almost undimmed wherever
+        // it's dark -- exactly backwards from "always visible no matter
+        // what". Scaling the addition by (1 + this fragment's own
+        // pre-glow luminance) cancels that division back out to first
+        // order (the algebra: output = (c + k*(Y+1)) / (Y + k*(Y+1) + 1)
+        // -> k/(1+k) as Y grows, a constant, instead of shrinking towards
+        // 0), so the glow's apparent brightness ends up roughly the same
+        // whether the object sits in full torchlight or pitch dark.
+        // Unclamped HDR like the rest of `color`, so it still blooms
+        // through the same post chain the torch flames ride.
+        float baseLuminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
+        color += glowRaw * (1.0 + baseLuminance);
     }
 
     // Written linear and unclamped into an R16G16B16A16_SFLOAT attachment, so

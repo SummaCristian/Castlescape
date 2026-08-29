@@ -28,6 +28,7 @@ layout(binding = 0, set = 1) uniform UniformBufferObject {
 	int interiorAmbient;
 	float time;
 	float ambientWeight;
+	float glow;
 	int metallic;
 } ubo;
 

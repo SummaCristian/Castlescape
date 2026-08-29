@@ -12,6 +12,7 @@
 // modules, this file assumes "modules/Starter.hpp" is already included by
 // whoever includes this one.
 
+#include <string>
 #include <vector>
 
 struct UiQuadVertex {
@@ -49,10 +50,16 @@ struct UiQuad {
 
 	std::vector<UiRect> rects = {};
 	bool commandBufferMustUpdate = false;
+	// Named command-buffer slot this instance submits under. Two UiQuad
+	// instances with the same name fight over one slot (each tears down the
+	// other's buffer), so any additional instance beyond the original HUD
+	// one must pass a distinct name.
+	std::string bufferName = "ui_quad";
 
 	// Draws before TextMaker's default order (10000), so text composites on
 	// top of these quads rather than the other way around.
-	void init(BaseProject *_BP, int sW, int sH, int so = 9000);
+	void init(BaseProject *_BP, int sW, int sH, int so = 9000,
+			  std::string bufName = "ui_quad");
 	void resizeScreen(int sW, int sH);
 	// Replaces the whole quad list and marks the mesh for a rebuild.
 	// Unconditional, same as TextMaker::print: it's up to the caller (e.g.
@@ -79,11 +86,12 @@ void UiQuad::pixelToScr(float x, float y, float &sx, float &sy) {
 	sy = (y / (float)screenH) * 2.0f - 1.0f;
 }
 
-void UiQuad::init(BaseProject *_BP, int sW, int sH, int so) {
+void UiQuad::init(BaseProject *_BP, int sW, int sH, int so, std::string bufName) {
 	BP = _BP;
 	screenW = sW;
 	screenH = sH;
 	submitOrder = so;
+	bufferName = bufName;
 
 	VD.init(BP, {
 			  {0, sizeof(UiQuadVertex), VK_VERTEX_INPUT_RATE_VERTEX}
@@ -240,7 +248,7 @@ void UiQuad::updateCommandBuffer() {
 		UiQuadAndModel *qm = (UiQuadAndModel *)malloc(sizeof(UiQuadAndModel));
 		qm->quads = this;
 		qm->M = M;
-		BP->submitCommandBuffer("ui_quad", submitOrder,
+		BP->submitCommandBuffer(bufferName.c_str(), submitOrder,
 							UiQuad::populateCommandBufferAccess, qm,
 							UiQuad::freeCommandBuffer);
 		commandBufferMustUpdate = false;
