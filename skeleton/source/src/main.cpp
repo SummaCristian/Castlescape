@@ -4086,6 +4086,26 @@ class Skeleton26ReplaceName : public BaseProject {
 		}
 		lightDebug.update(currentImage, ViewPrj, dbgPos, dbgColor);
 
+		// The gazed door's chains/padlock are separate instances (see
+		// Door::LockProp) but should glow along with the door leaf -- they
+		// read as part of the door, not a prop sitting in front of it.
+		// Built once here rather than re-searching `doors` per instance
+		// below.
+		std::vector<Instance *> glowingInstances;
+		if(gazedInstance != nullptr) {
+			glowingInstances.push_back(gazedInstance);
+			for(const Door &d : doors) {
+				if(d.inst == gazedInstance) {
+					if(d.locked) {
+						for(const Door::LockProp &prop : d.lockProps) {
+							glowingInstances.push_back(prop.inst);
+						}
+					}
+					break;
+				}
+			}
+		}
+
 		// Over every technique, not just the first: instances need the same
 		// per-object uniforms filled in regardless of which technique they
 		// belong to.
@@ -4108,12 +4128,21 @@ class Skeleton26ReplaceName : public BaseProject {
 				ubo.time = simTime;
 
 				Instance &inst = SC.TI[techniqueId].I[instanceId];
-				// The one instance the crosshair is currently aimed at (see
-				// gazedInstance in GameLogic()) glows; every other instance,
-				// including other instances of the same model, doesn't --
-				// this is why the flag lives here per-instance rather than
-				// in Material, which is shared per-model.
-				ubo.glow = (&inst == gazedInstance) ? 1.0f : 0.0f;
+				// The instance the crosshair is currently aimed at (see
+				// gazedInstance in GameLogic()), plus its lock hardware if
+				// it's a locked door (see glowingInstances above), glows;
+				// every other instance, including other instances of the
+				// same model, doesn't -- this is why the flag lives here
+				// per-instance rather than in Material, which is shared
+				// per-model.
+				bool glow = false;
+				for(Instance *g : glowingInstances) {
+					if(g == &inst) {
+						glow = true;
+						break;
+					}
+				}
+				ubo.glow = glow ? 1.0f : 0.0f;
 				// DS[1] = Pchar pass (main render): set0=DSLglobal, set1=DSLlocal
 				inst.DS[0][0]->map(currentImage, &gubo, 0); // global (light/camera)
 				inst.DS[0][1]->map(currentImage, &ubo, 0); // camera MVPs
