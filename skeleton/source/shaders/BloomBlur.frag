@@ -53,10 +53,26 @@ void main() {
 		0.1945946, 0.1216216, 0.054054, 0.016216
 	);
 
+	// Half a texel in from each border: the clamp range for the taps below.
+	//
+	// This has to be done by hand because Starter.hpp builds a framebuffer
+	// attachment's sampler with its default address mode, which is
+	// VK_SAMPLER_ADDRESS_MODE_REPEAT (see FrameBufferAttachment::createResources
+	// -> TextureSampler::init), and every target in this chain is such an
+	// attachment. Without the clamp, the taps that fall off one edge WRAP to
+	// the opposite one, so anything overbright near the top of the frame --
+	// the exit door's glare, a torch -- prints a bright band along the bottom
+	// of the screen and vice versa. Clamping here is equivalent to
+	// CLAMP_TO_EDGE and keeps the fix inside the bloom chain, rather than
+	// changing a sampler default that every model texture in the level relies
+	// on for its UV tiling.
+	vec2 lo = post.texelSize * 0.5;
+	vec2 hi = vec2(1.0) - lo;
+
 	vec3 sum = vec3(0.0);
 	for(int i = 0; i < 9; i++) {
 		float offset = float(i - 4);	// -4..4, centred on this fragment
-		vec2 sampleUV = uv + post.texelSize * post.blurDir * offset;
+		vec2 sampleUV = clamp(uv + post.texelSize * post.blurDir * offset, lo, hi);
 		sum += texture(srcTex, sampleUV).rgb * weights[i];
 	}
 

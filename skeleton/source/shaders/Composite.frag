@@ -53,8 +53,20 @@ void main() {
 	// sampler's bilinear filtering to upsample smoothly back to full
 	// resolution, which also happens to soften the blur's own quarter-res
 	// blockiness rather than exposing it.
+	//
+	// The bloom fetch is clamped half a BLOOM texel inside the border. Even
+	// with no offset added, the upsample's own bilinear footprint reaches
+	// outside the image in the outermost half-texel -- and these attachments
+	// carry a REPEAT sampler (Starter.hpp's default; see the note in
+	// BloomBlur.frag), so out there it blends in the row from the OPPOSITE
+	// edge. At quarter resolution that half texel is two full-res pixels: a
+	// thin bright line along the top or bottom of the screen whenever
+	// something overbright sits at the other end of the frame.
+	vec2 bloomTexel = 1.0 / vec2(textureSize(bloomTex, 0));
+	vec2 bloomUV = clamp(uv, bloomTexel * 0.5, 1.0 - bloomTexel * 0.5);
+
 	vec3 scene = texture(srcTex, uv).rgb;
-	vec3 bloom = texture(bloomTex, uv).rgb;
+	vec3 bloom = texture(bloomTex, bloomUV).rgb;
 
 	vec3 color = scene + bloom * post.bloomIntensity;
 	color *= post.exposure;

@@ -1614,12 +1614,40 @@ class Skeleton26ReplaceName : public BaseProject {
 	static constexpr float EXIT_GLOW_FLOOR_HALF_X = 1.6f;
 	static constexpr float EXIT_GLOW_FLOOR_HALF_Z = 3.6f;
 	static constexpr glm::vec3 EXIT_GLOW_FLOOR_NORMAL = glm::vec3(0.0f, 1.0f, 0.0f);
+	// The third quad: the same trick as the ground one, upside down, and it
+	// exists for the same reason the ground one does -- the upright wall of
+	// light is FINITE, and a player who walks up to the threshold and looks UP
+	// sees over the top of it, straight into the skybox.
+	//
+	// Raising the upright quad cannot fix that, and no value of
+	// EXIT_GLOW_HALF_HEIGHT can: the sightline through the top of the arch
+	// hits the plane x = 22 at
+	//     y = y_eye + (4.85 - y_eye) * (22 - x_eye) / (20 - x_eye)
+	// which diverges as the player approaches the wall's outer face at x = 20.
+	// The margins in EXIT_GLOW_CENTER's comment were worked from a player
+	// standing back in the room, where the ratio is small; pressed against the
+	// doorway it is unbounded. A ceiling closes the geometry instead of
+	// chasing it -- every upward ray through the arch crosses y = 4.9 sooner
+	// or later, and whichever of the two quads it reaches first is white.
+	//
+	// y = 4.9 is 5cm above the top of the doorway (the hole runs y 0..4.85,
+	// see the collider boxes for dvDoor), so it is above the leaf's sweep and
+	// buried in the stone over the arch for the whole stretch that lies inside
+	// the wall. Same x extent as the floor quad, for the same two reasons: the
+	// near end runs back under the wall so its border fade never shows, and
+	// the far end passes behind the upright quad rather than meeting it at a
+	// seam.
+	static constexpr glm::vec3 EXIT_GLOW_CEILING_CENTER = glm::vec3(21.1f, 4.90f, 29.99f);
+	static constexpr float EXIT_GLOW_CEILING_HALF_X = 1.6f;
+	static constexpr float EXIT_GLOW_CEILING_HALF_Z = 3.6f;
+	static constexpr glm::vec3 EXIT_GLOW_CEILING_NORMAL = glm::vec3(0.0f, -1.0f, 0.0f);
 	// Quad ids, in the order updateUniformBuffer() writes them. Named rather
-	// than passed as bare 0/1 because the two are not interchangeable: they
-	// have different bases and different half-extents.
+	// than passed as bare 0/1/2 because the three are not interchangeable:
+	// they have different bases and different half-extents.
 	static constexpr int EXIT_GLOW_UPRIGHT = 0;
 	static constexpr int EXIT_GLOW_FLOOR = 1;
-	static constexpr int EXIT_GLOW_COUNT = 2;
+	static constexpr int EXIT_GLOW_CEILING = 2;
+	static constexpr int EXIT_GLOW_COUNT = 3;
 	// Peak radiance. Absurd on the face of it -- BLOOM_THRESHOLD is 1.55 --
 	// and it has to be, because of the tone map: Composite.frag divides by
 	// (Y + 1), so a value of 9 lands at 0.90 on screen and a value of 60 at
@@ -4269,6 +4297,20 @@ class Skeleton26ReplaceName : public BaseProject {
 				glm::vec4(EXIT_GLOW_FLOOR_CENTER, 1.0f)
 			);
 			exitGlow.update(EXIT_GLOW_FLOOR, ViewPrj * floorBasis,
+							EXIT_GLOW_COLOR, glow, animTime, currentImage);
+
+			// The lid: the same plane as the floor quad, lifted over the top of
+			// the arch and turned to face down, so looking up from the
+			// threshold finds daylight rather than the skybox. Axes are the
+			// floor's, since the plane is the same one -- only the normal and
+			// the height differ.
+			const glm::mat4 ceilingBasis = glm::mat4(
+				glm::vec4(glm::vec3(1.0f, 0.0f, 0.0f) * EXIT_GLOW_CEILING_HALF_X, 0.0f),
+				glm::vec4(glm::vec3(0.0f, 0.0f, 1.0f) * EXIT_GLOW_CEILING_HALF_Z, 0.0f),
+				glm::vec4(EXIT_GLOW_CEILING_NORMAL, 0.0f),
+				glm::vec4(EXIT_GLOW_CEILING_CENTER, 1.0f)
+			);
+			exitGlow.update(EXIT_GLOW_CEILING, ViewPrj * ceilingBasis,
 							EXIT_GLOW_COLOR, glow, animTime, currentImage);
 		}
 

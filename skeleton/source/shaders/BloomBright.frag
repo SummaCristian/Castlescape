@@ -64,11 +64,19 @@ void main() {
 	// texels, so these four samples between them cover the full source area
 	// that maps onto this (quarter-res) output texel -- a cheap box downsample
 	// for the price of 4 fetches instead of the naive 16.
+	//
+	// Clamped to half a texel inside the border, for the same reason
+	// BloomBlur.frag clamps its taps: the scene target is a framebuffer
+	// attachment, and Starter.hpp gives those a REPEAT sampler, so a tap that
+	// falls off one edge reads the opposite edge and drags an overbright pixel
+	// from the top of the frame down to the bottom (and back).
 	vec2 o = post.texelSize;
-	vec3 c0 = texture(srcTex, uv + vec2(-o.x, -o.y)).rgb;
-	vec3 c1 = texture(srcTex, uv + vec2( o.x, -o.y)).rgb;
-	vec3 c2 = texture(srcTex, uv + vec2(-o.x,  o.y)).rgb;
-	vec3 c3 = texture(srcTex, uv + vec2( o.x,  o.y)).rgb;
+	vec2 lo = o * 0.5;
+	vec2 hi = vec2(1.0) - lo;
+	vec3 c0 = texture(srcTex, clamp(uv + vec2(-o.x, -o.y), lo, hi)).rgb;
+	vec3 c1 = texture(srcTex, clamp(uv + vec2( o.x, -o.y), lo, hi)).rgb;
+	vec3 c2 = texture(srcTex, clamp(uv + vec2(-o.x,  o.y), lo, hi)).rgb;
+	vec3 c3 = texture(srcTex, clamp(uv + vec2( o.x,  o.y), lo, hi)).rgb;
 
 	// Karis average: weight each tap by 1/(1+luma) instead of averaging them
 	// evenly. A single stray firefly pixel (a spark can be many times

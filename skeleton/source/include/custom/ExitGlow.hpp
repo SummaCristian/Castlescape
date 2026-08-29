@@ -37,10 +37,13 @@
 // out that the leaf never sweeps through it -- and at that distance a strip of
 // open ground reappears under the bottom of the arch, between the threshold
 // and the light, which is precisely the "something out there" the effect
-// exists to deny. So main.cpp uses two: an upright wall of light past the
-// leaf's reach, and a second one lying flat on the ground in front of it,
-// covering the strip. Between them the opening frames nothing but white from
-// every angle the player can stand at.
+// exists to deny. So main.cpp uses three: an upright wall of light past the
+// leaf's reach, one lying flat on the ground in front of it covering the
+// strip, and a third over the top of the arch, because the upright wall is
+// finite in height too and a player at the threshold looking up sees over it
+// into the skybox -- a gap no half-height can close, since the sightline's
+// rise diverges as the player nears the wall. Between the three the opening
+// frames nothing but white from every angle the player can stand at.
 //
 // Hence the instance pool. It is the same DS-per-instance arrangement Flame
 // has, minus the spawn() bookkeeping: the count is fixed at init() because the
@@ -93,7 +96,7 @@ struct ExitGlow {
 	// every frame; there is no spawn() and no way to skip one, so a quad the
 	// caller has nothing to say about should simply be given intensity 0
 	// (ExitGlow.frag discards on it).
-	void init(BaseProject *_BP, int count = 2);
+	void init(BaseProject *_BP, int count = 3);
 
 	// Call every frame, for every quad.
 	//
