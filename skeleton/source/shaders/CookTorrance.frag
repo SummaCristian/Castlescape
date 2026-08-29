@@ -858,8 +858,17 @@ void main() {
     // time, so as the term sweeps 0..1 it reads as travelling around the
     // object's surface rather than the whole thing pulsing in place
     // together.
-    if(ubo.glow > 0.0) {
-        const vec3 GLOW_COLOR = vec3(1.0, 0.78, 0.25);
+    if(ubo.glow != 0.0) {
+        // Sign of ubo.glow (set in main.cpp's updateUniformBuffer, see
+        // gazedInteractionDisabled there) swaps gold for red: gold means
+        // [E] does something right now, red means the player is aimed at
+        // an interactable that's currently disabled (e.g. a locked door
+        // with no matching key) -- same aura, different color, so it
+        // reuses everything below rather than a whole second branch.
+        const vec3 GLOW_COLOR_ENABLED = vec3(1.0, 0.78, 0.25);
+        const vec3 GLOW_COLOR_DISABLED = vec3(1.0, 0.15, 0.1);
+        vec3 GLOW_COLOR = ubo.glow > 0.0 ? GLOW_COLOR_ENABLED : GLOW_COLOR_DISABLED;
+        float glowStrength = abs(ubo.glow);
         float ndotv = clamp(dot(N, V), 0.0, 1.0);
         float edgeTerm = 1.0 - ndotv;
 
@@ -880,10 +889,10 @@ void main() {
         // the model, the way an outline separates a sticker from its
         // background.
         float edgeOutline = pow(edgeTerm, 12.0);
-        color = mix(color, color * 0.15, edgeOutline * ubo.glow);
+        color = mix(color, color * 0.15, edgeOutline * glowStrength);
 
         float flow = 0.5 + 0.5 * sin(dot(fragPos, vec3(1.3, 0.9, 1.1)) * 2.2 - ubo.time * 2.0);
-        vec3 glowRaw = GLOW_COLOR * ubo.glow * rim * flow * 0.9;
+        vec3 glowRaw = GLOW_COLOR * glowStrength * rim * flow * 0.9;
 
         // Composite.frag's tone map (toneMap() there) divides everything at
         // a pixel by that SAME pixel's own total luminance, so a plain

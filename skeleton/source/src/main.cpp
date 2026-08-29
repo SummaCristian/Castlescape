@@ -860,6 +860,14 @@ class Skeleton26ReplaceName : public BaseProject {
 	// per frame in GameLogic() right after nearbyDoor/nearbyPickup, and read
 	// by updateUniformBuffer()'s per-instance UBO loop to set ubo.glow.
 	Instance *gazedInstance = nullptr;
+	// True when gazedInstance is aimed at but [E] would currently do
+	// nothing to it -- right now that's just a locked door with no matching
+	// key on hand (or approached from the wrong side), but kept general
+	// (rather than named e.g. doorLocked) so a future non-door interactable
+	// with its own disabled state can flip it too. Flips ubo.glow's sign in
+	// updateUniformBuffer(), which CookTorrance.frag reads to swap the aura
+	// from gold to red -- see the color comment there.
+	bool gazedInteractionDisabled = false;
 
 	// True if `front` (the camera's normalized forward vector) is aimed
 	// closely enough at the point `target` to select it: within lookDist,
@@ -4142,7 +4150,13 @@ class Skeleton26ReplaceName : public BaseProject {
 						break;
 					}
 				}
-				ubo.glow = glow ? 1.0f : 0.0f;
+				// Sign carries "would [E] do anything right now" (see
+				// gazedInteractionDisabled) piggybacked on the same scalar
+				// rather than adding a field -- the UBO's spare room is
+				// already spent (see the struct comment above). Magnitude
+				// stays 0 or 1 either way; CookTorrance.frag takes abs() for
+				// strength and the sign for gold-vs-red.
+				ubo.glow = glow ? (gazedInteractionDisabled ? -1.0f : 1.0f) : 0.0f;
 				// DS[1] = Pchar pass (main render): set0=DSLglobal, set1=DSLlocal
 				inst.DS[0][0]->map(currentImage, &gubo, 0); // global (light/camera)
 				inst.DS[0][1]->map(currentImage, &ubo, 0); // camera MVPs
@@ -4879,8 +4893,18 @@ class Skeleton26ReplaceName : public BaseProject {
 			// over door, same priority as the E-key handling below), for the
 			// per-instance focus glow -- see ubo.glow in updateUniformBuffer().
 			gazedInstance = nullptr;
-			if(nearbyPickup >= 0) gazedInstance = pickups[nearbyPickup].inst;
-			else if(nearbyDoor >= 0) gazedInstance = doors[nearbyDoor].inst;
+			gazedInteractionDisabled = false;
+			if(nearbyPickup >= 0) {
+				gazedInstance = pickups[nearbyPickup].inst;
+			} else if(nearbyDoor >= 0) {
+				const Door &d = doors[nearbyDoor];
+				gazedInstance = d.inst;
+				// Same condition the locked-door prompt text above already
+				// checks: wrong side of the padlock, or no matching key on
+				// the ring -- either way [E] would do nothing right now.
+				gazedInteractionDisabled =
+					d.locked && (!d.onLockSide(camPos) || findKeyInRing(d.lockKeyId) < 0);
+			}
 
 			bool interactKey = glfwGetKey(window, GLFW_KEY_E);
 			if(interactKey && !interactKeyWasPressed) {
