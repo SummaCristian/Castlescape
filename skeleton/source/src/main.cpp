@@ -838,14 +838,14 @@ class Skeleton26ReplaceName : public BaseProject {
 
 	// How close (world units, measured to the doorway centre) the player has
 	// to be before a door's prompt appears and E does anything.
-	static constexpr float DOOR_INTERACT_RADIUS = 10.0f;
+	static constexpr float DOOR_INTERACT_RADIUS = 6.0f;
 	// Degrees/second the door animates open/closed at.
 	static constexpr float DOOR_OPEN_SPEED = 120.0f;
 	// How far away (world units) a door can still be picked as a gaze
 	// candidate. Larger than DOOR_INTERACT_RADIUS, which still gates whether
 	// it's actually close enough to interact with once aimed at -- see
 	// findGazedDoor() and the gaze+proximity AND in GameLogic().
-	static constexpr float DOOR_LOOK_DISTANCE = 15.0f;
+	static constexpr float DOOR_LOOK_DISTANCE = 9.0f;
 	// Half-width (world units) of the doorway used to turn promptPos into an
 	// angular aiming tolerance -- wide, since a doorway is a big target.
 	static constexpr float DOOR_AIM_RADIUS = 1.2f;
@@ -900,14 +900,14 @@ class Skeleton26ReplaceName : public BaseProject {
 	std::vector<int> keyRing;
 	// Measured in 3D (unlike DOOR_INTERACT_RADIUS's XZ-only check): a pickup
 	// can sit at table height, well above the player's feet.
-	static constexpr float PICKUP_INTERACT_RADIUS = 7.0f;
+	static constexpr float PICKUP_INTERACT_RADIUS = 4.0f;
 	// Index into `pickups` of whichever one is currently in range, or -1.
 	// Mirrors nearbyDoor; checked first in GameLogic() since grabbing
 	// something should win over interacting with whatever's behind it.
 	int nearbyPickup = -1;
 	// How far away (world units) a pickup can still be picked as a gaze
 	// candidate. See DOOR_LOOK_DISTANCE for the same reasoning.
-	static constexpr float PICKUP_LOOK_DISTANCE = 11.0f;
+	static constexpr float PICKUP_LOOK_DISTANCE = 6.0f;
 	// Half-width (world units) of a pickup used for its angular aiming
 	// tolerance -- tight, since pickups are small props, not doorways.
 	static constexpr float PICKUP_AIM_RADIUS = 0.35f;
