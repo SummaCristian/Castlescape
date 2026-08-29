@@ -868,6 +868,15 @@ class Skeleton26ReplaceName : public BaseProject {
 	// updateUniformBuffer(), which CookTorrance.frag reads to swap the aura
 	// from gold to red -- see the color comment there.
 	bool gazedInteractionDisabled = false;
+	// What kind of thing gazedInstance is, so CookTorrance.frag can pick a
+	// distinct aura color per category (doors gold, pickups blue/purple)
+	// instead of every interactable looking the same. Encoded as
+	// ubo.glow's magnitude (1 = Door, 2 = Pickup) alongside the sign for
+	// gazedInteractionDisabled -- see the assignment in
+	// updateUniformBuffer(). A plain enum rather than a bool so a third
+	// category can slot in later without renaming anything.
+	enum class GlowKind { Door = 1, Pickup = 2 };
+	GlowKind gazedGlowKind = GlowKind::Door;
 
 	// True if `front` (the camera's normalized forward vector) is aimed
 	// closely enough at the point `target` to select it: within lookDist,
@@ -4151,12 +4160,15 @@ class Skeleton26ReplaceName : public BaseProject {
 					}
 				}
 				// Sign carries "would [E] do anything right now" (see
-				// gazedInteractionDisabled) piggybacked on the same scalar
-				// rather than adding a field -- the UBO's spare room is
-				// already spent (see the struct comment above). Magnitude
-				// stays 0 or 1 either way; CookTorrance.frag takes abs() for
-				// strength and the sign for gold-vs-red.
-				ubo.glow = glow ? (gazedInteractionDisabled ? -1.0f : 1.0f) : 0.0f;
+				// gazedInteractionDisabled) and magnitude carries which
+				// aura color (see GlowKind) -- both piggybacked on this one
+				// scalar rather than adding fields, since the UBO's spare
+				// room is already spent (see the struct comment above).
+				// CookTorrance.frag reads the magnitude to pick door-gold
+				// vs. pickup-blue, then the sign to override that with red
+				// if disabled.
+				float kindMag = static_cast<float>(gazedGlowKind);
+				ubo.glow = glow ? (gazedInteractionDisabled ? -kindMag : kindMag) : 0.0f;
 				// DS[1] = Pchar pass (main render): set0=DSLglobal, set1=DSLlocal
 				inst.DS[0][0]->map(currentImage, &gubo, 0); // global (light/camera)
 				inst.DS[0][1]->map(currentImage, &ubo, 0); // camera MVPs
@@ -4896,9 +4908,11 @@ class Skeleton26ReplaceName : public BaseProject {
 			gazedInteractionDisabled = false;
 			if(nearbyPickup >= 0) {
 				gazedInstance = pickups[nearbyPickup].inst;
+				gazedGlowKind = GlowKind::Pickup;
 			} else if(nearbyDoor >= 0) {
 				const Door &d = doors[nearbyDoor];
 				gazedInstance = d.inst;
+				gazedGlowKind = GlowKind::Door;
 				// Same condition the locked-door prompt text above already
 				// checks: wrong side of the padlock, or no matching key on
 				// the ring -- either way [E] would do nothing right now.

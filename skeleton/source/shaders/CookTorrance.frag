@@ -859,16 +859,25 @@ void main() {
     // object's surface rather than the whole thing pulsing in place
     // together.
     if(ubo.glow != 0.0) {
-        // Sign of ubo.glow (set in main.cpp's updateUniformBuffer, see
-        // gazedInteractionDisabled there) swaps gold for red: gold means
-        // [E] does something right now, red means the player is aimed at
-        // an interactable that's currently disabled (e.g. a locked door
-        // with no matching key) -- same aura, different color, so it
-        // reuses everything below rather than a whole second branch.
-        const vec3 GLOW_COLOR_ENABLED = vec3(1.0, 0.78, 0.25);
+        // ubo.glow (set in main.cpp's updateUniformBuffer, see gazedGlowKind
+        // and gazedInteractionDisabled there) packs two things into one
+        // scalar: rounded magnitude selects the category color (1 = Door,
+        // gold; 2 = Pickup, blue/purple), then a negative sign overrides
+        // that with red -- the player is aimed at something disabled right
+        // now (e.g. a locked door with no matching key). Same aura either
+        // way, just a different color, so everything below is shared.
+        const vec3 GLOW_COLOR_DOOR = vec3(1.0, 0.78, 0.25);
+        const vec3 GLOW_COLOR_PICKUP = vec3(0.55, 0.35, 1.0);
         const vec3 GLOW_COLOR_DISABLED = vec3(1.0, 0.15, 0.1);
-        vec3 GLOW_COLOR = ubo.glow > 0.0 ? GLOW_COLOR_ENABLED : GLOW_COLOR_DISABLED;
-        float glowStrength = abs(ubo.glow);
+        vec3 GLOW_COLOR;
+        if(ubo.glow < 0.0) {
+            GLOW_COLOR = GLOW_COLOR_DISABLED;
+        } else if(abs(ubo.glow) > 1.5) {
+            GLOW_COLOR = GLOW_COLOR_PICKUP;
+        } else {
+            GLOW_COLOR = GLOW_COLOR_DOOR;
+        }
+        float glowStrength = (ubo.glow != 0.0) ? 1.0 : 0.0;
         float ndotv = clamp(dot(N, V), 0.0, 1.0);
         float edgeTerm = 1.0 - ndotv;
 
