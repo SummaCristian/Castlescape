@@ -11,7 +11,7 @@
 // pipeline has no DSLglobal in front of it. That buffer is re-mapped with the
 // instance's current Wm every frame regardless of which pipeline reads it
 // (see updateUniformBuffer in main.cpp), which is what keeps a moving
-// occluder -- the door, the watching skulls -- casting a shadow that follows
+// occluder -- the door, the ghosts -- casting a shadow that follows
 // it instead of the position it was first drawn at.
 //
 // The light's view-projection matrix, by contrast, arrives as a PUSH
