@@ -910,6 +910,39 @@ class Skeleton26ReplaceName : public BaseProject {
 		p.inst->Wm = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
 		keyRing.erase(keyRing.begin() + slot);
 	}
+	// Put a carried key back in the world: off the ring, lying flat in front
+	// of the player and facing the same way they are, so walking up to it
+	// again shows the pick-up prompt like any other pickup. `slot` is an index
+	// INTO keyRing, same as consumeKey. `fwdDist` is how far ahead of the feet
+	// it lands: the manual drop (G) puts it at arm's length, the automatic one
+	// that frees the hand for a newly grabbed key puts it closer so it doesn't
+	// sail across the room.
+	// Re-parks the SAME instance the held-key block was drawing in the hand,
+	// same one-instance reasoning as pickup -- and doing it here rather than
+	// inline in GameLogic() is what lets both callers agree on the pose.
+	void dropKeyFromRing(int slot, const glm::vec3 &camPos, const glm::vec3 &front, float fwdDist) {
+		if(slot < 0 || slot >= (int)keyRing.size()) return;
+		Pickup &p = pickups[keyRing[slot]];
+		const float EYE_HEIGHT = 1.8f;	// same eye height used throughout GameLogic()
+
+		glm::vec2 faceDir(front.x, front.z);
+		if(glm::length(faceDir) > 0.0001f) faceDir = glm::normalize(faceDir);
+		else faceDir = glm::vec2(0.0f, 1.0f);
+		// 0.03 above the feet: dropped exactly at floor height would
+		// coincide with the floor mesh and z-fight (see notes.md on
+		// the dungeon meshes' coplanar faces).
+		glm::vec3 dropPos(camPos.x + faceDir.x * fwdDist,
+						   camPos.y - EYE_HEIGHT + 0.03f,
+						   camPos.z + faceDir.y * fwdDist);
+		float yaw = std::atan2(faceDir.x, faceDir.y);
+
+		p.worldPos = dropPos;
+		p.collected = false;
+		keyRing.erase(keyRing.begin() + slot);
+		p.inst->Wm = glm::translate(glm::mat4(1.0f), dropPos)
+					* glm::rotate(glm::mat4(1.0f), yaw, glm::vec3(0.0f, 1.0f, 0.0f))
+					* glm::scale(glm::mat4(1.0f), glm::vec3(p.worldScale));
+	}
 	// Held pose. Negative X puts it in the LEFT hand (mirrors
 	// HAND_TORCH_OFFSET's +0.5, which is the right); the torch already owns
 	// the right hand and a torch-carrying explorer would hold a found key in
@@ -5171,7 +5204,21 @@ class Skeleton26ReplaceName : public BaseProject {
 					// Keys additionally go on the ring, which is what makes
 					// the newest one show up in the hand and what the locks
 					// below are checked against.
-					if(!p.keyId.empty()) keyRing.push_back(nearbyPickup);
+					if(!p.keyId.empty()) {
+						// One free hand, one key in it: whatever was already
+						// there goes back on the floor instead of staying
+						// frozen wherever the hand last drew it. Only the
+						// newest key on the ring is drawn (see the held-key
+						// block below), so an older one left on the ring would
+						// hang in mid-air and be unreachable -- dropping it
+						// keeps it collectable. Dropped short (0.5 rather than
+						// G's 1.0) so it lands underfoot instead of being
+						// flung past the key just taken.
+						if(!keyRing.empty()) {
+							dropKeyFromRing((int)keyRing.size() - 1, camPos, front, 0.5f);
+						}
+						keyRing.push_back(nearbyPickup);
+					}
 				} else if(nearbyDoor >= 0) {
 					Door &d = doors[nearbyDoor];
 					if(d.locked) {
@@ -5216,36 +5263,14 @@ class Skeleton26ReplaceName : public BaseProject {
 			}
 			interactKeyWasPressed = interactKey;
 
-			// Drop key (G): puts the held key back down, lying flat in
-			// front of the player and facing the same way they are, so
-			// walking up to it again shows the pick-up prompt like any
-			// other pickup. Re-parks the SAME instance the held-key block
-			// was drawing in the hand, same one-instance reasoning as pickup.
-			// Drops the key in hand (the last one collected); the rest of the
-			// ring stays put, so pressing G repeatedly puts them down one at
-			// a time in reverse order of pickup.
+			// Drop key (G): puts the held key back down at arm's length, see
+			// dropKeyFromRing() for the pose. Drops the key in hand (the last
+			// one collected); the rest of the ring stays put, so pressing G
+			// repeatedly puts them down one at a time in reverse order of
+			// pickup.
 			bool dropKey = glfwGetKey(window, GLFW_KEY_G);
 			if(heldKeyIdx() >= 0 && dropKey && !dropKeyWasPressed) {
-				Pickup &p = pickups[heldKeyIdx()];
-				const float EYE_HEIGHT = 1.8f;	// same eye height used throughout GameLogic()
-
-				glm::vec2 faceDir(front.x, front.z);
-				if(glm::length(faceDir) > 0.0001f) faceDir = glm::normalize(faceDir);
-				else faceDir = glm::vec2(0.0f, 1.0f);
-				// 0.03 above the feet: dropped exactly at floor height would
-				// coincide with the floor mesh and z-fight (see notes.md on
-				// the dungeon meshes' coplanar faces).
-				glm::vec3 dropPos(camPos.x + faceDir.x * 1.0f,
-								   camPos.y - EYE_HEIGHT + 0.03f,
-								   camPos.z + faceDir.y * 1.0f);
-				float yaw = std::atan2(faceDir.x, faceDir.y);
-
-				p.worldPos = dropPos;
-				p.collected = false;
-				keyRing.pop_back();
-				p.inst->Wm = glm::translate(glm::mat4(1.0f), dropPos)
-							* glm::rotate(glm::mat4(1.0f), yaw, glm::vec3(0.0f, 1.0f, 0.0f))
-							* glm::scale(glm::mat4(1.0f), glm::vec3(p.worldScale));
+				dropKeyFromRing((int)keyRing.size() - 1, camPos, front, 1.0f);
 			}
 			dropKeyWasPressed = dropKey;
 
