@@ -120,6 +120,9 @@
 			{"id": "dcSkull", "model": "dungeonSkull", "texture": ["dungeonSkullTex"], "translate": [-13.0, 0.02, 22.5], "eulerAngles": [0.0, 20.0, 0.0], "scale": [0.46, 0.46, 0.46]},
 			{"id": "dcTorchE", "model": "dungeonTorch", "texture": ["dungeonTorchTex"], "translate": [-2.84, 3.5, 26.4]},
 
+			{"id": "dlBarrel", "model": "dungeonBarrel", "texture": ["dungeonBarrelTex"], "translate": [9.0, 0.02, 29.0], "eulerAngles": [0.0, -25.0, 0.0], "scale": [0.48, 0.48, 0.48]},
+			{"id": "dlKey", "model": "key", "texture": ["keyTex"], "translate": [9.0, 1.08, 29.0], "scale": [0.0032, 0.0032, 0.0032]},
+
 			{"id": "dlDoor2", "model": "dungeonDoorWall", "texture": ["dungeonDoorWallTex"], "translate": [-1.6, 0.02, 33.6], "eulerAngles": [0.0, 180.0, 0.0]},
 			{"id": "dlDoorPanel2", "model": "dungeonDoorPanel", "texture": ["dungeonDoorPanelTex"], "translate": [-0.883, 0.02, 28.779], "eulerAngles": [0.0, 180.0, 0.0]},
 			{"id": "dlDoorChains2", "model": "doorChains01", "texture": ["dungeonDoorPanelTex"], "translate": [-0.883, 0.02, 28.779], "eulerAngles": [0.0, 180.0, 0.0]},
@@ -150,7 +153,11 @@
 			{"id": "dvCeil70", "model": "dungeonCeiling", "texture": ["dungeonCeilingTex"], "translate": [20.0, 6.213, 19.2]},
 			{"id": "dvCeil71", "model": "dungeonCeiling", "texture": ["dungeonCeilingTex"], "translate": [20.0, 6.213, 26.4]},
 			{"id": "dvCornNE", "model": "dungeonCorner", "texture": ["dungeonCornerTex"], "translate": [20.0, 0.02, 19.2], "eulerAngles": [0.0, 90.0, 0.0]},
-			{"id": "dvCornSE", "model": "dungeonCorner", "texture": ["dungeonCornerTex"], "translate": [20.0, 0.02, 33.6]},
+			{"id": "dvDoor", "model": "dungeonDoorWall", "texture": ["dungeonDoorWallTex"], "translate": [20.0, 0.02, 26.4]},
+			{"id": "dvWallS", "model": "dungeonWall", "texture": ["dungeonWallTex"], "translate": [20.0, 0.02, 33.6], "eulerAngles": [0.0, 270.0, 0.0]},
+			{"id": "dvDoorPanel", "model": "dungeonDoorPanel", "texture": ["dungeonDoorPanelTex"], "translate": [19.283, 0.02, 31.221]},
+			{"id": "dvDoorChains", "model": "doorChains01", "texture": ["dungeonDoorPanelTex"], "translate": [19.283, 0.02, 31.221]},
+			{"id": "dvDoorPadlock", "model": "padlock01", "texture": ["keyTex"], "translate": [19.283, 0.02, 31.221]},
 			{"id": "dvTorch", "model": "dungeonTorch", "texture": ["dungeonTorchTex"], "translate": [18.76, 3.5, 26.4]},
 			{"id": "dvBarrel", "model": "dungeonBarrel", "texture": ["dungeonBarrelTex"], "translate": [15.5, 0.02, 22.5], "eulerAngles": [0.0, 20.0, 0.0], "scale": [0.48, 0.48, 0.48]},
 			{"id": "dvSkull", "model": "dungeonSkull", "texture": ["dungeonSkullTex"], "translate": [15.5, 0.02, 30.5], "eulerAngles": [0.0, -20.0, 0.0], "scale": [0.46, 0.46, 0.46]},

@@ -33,6 +33,9 @@
 #define FLAME_IMPLEMENTATION
 #include "custom/Flame.hpp"
 
+#define EXITGLOW_IMPLEMENTATION
+#include "custom/ExitGlow.hpp"
+
 #define LIGHTDEBUG_IMPLEMENTATION
 #include "custom/LightDebug.hpp"
 

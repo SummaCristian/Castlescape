@@ -17,6 +17,7 @@
 #include "custom/SceneMaterials.hpp"
 #include "custom/SceneLights.hpp"
 #include "custom/Flame.hpp"
+#include "custom/ExitGlow.hpp"
 #include "custom/CubeShadowMap.hpp"
 #include "custom/LightDebug.hpp"
 #include "custom/HuntCycle.hpp"
@@ -190,6 +191,18 @@ struct PostUniformBufferObject {
 	float exposure;			// composite
 	int debugFlags;			// composite: LIGHT_DEBUG_NO_TONEMAP
 	float time;
+	// composite: 0 normally, ramping to 1 as the player escapes. Blends the
+	// finished frame towards white.
+	//
+	// It has to be a term of its own rather than more `exposure`, because the
+	// tone map (c / (Y + 1), see Composite.frag) approaches 1 asymptotically:
+	// no exposure, however large, actually reaches white, and worse, it
+	// reaches it at wildly different rates for a lit wall and for a dark
+	// corner -- so cranking exposure alone doesn't white the frame out, it
+	// flattens it into a grey with the bright parts still winning. The
+	// exposure ramp is still there and still doing the work of blowing the
+	// scene out; this is what finishes the job.
+	float escapeFlash;
 };
 
 // A full-screen quad vertex for those passes. Only a position: Post.vert
@@ -717,9 +730,20 @@ class Skeleton26ReplaceName : public BaseProject {
 		Instance *inst = nullptr;
 		glm::mat4 baseWm{1.0f};	// authored (closed, angle=0) world matrix
 		glm::vec3 promptPos{0.0f};	// point used for the interact-range check (doorway centre, not the hinge)
-		float openAngleDeg = 100.0f;	// target angle when open; sign picks swing direction
+		// How far the leaf travels when open. Only the MAGNITUDE is used at
+		// runtime: the direction is decided per opening by swingSignAwayFrom()
+		// below, so the authored sign here is just the fallback for a leaf
+		// whose geometry can't be read (degenerate transform, player exactly
+		// in the door's plane).
+		float openAngleDeg = 100.0f;
 		bool open = false;
 		float angle = 0.0f;	// current animated angle, eases toward the target
+		// Which way the leaf is currently swinging, as a sign on
+		// |openAngleDeg|. Recomputed from the player's position only while
+		// the door sits fully closed (see the toggle in GameLogic): flipping
+		// it mid-swing would sweep the leaf back through the frame it is
+		// hinged in.
+		float swingSign = 1.0f;
 		// Padlock. Empty lockKeyId = no lock at all, which is every door as
 		// shipped: E just toggles it. A non-empty id means the door won't
 		// budge until the player is carrying a key pickup whose keyId matches
@@ -771,6 +795,43 @@ class Skeleton26ReplaceName : public BaseProject {
 			if(glm::length(axis) < 1e-6f) return true;	// degenerate: don't lock anyone out
 			glm::vec3 d(p.x - promptPos.x, 0.0f, p.z - promptPos.z);
 			return glm::dot(d, glm::normalize(axis)) * lockFaceSign > 0.0f;
+		}
+		// Sign on |openAngleDeg| that swings the leaf AWAY from a player at
+		// `p` -- i.e. the door always opens outward with respect to whoever
+		// is opening it, never into their face, whichever side they walked
+		// up from.
+		//
+		// The closed leaf lies in the plane through its hinge with the leaf's
+		// local +X as normal (the panel hangs along local Z; see the struct
+		// comment), so the same normal answers both "which side is the
+		// player on" and "which side did the panel end up on". Rather than
+		// reasoning about the sign of a cross product through a transform
+		// that may carry any rotation or mirroring, just rotate a point on
+		// the panel the positive way and look at where it lands: if that is
+		// the player's side, the negative way is the one wanted.
+		//
+		// XZ only, like onLockSide: a hinge is vertical, so the player's
+		// height has no say in which way the door goes.
+		float swingSignAwayFrom(const glm::vec3 &p) const {
+			float authored = openAngleDeg < 0.0f ? -1.0f : 1.0f;
+			glm::vec3 n(baseWm[0].x, 0.0f, baseWm[0].z);	// leaf local +X, in world
+			if(glm::length(n) < 1e-6f) return authored;	// degenerate: keep the authored swing
+			n = glm::normalize(n);
+
+			glm::vec3 d(p.x - promptPos.x, 0.0f, p.z - promptPos.z);
+			float playerSide = glm::dot(d, n);
+			// Standing in the leaf's own plane (in the doorway itself): there
+			// is no "away" to pick, so don't churn -- keep what the scene asked
+			// for.
+			if(std::abs(playerSide) < 1e-4f) return authored;
+
+			glm::vec3 hinge(baseWm[3]);
+			glm::vec4 tip = baseWm
+						  * glm::rotate(glm::mat4(1.0f), glm::radians(std::abs(openAngleDeg)), glm::vec3(0.0f, 1.0f, 0.0f))
+						  * glm::vec4(0.0f, 0.0f, -1.0f, 1.0f);	// a point down the panel, swung the positive way
+			float tipSide = glm::dot(glm::vec3(tip) - hinge, n);
+			if(std::abs(tipSide) < 1e-6f) return authored;	// swings flat: nothing to choose between
+			return tipSide * playerSide > 0.0f ? -1.0f : 1.0f;
 		}
 	};
 	std::vector<Door> doors;
@@ -972,11 +1033,57 @@ class Skeleton26ReplaceName : public BaseProject {
 	// from drawing this one in the hand from the next frame on.
 	void consumeKey(int slot) {
 		if(slot < 0 || slot >= (int)keyRing.size()) return;
-		Pickup &p = pickups[keyRing[slot]];
+		int idx = keyRing[slot];
+		Pickup &p = pickups[idx];
 		p.consumed = true;
 		p.collected = true;
-		p.inst->Wm = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
 		keyRing.erase(keyRing.begin() + slot);
+		// Off the ring immediately (the lock is spent the moment E is pressed)
+		// but NOT parked below the map yet: it sinks out of frame first, the
+		// mirror image of the pick-up rise. The lowering block in GameLogic()
+		// owns the instance until the animation ends and does the parking
+		// there. Nothing can pick it back up meanwhile -- `consumed` already
+		// took it out of the in-range scan.
+		// If a key was already sinking, it gets parked now rather than left
+		// mid-air: only one can be animating, and the newer one wins.
+		if(keyLowerIdx >= 0) {
+			pickups[keyLowerIdx].inst->Wm = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
+		}
+		keyLowerIdx = idx;
+		keyLowerElapsed = 0.0f;
+	}
+	// Put a carried key back in the world: off the ring, lying flat in front
+	// of the player and facing the same way they are, so walking up to it
+	// again shows the pick-up prompt like any other pickup. `slot` is an index
+	// INTO keyRing, same as consumeKey. `fwdDist` is how far ahead of the feet
+	// it lands: the manual drop (G) puts it at arm's length, the automatic one
+	// that frees the hand for a newly grabbed key puts it closer so it doesn't
+	// sail across the room.
+	// Re-parks the SAME instance the held-key block was drawing in the hand,
+	// same one-instance reasoning as pickup -- and doing it here rather than
+	// inline in GameLogic() is what lets both callers agree on the pose.
+	void dropKeyFromRing(int slot, const glm::vec3 &camPos, const glm::vec3 &front, float fwdDist) {
+		if(slot < 0 || slot >= (int)keyRing.size()) return;
+		Pickup &p = pickups[keyRing[slot]];
+		const float EYE_HEIGHT = 1.8f;	// same eye height used throughout GameLogic()
+
+		glm::vec2 faceDir(front.x, front.z);
+		if(glm::length(faceDir) > 0.0001f) faceDir = glm::normalize(faceDir);
+		else faceDir = glm::vec2(0.0f, 1.0f);
+		// 0.03 above the feet: dropped exactly at floor height would
+		// coincide with the floor mesh and z-fight (see notes.md on
+		// the dungeon meshes' coplanar faces).
+		glm::vec3 dropPos(camPos.x + faceDir.x * fwdDist,
+						   camPos.y - EYE_HEIGHT + 0.03f,
+						   camPos.z + faceDir.y * fwdDist);
+		float yaw = std::atan2(faceDir.x, faceDir.y);
+
+		p.worldPos = dropPos;
+		p.collected = false;
+		keyRing.erase(keyRing.begin() + slot);
+		p.inst->Wm = glm::translate(glm::mat4(1.0f), dropPos)
+					* glm::rotate(glm::mat4(1.0f), yaw, glm::vec3(0.0f, 1.0f, 0.0f))
+					* glm::scale(glm::mat4(1.0f), glm::vec3(p.worldScale));
 	}
 	// Held pose. Negative X puts it in the LEFT hand (mirrors
 	// HAND_TORCH_OFFSET's +0.5, which is the right); the torch already owns
@@ -994,6 +1101,30 @@ class Skeleton26ReplaceName : public BaseProject {
 	// bit/blade end rather than the bow/handle. If the render shows it
 	// tip-down instead, negate this to -90.
 	static constexpr glm::vec3 HAND_KEY_TILT_DEG = glm::vec3(90.0f, -20.0f, 0.0f);
+	// Pick-up animation: the key doesn't snap into the hand, it rises into
+	// frame from below over KEY_RAISE_DURATION seconds. Purely a translation
+	// along camera-local Y added to HAND_KEY_OFFSET, so it composes with the
+	// walk bob without either one knowing about the other.
+	// Short: this is a flourish, not a cutscene -- long enough to read as
+	// motion, short enough that a player grabbing a key mid-run doesn't wait.
+	static constexpr float KEY_RAISE_DURATION = 0.35f;
+	// How far below the final hand pose the key starts, in camera-local
+	// units. Roughly out of the bottom of the frame at the default FOV, which
+	// is what makes it read as "raised into view" rather than "nudged".
+	static constexpr float KEY_RAISE_DROP = 0.8f;
+	// Seconds elapsed since the key currently in hand was picked up, or
+	// >= KEY_RAISE_DURATION once the rise is over (it just keeps counting, the
+	// eased factor saturates at 1). Reset on every pickup, including the
+	// swap that drops the old key, so each new key plays the animation.
+	float keyRaiseElapsed = KEY_RAISE_DURATION;
+	// Index into `pickups` of a key spent on a lock that is still sinking out
+	// of frame, or -1. It is already off the ring (consumeKey erases it there
+	// and then), so heldKeyIdx() no longer names it and the held-key block
+	// below won't touch it -- this is the only thing still drawing it, and it
+	// parks the instance below the map when the fall finishes.
+	int keyLowerIdx = -1;
+	float keyLowerElapsed = 0.0f;
+
 	// No separate raw-mesh fix or hand-only size lives here: the held pose
 	// reads the same size as the table/dropped one (Pickup::worldScale, read
 	// once in addPickup() out of that key's own authored matrix -- see there). If a
@@ -1023,6 +1154,12 @@ class Skeleton26ReplaceName : public BaseProject {
 	// the scene (Flame::spawn), held one included -- that's what the reusable
 	// design was for.
 	Flame flame;
+
+	// The daylight standing outside the exit door. See custom/ExitGlow.hpp:
+	// one overbright quad on the open ground past the doorway, drawn in the
+	// main pass like the flames, whose glare is entirely the work of the
+	// bloom chain downstream. Driven by exitDoorIndex/EXIT_GLOW_* below.
+	ExitGlow exitGlow;
 
 	// Cheat-menu-gated debug overlay: colored crosses/arrows at each active
 	// light's position, and wireframe boxes at each torch's shadow-cube
@@ -1616,6 +1753,157 @@ class Skeleton26ReplaceName : public BaseProject {
 	// nothing happened. Same pattern as nearbyDoor/nearbyPickup.
 	bool atLockedExit = false;
 
+	// --- The way out, as a door ------------------------------------------
+	//
+	// Index into `doors` of the exit leaf (dvDoorPanel), or -1 if the scene
+	// didn't have it. Everything below rides on how far THAT door has swung,
+	// rather than on the exit box or on the run state: the light outside is a
+	// fact about the door being open, so it has to arrive while the leaf is
+	// still moving and the player is still a few metres short of winning. It
+	// is the swing that is the payoff -- by the time the box triggers, the run
+	// is already over.
+	int exitDoorIndex = -1;
+
+	// Where the daylight stands. Two quads, and the reason there are two is
+	// the door: it swings OUTWARD, so nothing can be parked right behind the
+	// opening without the leaf sweeping through it.
+	//
+	// The wall slab is x 18.758..20 and the arch spans z 28.87..31.11. The
+	// open leaf reaches x 21.78 at the widest point of its swing (its hinge is
+	// at x 19.283 and its diagonal is 2.50 long), so the upright quad stands
+	// at 22.0 -- past the leaf by 22cm, which is what lets the door open into
+	// the light and be seen as a silhouette against it instead of being cut in
+	// half by it.
+	//
+	// That distance is also what forces the second quad. Two units of open
+	// ground between the threshold and the light are visible through the
+	// bottom of the arch (the sill hides only what is within about 35cm of the
+	// wall), and a strip of lit ground is exactly the "something out there"
+	// this effect exists to deny. So the second quad lies FLAT, 6cm above the
+	// ground plane, bridging from under the wall out to the upright one. The
+	// arch then frames white above and white below, with the door swinging
+	// between the two.
+	//
+	// Both overhang what they have to cover, generously, and the margins are
+	// worked from the worst viewing angle rather than guessed. A player can
+	// stand anywhere in the dv room, which reaches back to x 12.8, and the
+	// extreme sightlines project the arch onto the upright quad's plane over
+	// roughly z 27.0..33.0 and y -0.5..6.0 -- all of which has to fall inside
+	// the quad's flat middle, not its border fade, which ExitGlow.frag starts
+	// at 78% of the half-extent. Hence half-extents of 4.4 and 4.6 rather than
+	// something that merely covers the opening head-on. Everything past the
+	// arch is masked by the wall's own depth, and the part below y 0 is buried
+	// under the ground plane outside.
+	static constexpr glm::vec3 EXIT_GLOW_CENTER = glm::vec3(22.0f, 2.8f, 29.99f);
+	static constexpr float EXIT_GLOW_HALF_WIDTH = 4.4f;		// along world Z
+	static constexpr float EXIT_GLOW_HALF_HEIGHT = 4.6f;	// along world Y
+	// Faces back into the castle, i.e. west, so the player looking out through
+	// the doorway sees it square on.
+	static constexpr glm::vec3 EXIT_GLOW_NORMAL = glm::vec3(-1.0f, 0.0f, 0.0f);
+	// The ground quad, x 19.5..22.7. Both ends are deliberately buried: the
+	// near one runs back UNDER the wall slab, so its border fade (starting at
+	// x 19.85) is hidden by stone and the light is already at full strength by
+	// the time the threshold lets you see any of it; the far one passes behind
+	// the upright quad, so the two overlap instead of meeting at a seam.
+	//
+	// 6cm above the ground plane: far enough not to z-fight it, low enough
+	// that the door -- whose own bottom edge is at y 0.2 -- always sweeps
+	// above it rather than through it.
+	static constexpr glm::vec3 EXIT_GLOW_FLOOR_CENTER = glm::vec3(21.1f, 0.06f, 29.99f);
+	static constexpr float EXIT_GLOW_FLOOR_HALF_X = 1.6f;
+	static constexpr float EXIT_GLOW_FLOOR_HALF_Z = 3.6f;
+	static constexpr glm::vec3 EXIT_GLOW_FLOOR_NORMAL = glm::vec3(0.0f, 1.0f, 0.0f);
+	// The third quad: the same trick as the ground one, upside down, and it
+	// exists for the same reason the ground one does -- the upright wall of
+	// light is FINITE, and a player who walks up to the threshold and looks UP
+	// sees over the top of it, straight into the skybox.
+	//
+	// Raising the upright quad cannot fix that, and no value of
+	// EXIT_GLOW_HALF_HEIGHT can: the sightline through the top of the arch
+	// hits the plane x = 22 at
+	//     y = y_eye + (4.85 - y_eye) * (22 - x_eye) / (20 - x_eye)
+	// which diverges as the player approaches the wall's outer face at x = 20.
+	// The margins in EXIT_GLOW_CENTER's comment were worked from a player
+	// standing back in the room, where the ratio is small; pressed against the
+	// doorway it is unbounded. A ceiling closes the geometry instead of
+	// chasing it -- every upward ray through the arch crosses y = 4.9 sooner
+	// or later, and whichever of the two quads it reaches first is white.
+	//
+	// y = 4.9 is 5cm above the top of the doorway (the hole runs y 0..4.85,
+	// see the collider boxes for dvDoor), so it is above the leaf's sweep and
+	// buried in the stone over the arch for the whole stretch that lies inside
+	// the wall. Same x extent as the floor quad, for the same two reasons: the
+	// near end runs back under the wall so its border fade never shows, and
+	// the far end passes behind the upright quad rather than meeting it at a
+	// seam.
+	static constexpr glm::vec3 EXIT_GLOW_CEILING_CENTER = glm::vec3(21.1f, 4.90f, 29.99f);
+	static constexpr float EXIT_GLOW_CEILING_HALF_X = 1.6f;
+	static constexpr float EXIT_GLOW_CEILING_HALF_Z = 3.6f;
+	static constexpr glm::vec3 EXIT_GLOW_CEILING_NORMAL = glm::vec3(0.0f, -1.0f, 0.0f);
+	// Quad ids, in the order updateUniformBuffer() writes them. Named rather
+	// than passed as bare 0/1/2 because the three are not interchangeable:
+	// they have different bases and different half-extents.
+	static constexpr int EXIT_GLOW_UPRIGHT = 0;
+	static constexpr int EXIT_GLOW_FLOOR = 1;
+	static constexpr int EXIT_GLOW_CEILING = 2;
+	static constexpr int EXIT_GLOW_COUNT = 3;
+	// Peak radiance. Absurd on the face of it -- BLOOM_THRESHOLD is 1.55 --
+	// and it has to be, because of the tone map: Composite.frag divides by
+	// (Y + 1), so a value of 9 lands at 0.90 on screen and a value of 60 at
+	// 0.984. Everything between "bright" and "cannot look at it" lives in that
+	// last stretch, and reaching it costs an order of magnitude. The bloom
+	// chain then takes the same unclamped value and floods the stonework
+	// around the opening with it, which is the part that actually reads as
+	// dazzle rather than as a white shape.
+	static constexpr float EXIT_GLOW_INTENSITY = 60.0f;
+	// Daylight, warmed very slightly. Pure white read as a hole in the render
+	// rather than as sky.
+	static constexpr glm::vec3 EXIT_GLOW_COLOR = glm::vec3(1.0f, 0.97f, 0.90f);
+	// The light the doorway throws BACK into the room, as a spot appended
+	// straight into gubo (the same thing the torch loop does with its flames),
+	// not as a lights.json entry: its brightness is a function of the door's
+	// angle, and lights.json has no way to say that. A spot rather than a
+	// point because the light has to come through the opening -- a point light
+	// out there would wrap round and light the outside face of the east wall
+	// as brightly as the floor inside.
+	static constexpr glm::vec3 EXIT_SPILL_POS = glm::vec3(20.7f, 2.6f, 29.99f);
+	// Well over 1: this is a doorway onto open daylight standing in a room lit
+	// by torches, and a spill light that merely matched them would leave the
+	// stone around the opening looking like it was lit by another torch. The
+	// scene target is HDR, so overbright light colours are as legitimate here
+	// as they are on the flames -- and the bloom chain treats what this lights
+	// up the same way it treats the quad itself.
+	static constexpr glm::vec3 EXIT_SPILL_COLOR = glm::vec3(3.4f, 3.26f, 3.0f);
+	static constexpr float EXIT_SPILL_G = 9.0f;		// reaches across the dv room
+	static constexpr float EXIT_SPILL_BETA = 1.0f;	// inverse-linear, so it carries
+	// Narrower than it looks like it should be, because this light has no
+	// shadow map (see where it is appended): nothing stops it, so a wide cone
+	// would light the east wall's inner face right across the room as evenly
+	// as it lights the floor in front of the opening, which reads as the wall
+	// having gone transparent. Kept to a cone aimed down the doorway's own
+	// axis, the leak stays where the light would honestly be anyway.
+	static constexpr float EXIT_SPILL_INNER_DEG = 55.0f;
+	static constexpr float EXIT_SPILL_OUTER_DEG = 105.0f;
+
+	// 0 while the exit door is shut, 1 once it has finished swinging. Drives
+	// the glow, the spill light and nothing else. Smoothstepped rather than
+	// linear so the light doesn't appear at full strength the instant the
+	// padlock comes off and the leaf twitches.
+	float exitOpenFrac = 0.0f;
+
+	// The whiteout. Once the run is won, this ramps 0 -> 1 and multiplies the
+	// post chain's exposure and bloom, so the last thing the player sees is
+	// the whole frame blowing out rather than a text banner over a dungeon.
+	// It rides the two knobs the stare-at glare already uses (see the GLARE_*
+	// constants), for the same reason that effect does: they are the only two
+	// values in the post chain that mean "brighter", and reusing them means
+	// the tone map compresses the flash exactly as it compresses everything
+	// else.
+	float escapeFlash = 0.0f;
+	static constexpr float ESCAPE_FLASH_SECONDS = 1.6f;
+	static constexpr float ESCAPE_EXPOSURE_GAIN = 7.0f;
+	static constexpr float ESCAPE_BLOOM_GAIN = 3.0f;
+
 	// The player's authored starting pose, captured in localInit() before
 	// anything moves it, so restarting a run puts them back where they spawned
 	// instead of at a second set of hardcoded coordinates that could drift out
@@ -2197,9 +2485,10 @@ class Skeleton26ReplaceName : public BaseProject {
 		// rectangle, then curves in (1.91 wide at Y 4.25, 1.29 at Y 4.75) and
 		// closes at about Y 4.85. Re-measure and update this if the asset is
 		// regenerated again.
-		// openAngleDeg's sign picks which way it swings open; chosen without
-		// being able to see the render from here, so if it swings the wrong
-		// way, negate it.
+		// openAngleDeg is how FAR the leaf swings open. Which way is no
+		// longer a scene decision: every door swings away from whoever
+		// opens it (see Door::swingSignAwayFrom), so the sign here only
+		// survives as the fallback for a pose that can't be read.
 		//
 		// lockKeyId is the padlock: leave it "" for a door that just opens,
 		// or name the keyId of the pickup that opens it (see addPickup
@@ -2219,6 +2508,7 @@ class Skeleton26ReplaceName : public BaseProject {
 			d.baseWm = d.inst->Wm;
 			d.promptPos = glm::vec3(d.baseWm * glm::vec4(promptOffset, 1.0f));
 			d.openAngleDeg = openAngleDeg;
+			d.swingSign = openAngleDeg < 0.0f ? -1.0f : 1.0f;
 			d.lockKeyId = lockKeyId;
 			d.lockLabel = (lockLabel[0] != '\0') ? lockLabel : lockKeyId;
 			d.locked = !d.lockKeyId.empty();
@@ -2256,6 +2546,46 @@ class Skeleton26ReplaceName : public BaseProject {
 		// care. What stays scarce is the COUNT: two keys, two chained doors
 		// and the exit, and only the exit gives its key back.
 		addDoor("dlDoorPanel2", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f, "iron", "iron key");
+		// The way out, in the dv room's east wall -- the only door in the
+		// castle that opens onto the outside, and the last thing between the
+		// player and the win box (see gameplay.json's "exit", which no longer
+		// checks a key of its own now that this door does).
+		//
+		// Where its wall came from, since scene.json can't carry a comment
+		// saying so (Scene.hpp parses it strictly): that corner used to be
+		// closed by dvCornSE, and a corner mesh has no hole to cut a doorway
+		// into. So it is replaced by the two pieces that reproduce its two
+		// arms exactly, one of which is a hole wall -- the same substitution
+		// the dc/dl boundary already makes with dlDoor2 + dcWallS2 at one
+		// shared translate. The two meshes do NOT share an origin convention
+		// (a corner's arms run to local -Z, the straight and hole walls from
+		// local 0 to +Z), so the numbers differ while the geometry doesn't:
+		//   dvDoor  at [20.0, 26.4] rot 0    -> x 18.758..20,  z 26.4..33.6
+		//   dvWallS at [20.0, 33.6] rot 270  -> x 12.8..20,    z 32.358..33.6
+		// which is arm 1 and arm 2 of the old dvCornSE, unmoved. The leaf then
+		// sits at the same offset from its hole wall that dlDoorPanel2 has
+		// from dlDoor2, carried across through the two walls' differing yaw,
+		// which puts the hinge on the jamb and the doorway centre at z 29.99
+		// -- the middle of the arch, whose hole spans local z 2.47..4.71, i.e.
+		// world z 28.87..31.11.
+		//
+		// Its hole wall carries no yaw, because it stands in an EAST wall
+		// rather than a west-facing one, so the leaf carries none either --
+		// and that flips which way its local +X points: outward, here, where
+		// every other leaf in the castle has it pointing into the room. Hence
+		// the flipped lock props below, which is what puts the chains on the
+		// inside face and, with them, the side E works from. The promptOffset
+		// is unchanged: the doorway centre sits at the same place in the
+		// leaf's own frame no matter which way the frame points.
+		//
+		// It opens OUTWARD, into the daylight -- which is not a special case
+		// any more but just what "away from the player" means for a leaf the
+		// player can only reach from inside. For this leaf's mirrored frame
+		// that is the NEGATIVE angle, which is what the sign below records.
+		// The swing reaches x 21.78 at its widest, which is what sets where
+		// the light behind it can stand: see EXIT_GLOW_CENTER, and the
+		// second, ground-level quad it costs.
+		addDoor("dvDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), -100.0f, "iron", "iron key");
 		// Hangs a scene instance on a door as lock hardware. Separate from
 		// addDoor() rather than another argument on it because a door can
 		// carry several (the chains and the padlock are two models: the
@@ -2313,6 +2643,28 @@ class Skeleton26ReplaceName : public BaseProject {
 		// player never stands on.
 		addLockProp("dhDoorPanel", "dhDoorChains", true);
 		addLockProp("dhDoorPanel", "dhDoorPadlock", true);
+		// The exit door's set, also flipped, but for the opposite reason to
+		// dhDoorPanel's: that leaf is yawed 180 and approached from the east,
+		// this one is yawed 0 and approached from the west. Either way the
+		// models as exported end up on the face the player never stands on,
+		// and either way the half turn is what fixes it. See the addDoor call
+		// for this leaf above.
+		addLockProp("dvDoorPanel", "dvDoorChains", true);
+		addLockProp("dvDoorPanel", "dvDoorPadlock", true);
+
+		// Cache which door is the way out, so the light outside can be driven
+		// from its swing without a string compare every frame. Done here
+		// rather than in the addDoor lambda because "which door is the exit"
+		// is a property of the level, not of doors in general.
+		for(size_t i = 0; i < doors.size(); i++) {
+			if(doors[i].instanceId == "dvDoorPanel") {
+				exitDoorIndex = (int)i;
+				break;
+			}
+		}
+		if(exitDoorIndex < 0) {
+			std::cout << "Exit door 'dvDoorPanel' not found: no daylight outside it\n";
+		}
 
 		// dlDoorPanel, the southern leaf of the pair, is left unlocked on
 		// purpose: it is the way around its chained twin. Two keys exist, both
@@ -2349,17 +2701,23 @@ class Skeleton26ReplaceName : public BaseProject {
 			p.worldScale = glm::length(glm::vec3(p.inst->Wm[0]));
 			pickups.push_back(p);
 		};
-		// Two keys, and deliberately the SAME id: both are the one key mesh in
-		// the level, so a lock that accepted one and refused the other would
-		// read as a bug no matter how correct the rule was. Sharing an id is
-		// what keyRing is built for (see its declaration) -- the ring stores
-		// instances, not ids, so two "iron" keys are still two distinct
-		// objects to pick up, drop and spend.
-		// The scarcity is therefore arithmetic, not matching: two keys for
-		// the two chained doors plus the exit, and only the exit hands its
-		// key back.
+		// Three keys, and deliberately the SAME id: all three are the one key
+		// mesh in the level, so a lock that accepted one and refused another
+		// would read as a bug no matter how correct the rule was. Sharing an
+		// id is what keyRing is built for (see its declaration) -- the ring
+		// stores instances, not ids, so three "iron" keys are still three
+		// distinct objects to pick up, drop and spend.
+		// The scarcity is therefore arithmetic, not matching: three keys
+		// against three padlocks, all of them consuming what they are paid
+		// with (the exit no longer checks a key of its own -- its door does).
+		// Two of those padlocks are optional, so the budget survives a player
+		// spending both spares, and only just: waste all three and the way out
+		// stays shut.
 		addPickup("dhKey", "iron");
 		addPickup("dcKey", "iron");
+		// The third, in the coloured-torch room, added when the exit stopped
+		// being a free box and became a chained door. See scene.json's dlKey.
+		addPickup("dlKey", "iron");
 
 		// The player's spawn pose, captured before anything can move it. See
 		// spawnPos's declaration: this is what restartRun() puts them back to.
@@ -2527,6 +2885,13 @@ class Skeleton26ReplaceName : public BaseProject {
 		// leaving a torch/candle mesh with no fire and no light instead of
 		// an error.
 		flame.init(this, &DSLglobal, &DSglobal, 16);
+
+		// No DSLglobal/DSglobal here: the daylight quads aren't shaded and read
+		// nothing the app-wide uniform carries, so they bind sets of their
+		// own. Two of them -- the upright wall of light and the ground it
+		// stands on. See ExitGlow.hpp, and EXIT_GLOW_CENTER for why the
+		// outward-swinging door makes the second one necessary.
+		exitGlow.init(this, EXIT_GLOW_COUNT);
 
 		lightDebug.init(this);
 
@@ -3284,6 +3649,10 @@ class Skeleton26ReplaceName : public BaseProject {
 		// over-1.0 colours land in the HDR attachment where bloom can find
 		// them.
 		flame.pipelinesAndDescriptorSetsInit(&RP);
+		// Same RP, and for the same reason: the exit's daylight has to write
+		// its over-1.0 colours into the HDR attachment, which is where the
+		// bloom chain can find them.
+		exitGlow.pipelinesAndDescriptorSetsInit(&RP);
 		// Same RP too, for the same reason -- see LightDebug.hpp's header.
 		lightDebug.pipelinesAndDescriptorSetsInit(&RP);
 	}
@@ -3316,6 +3685,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		uiQuad.pipelinesAndDescriptorSetsCleanup();
 		crosshair.pipelinesAndDescriptorSetsCleanup();
 		flame.pipelinesAndDescriptorSetsCleanup();
+		exitGlow.pipelinesAndDescriptorSetsCleanup();
 		lightDebug.pipelinesAndDescriptorSetsCleanup();
 	}
 
@@ -3375,6 +3745,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		uiQuad.localCleanup();
 		crosshair.localCleanup();
 		flame.localCleanup();
+		exitGlow.localCleanup();
 		lightDebug.localCleanup();
 	}
 	
@@ -3459,6 +3830,10 @@ class Skeleton26ReplaceName : public BaseProject {
 		RP.begin(commandBuffer, currentImage);
 		SC.populateCommandBuffer(commandBuffer, 0, currentImage);
 		flame.populateCommandBuffer(commandBuffer, currentImage);
+		// After the scene, so the castle has already written the depth that
+		// masks this quad down to the shape of the doorway's arch, and after
+		// the flames, which are the only other thing it can blend against.
+		exitGlow.populateCommandBuffer(commandBuffer, currentImage);
 		lightDebug.populateCommandBuffer(commandBuffer, currentImage);
 		RP.end(commandBuffer);
 
@@ -3840,6 +4215,40 @@ class Skeleton26ReplaceName : public BaseProject {
 			}
 		}
 
+		// The light the open exit throws back into the room. Appended straight
+		// into gubo like the torch lights just above, and for the same reason
+		// they are: its brightness is a function of something that changes
+		// every frame -- how far the leaf has swung -- and lights.json has no
+		// way to express that. A closed door contributes nothing and isn't
+		// appended at all, so this costs a light slot only while it matters.
+		//
+		// It is the counterpart to the ExitGlow quad, not a substitute for it:
+		// the quad is the daylight you LOOK at, this is the daylight that
+		// lands on the stone. Neither reads right alone -- a lit floor with a
+		// dark opening looks broken, and a blazing opening that throws no
+		// light looks pasted on.
+		//
+		// No shadow map: shadowIndex is left at -1 (the "skip the lookup"
+		// value, see the torch loop above). Giving it one would mean a 2D
+		// shadow pass whose only occluder is a door that moves, i.e. a map
+		// that would have to be re-rendered every frame of the swing, and the
+		// wall it shines through already does the shaping for free.
+		if(exitOpenFrac > 0.001f && gubo.lightCount < MAX_LIGHTS) {
+			LightData L{};
+			L.pos = EXIT_SPILL_POS;
+			// Aimed back through the doorway, i.e. due west: the same axis the
+			// glow quad faces along.
+			L.dir = glm::vec3(-1.0f, 0.0f, 0.0f);
+			L.color = EXIT_SPILL_COLOR * exitOpenFrac;
+			L.g = EXIT_SPILL_G;
+			L.beta = EXIT_SPILL_BETA;
+			L.cosIn = std::cos(glm::radians(EXIT_SPILL_INNER_DEG * 0.5f));
+			L.cosOut = std::cos(glm::radians(EXIT_SPILL_OUTER_DEG * 0.5f));
+			L.type = LIGHT_SPOT;
+			L.shadowIndex = -1;
+			gubo.lights[gubo.lightCount++] = L;
+		}
+
 		// By value: with the Ambient Light cheat off there is no stored ambient
 		// to hand back a reference to. See SceneLights::ambient().
 		const AmbientLight amb = sceneLights.ambient();
@@ -3942,6 +4351,27 @@ class Skeleton26ReplaceName : public BaseProject {
 			// pumps frame-to-frame.
 			post.bloomIntensity = BLOOM_INTENSITY * (1.0f + GLARE_BLOOM_GAIN * glareSmoothed);
 			post.exposure = SCENE_EXPOSURE * (1.0f + GLARE_EXPOSURE_GAIN * glareSmoothed);
+			// The escape whiteout, on the very same two knobs and multiplied
+			// on top rather than replacing them, so a player who wins while
+			// staring into a torch gets one flash and not a fight between two.
+			// Cubed: the ramp is linear in time (see GameLogic), and a linear
+			// ramp of EXPOSURE reads as the image getting evenly brighter,
+			// which looks like a fade to white. Weighting it towards the end
+			// instead gives the eye a moment of the room still being there
+			// before it is taken, which is what makes it read as being blinded
+			// by the doorway rather than as a screen transition.
+			if(escapeFlash > 0.0f) {
+				const float f = escapeFlash * escapeFlash * escapeFlash;
+				post.exposure *= 1.0f + ESCAPE_EXPOSURE_GAIN * f;
+				post.bloomIntensity *= 1.0f + ESCAPE_BLOOM_GAIN * f;
+			}
+			// The whiteout's own term, which Composite.frag applies after the
+			// tone map -- see its declaration in PostUniformBufferObject for
+			// why the exposure ramp above cannot do this on its own. Held back
+			// until the exposure ramp has had most of the flash to work in, so
+			// the frame is already blowing out by the time the white arrives
+			// rather than being painted over while it is still readable.
+			post.escapeFlash = glm::smoothstep(0.45f, 1.0f, escapeFlash);
 			post.debugFlags = gubo.debugFlags;
 
 			// Bright pass: reads the full-resolution scene and writes the
@@ -4028,6 +4458,69 @@ class Skeleton26ReplaceName : public BaseProject {
 
 			flame.update(tf.flameId, ViewPrj * billboard, tf.intensity, tf.heightScale,
 						 tf.lean, 1.0f + GLARE_FLAME_GAIN * tf.glare, tf.color, currentImage);
+		}
+
+		// The daylight outside the exit door. Unlike the flames above these
+		// are NOT billboards: they stand in fixed planes outside the doorway,
+		// so their bases are built from world axes and not from the camera's.
+		// Two consequences worth knowing: seen from far off to one side they
+		// foreshorten, which is correct (you are looking along a doorway, not
+		// at a lamp), and the arch is what limits how much of either one you
+		// can ever see anyway.
+		//
+		// Columns are the same convention Flame's billboard uses -- the two
+		// in-plane axes scaled to the quad's half-extents, the normal, then
+		// the centre -- so ExitGlow.vert can keep its corner parameter in
+		// -1..1 and let these matrices do the placing. It is also what lets
+		// one mesh and one pipeline serve both an upright quad and one lying
+		// flat: the difference is entirely in which world axes go in the
+		// first two columns.
+		{
+			// Squared, so the light builds late in the swing rather than
+			// tracking it: a door barely ajar should show a crack of light,
+			// not half the glare. exitOpenFrac is already smoothstepped, so
+			// this is the second shaping of the same signal and deliberately
+			// so -- the first spreads it over the swing, this one weights it
+			// towards the end of it.
+			const float glow = EXIT_GLOW_INTENSITY * exitOpenFrac * exitOpenFrac;
+
+			// The wall of light, standing across the doorway past the leaf's
+			// reach: in-plane axes are world Z (across) and world Y (up).
+			const glm::mat4 uprightBasis = glm::mat4(
+				glm::vec4(glm::vec3(0.0f, 0.0f, 1.0f) * EXIT_GLOW_HALF_WIDTH, 0.0f),
+				glm::vec4(glm::vec3(0.0f, 1.0f, 0.0f) * EXIT_GLOW_HALF_HEIGHT, 0.0f),
+				glm::vec4(EXIT_GLOW_NORMAL, 0.0f),
+				glm::vec4(EXIT_GLOW_CENTER, 1.0f)
+			);
+			exitGlow.update(EXIT_GLOW_UPRIGHT, ViewPrj * uprightBasis,
+							EXIT_GLOW_COLOR, glow, animTime, currentImage);
+
+			// The ground it stands on, covering the strip of open earth the
+			// upright quad leaves visible under the arch: in-plane axes are
+			// world X (out from the threshold) and world Z (across), normal
+			// straight up.
+			const glm::mat4 floorBasis = glm::mat4(
+				glm::vec4(glm::vec3(1.0f, 0.0f, 0.0f) * EXIT_GLOW_FLOOR_HALF_X, 0.0f),
+				glm::vec4(glm::vec3(0.0f, 0.0f, 1.0f) * EXIT_GLOW_FLOOR_HALF_Z, 0.0f),
+				glm::vec4(EXIT_GLOW_FLOOR_NORMAL, 0.0f),
+				glm::vec4(EXIT_GLOW_FLOOR_CENTER, 1.0f)
+			);
+			exitGlow.update(EXIT_GLOW_FLOOR, ViewPrj * floorBasis,
+							EXIT_GLOW_COLOR, glow, animTime, currentImage);
+
+			// The lid: the same plane as the floor quad, lifted over the top of
+			// the arch and turned to face down, so looking up from the
+			// threshold finds daylight rather than the skybox. Axes are the
+			// floor's, since the plane is the same one -- only the normal and
+			// the height differ.
+			const glm::mat4 ceilingBasis = glm::mat4(
+				glm::vec4(glm::vec3(1.0f, 0.0f, 0.0f) * EXIT_GLOW_CEILING_HALF_X, 0.0f),
+				glm::vec4(glm::vec3(0.0f, 0.0f, 1.0f) * EXIT_GLOW_CEILING_HALF_Z, 0.0f),
+				glm::vec4(EXIT_GLOW_CEILING_NORMAL, 0.0f),
+				glm::vec4(EXIT_GLOW_CEILING_CENTER, 1.0f)
+			);
+			exitGlow.update(EXIT_GLOW_CEILING, ViewPrj * ceilingBasis,
+							EXIT_GLOW_COLOR, glow, animTime, currentImage);
 		}
 
 		// defines the local parameters for the uniforms
@@ -4609,6 +5102,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		for(Door &d : doors) {
 			d.open = false;
 			d.angle = 0.0f;
+			d.swingSign = d.openAngleDeg < 0.0f ? -1.0f : 1.0f;
 			// Padlocks come back with the run: a key spent last run is back
 			// on its table below, so the lock it opened has to be shut again
 			// or the level would get easier every restart.
@@ -4626,10 +5120,21 @@ class Skeleton26ReplaceName : public BaseProject {
 			p.inst->Wm = p.spawnWm;
 		}
 		keyRing.clear();
+		// A key caught mid-fall would otherwise keep being drawn off the
+		// camera -- and worse, get parked below the map a few frames into the
+		// new run, right after the loop above put it back on its table.
+		keyLowerIdx = -1;
 		nearbyDoor = -1;
 		nearbyPickup = -1;
 		gazedInstance = nullptr;
 		atLockedExit = false;
+		// The way out closes again with the rest of the doors (the loop above
+		// re-locks and re-shuts every one), so the daylight behind it has to
+		// go with them -- otherwise a restarted run would begin with a lit
+		// doorway and no door open to explain it. Same for the whiteout: it is
+		// the end of a run, and this is a new one.
+		exitOpenFrac = 0.0f;
+		escapeFlash = 0.0f;
 
 		runState = RunState::Running;
 	}
@@ -4740,6 +5245,20 @@ class Skeleton26ReplaceName : public BaseProject {
 			restartRun();
 		}
 		restartKeyWasPressed = restartKey;
+
+		// The whiteout, ramped here rather than in the frozen-movement block
+		// below precisely because this is the one thing that has to keep
+		// running after the run is over: RunState::Escaped is what starts it.
+		// Held still while the cheat HUD is open, like everything else, so
+		// pausing mid-flash doesn't skip past it.
+		if(!hud.isOpen()) {
+			float flashTarget = (runState == RunState::Escaped) ? 1.0f : 0.0f;
+			if(flashTarget > escapeFlash) {
+				escapeFlash = std::min(escapeFlash + deltaT / ESCAPE_FLASH_SECONDS, 1.0f);
+			} else {
+				escapeFlash = flashTarget;
+			}
+		}
 
 		// The hunt clock, gated on the same two conditions as the movement
 		// block below. A cycle that kept counting down behind an open cheat
@@ -4935,7 +5454,25 @@ class Skeleton26ReplaceName : public BaseProject {
 					// Keys additionally go on the ring, which is what makes
 					// the newest one show up in the hand and what the locks
 					// below are checked against.
-					if(!p.keyId.empty()) keyRing.push_back(nearbyPickup);
+					if(!p.keyId.empty()) {
+						// One free hand, one key in it: whatever was already
+						// there goes back on the floor instead of staying
+						// frozen wherever the hand last drew it. Only the
+						// newest key on the ring is drawn (see the held-key
+						// block below), so an older one left on the ring would
+						// hang in mid-air and be unreachable -- dropping it
+						// keeps it collectable. Dropped short (0.5 rather than
+						// G's 1.0) so it lands underfoot instead of being
+						// flung past the key just taken.
+						if(!keyRing.empty()) {
+							dropKeyFromRing((int)keyRing.size() - 1, camPos, front, 0.5f);
+						}
+						keyRing.push_back(nearbyPickup);
+						// Restart the raise: the key is drawn from the next
+						// frame on, and it should come up from below rather
+						// than appear already in place.
+						keyRaiseElapsed = 0.0f;
+					}
 				} else if(nearbyDoor >= 0) {
 					Door &d = doors[nearbyDoor];
 					if(d.locked) {
@@ -4958,50 +5495,44 @@ class Skeleton26ReplaceName : public BaseProject {
 									  << "' with key '" << d.lockKeyId << "'\n";
 							consumeKey(slot);
 							d.locked = false;
+							// Pick the swing before opening, same as the unlocked
+							// case below -- a locked door is by definition still
+							// fully closed here.
+							d.swingSign = d.swingSignAwayFrom(camPos);
 							d.open = true;
 						}
 					} else {
+						// Opening from fully closed is the one moment the leaf is
+						// free to pick a side, so that is where the player's own
+						// side is read. Re-opening a leaf that is still swinging
+						// shut keeps the sign it already has: reversing it there
+						// would drag the panel back through the doorway -- and
+						// through the player -- to reach the mirrored pose.
+						if(!d.open && d.angle == 0.0f) {
+							d.swingSign = d.swingSignAwayFrom(camPos);
+						}
 						d.open = !d.open;
 					}
 				}
 			}
 			interactKeyWasPressed = interactKey;
 
-			// Drop key (G): puts the held key back down, lying flat in
-			// front of the player and facing the same way they are, so
-			// walking up to it again shows the pick-up prompt like any
-			// other pickup. Re-parks the SAME instance the held-key block
-			// was drawing in the hand, same one-instance reasoning as pickup.
-			// Drops the key in hand (the last one collected); the rest of the
-			// ring stays put, so pressing G repeatedly puts them down one at
-			// a time in reverse order of pickup.
+			// Drop key (G): puts the held key back down at arm's length, see
+			// dropKeyFromRing() for the pose. Drops the key in hand (the last
+			// one collected); the rest of the ring stays put, so pressing G
+			// repeatedly puts them down one at a time in reverse order of
+			// pickup.
 			bool dropKey = glfwGetKey(window, GLFW_KEY_G);
 			if(heldKeyIdx() >= 0 && dropKey && !dropKeyWasPressed) {
-				Pickup &p = pickups[heldKeyIdx()];
-				const float EYE_HEIGHT = 1.8f;	// same eye height used throughout GameLogic()
-
-				glm::vec2 faceDir(front.x, front.z);
-				if(glm::length(faceDir) > 0.0001f) faceDir = glm::normalize(faceDir);
-				else faceDir = glm::vec2(0.0f, 1.0f);
-				// 0.03 above the feet: dropped exactly at floor height would
-				// coincide with the floor mesh and z-fight (see notes.md on
-				// the dungeon meshes' coplanar faces).
-				glm::vec3 dropPos(camPos.x + faceDir.x * 1.0f,
-								   camPos.y - EYE_HEIGHT + 0.03f,
-								   camPos.z + faceDir.y * 1.0f);
-				float yaw = std::atan2(faceDir.x, faceDir.y);
-
-				p.worldPos = dropPos;
-				p.collected = false;
-				keyRing.pop_back();
-				p.inst->Wm = glm::translate(glm::mat4(1.0f), dropPos)
-							* glm::rotate(glm::mat4(1.0f), yaw, glm::vec3(0.0f, 1.0f, 0.0f))
-							* glm::scale(glm::mat4(1.0f), glm::vec3(p.worldScale));
+				dropKeyFromRing((int)keyRing.size() - 1, camPos, front, 1.0f);
 			}
 			dropKeyWasPressed = dropKey;
 
 			for(Door &d : doors) {
-				float target = d.open ? d.openAngleDeg : 0.0f;
+				// Magnitude from the scene, direction from whoever opened it
+				// (swingSign, set on the press): the leaf always travels away
+				// from the player rather than into them.
+				float target = d.open ? std::abs(d.openAngleDeg) * d.swingSign : 0.0f;
 				float maxStep = DOOR_OPEN_SPEED * deltaT;
 				if(d.angle < target) d.angle = std::min(d.angle + maxStep, target);
 				else if(d.angle > target) d.angle = std::max(d.angle - maxStep, target);
@@ -5026,6 +5557,28 @@ class Skeleton26ReplaceName : public BaseProject {
 					prop.inst->Wm = d.locked ? d.inst->Wm * prop.local
 											 : glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
 				}
+			}
+
+			// How far the way out has swung, off the same animated angle the
+			// leaf is drawn with, so the light outside can never disagree with
+			// the door on screen. Read by updateUniformBuffer() for both the
+			// daylight quad and the spill light -- and by nothing else.
+			//
+			// Smoothstepped rather than linear because the two ends are what
+			// matter: the light should stay out of it while the leaf is barely
+			// moving, build through the middle of the swing, and settle
+			// instead of arriving at full strength on the last degree.
+			//
+			// Left frozen at its last value once the run ends: this whole
+			// block stops updating then, and a door that stayed open is
+			// exactly what should still be lighting the room behind the
+			// escape banner.
+			if(exitDoorIndex >= 0) {
+				const Door &exitDoor = doors[exitDoorIndex];
+				float span = std::abs(exitDoor.openAngleDeg);
+				exitOpenFrac = span > 1e-4f
+					? glm::smoothstep(0.0f, 1.0f, glm::clamp(std::abs(exitDoor.angle) / span, 0.0f, 1.0f))
+					: 0.0f;
 			}
 
 			// Ghosts. See the Ghost struct for the three modes and why Return
@@ -5449,13 +6002,61 @@ class Skeleton26ReplaceName : public BaseProject {
 			glm::mat4 grip = glm::rotate(glm::mat4(1.0f), glm::radians(HAND_KEY_TILT_DEG.x), glm::vec3(1.0f, 0.0f, 0.0f))
 							* glm::rotate(glm::mat4(1.0f), glm::radians(HAND_KEY_TILT_DEG.y), glm::vec3(0.0f, 1.0f, 0.0f))
 							* glm::rotate(glm::mat4(1.0f), glm::radians(HAND_KEY_TILT_DEG.z + bobRollDeg), glm::vec3(0.0f, 0.0f, 1.0f));
-			glm::vec3 bobbedOffset = HAND_KEY_OFFSET + glm::vec3(bobLateral, bobVertical, 0.0f);
+
+			// Pick-up rise: only the Y offset moves, so the grip and the bob
+			// above are untouched and the key simply slides up into the pose
+			// it would otherwise have snapped to. Cubic ease-out (fast off the
+			// floor, settling at the top) rather than linear, which stops dead
+			// and reads mechanical. Clamped, so once the rise is over this is
+			// exactly 0 and the pose is the plain held one.
+			keyRaiseElapsed = std::min(keyRaiseElapsed + deltaT, KEY_RAISE_DURATION);
+			float t = keyRaiseElapsed / KEY_RAISE_DURATION;
+			float eased = 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t);
+			float raiseY = -KEY_RAISE_DROP * (1.0f - eased);
+
+			glm::vec3 bobbedOffset = HAND_KEY_OFFSET + glm::vec3(bobLateral, bobVertical + raiseY, 0.0f);
 
 			Pickup &held = pickups[heldKeyIdx()];
 			held.inst->Wm = camWm
 				* glm::translate(glm::mat4(1.0f), bobbedOffset)
 				* grip
 				* glm::scale(glm::mat4(1.0f), glm::vec3(held.worldScale));
+		}
+
+		// Key spent on a lock: the exact mirror of the rise above, played
+		// downward. Same pose, same duration, same drop distance, only the
+		// easing is reversed (cubic ease-IN: it starts from the held pose and
+		// accelerates away) so the two read as one motion run backwards.
+		// Drawn from here and not from the held-key block because the key is
+		// already off the ring -- the lock took it the moment E was pressed,
+		// and only the model is still catching up. When the fall ends the
+		// instance goes below the map, which is where consumeKey used to put
+		// it immediately.
+		if(keyLowerIdx >= 0) {
+			keyLowerElapsed = std::min(keyLowerElapsed + deltaT, KEY_RAISE_DURATION);
+			float t = keyLowerElapsed / KEY_RAISE_DURATION;
+			float eased = t * t * t;
+			float lowerY = -KEY_RAISE_DROP * eased;
+
+			float bobLateral = sinf(walkBobPhase) * WALK_BOB_LATERAL * walkBobBlend;
+			float bobVertical = sinf(walkBobPhase * 2.0f) * WALK_BOB_VERTICAL * walkBobBlend;
+			float bobRollDeg = bobLateral * 90.0f;
+
+			glm::mat4 grip = glm::rotate(glm::mat4(1.0f), glm::radians(HAND_KEY_TILT_DEG.x), glm::vec3(1.0f, 0.0f, 0.0f))
+							* glm::rotate(glm::mat4(1.0f), glm::radians(HAND_KEY_TILT_DEG.y), glm::vec3(0.0f, 1.0f, 0.0f))
+							* glm::rotate(glm::mat4(1.0f), glm::radians(HAND_KEY_TILT_DEG.z + bobRollDeg), glm::vec3(0.0f, 0.0f, 1.0f));
+			glm::vec3 bobbedOffset = HAND_KEY_OFFSET + glm::vec3(bobLateral, bobVertical + lowerY, 0.0f);
+
+			Pickup &sinking = pickups[keyLowerIdx];
+			sinking.inst->Wm = camWm
+				* glm::translate(glm::mat4(1.0f), bobbedOffset)
+				* grip
+				* glm::scale(glm::mat4(1.0f), glm::vec3(sinking.worldScale));
+
+			if(keyLowerElapsed >= KEY_RAISE_DURATION) {
+				sinking.inst->Wm = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
+				keyLowerIdx = -1;
+			}
 		}
 
 		return deltaT;
