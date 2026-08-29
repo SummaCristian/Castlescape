@@ -41,25 +41,28 @@ void main() {
 		discard;
 	}
 
-	// Distance from the centre of the QUAD, not of a circle in world space:
-	// main.cpp gives the quad different half-width and half-height, so this
-	// is an ellipse taller than it is wide -- which is the shape of the
-	// doorway it has to fill, and cheaper than correcting for the aspect and
-	// then re-imposing it.
-	float r = length(fragCorner);
+	// A RECTANGULAR distance, not a radial one: the larger of the two axis
+	// distances, so the level sets are the quad's own outline rather than an
+	// ellipse inscribed in it. This matters more than it looks. These quads
+	// are seen through an arch from every angle a player can stand at, and the
+	// worst of those angles projects the opening onto a CORNER of the quad --
+	// which under length() is the farthest point there is, so a radial fade
+	// reached it while the flat middle was still going spare. Measuring per
+	// axis puts the whole rectangle to work and leaves the fade a border.
+	float m = max(abs(fragCorner.x), abs(fragCorner.y));
 
 	// A PLATEAU, not a falloff. The field is flat and fully blown out across
-	// the whole body of the quad and only lets go in the last `softness` of
-	// the radius. An earlier version rolled off from the centre outward, and
-	// through the arch that read as a hot spot floating on a visibly darker
-	// surround -- which told the player there was a surface out there, the one
-	// thing this must never do. Nothing beyond the doorway is allowed to have
-	// shape, so the light has none either.
+	// the whole body of the quad and only lets go in the last `softness`. An
+	// earlier version rolled off from the centre outward, and through the arch
+	// that read as a hot spot floating on a visibly darker surround -- which
+	// told the player there was a surface out there, the one thing this must
+	// never do. Nothing beyond the doorway is allowed to have shape, so the
+	// light has none either.
 	//
-	// The rim fade still exists because the quad overhangs the arch on every
-	// side: it is what stops an edge showing if a viewing angle ever catches
-	// one, and it never appears in the opening itself.
-	float field = 1.0 - smoothstep(1.0 - ubo.softness, 1.0, r);
+	// The border fade still exists because the quads overhang what they cover
+	// on every side: it is what stops an edge showing if a viewing angle ever
+	// catches one, and it never appears in the opening itself.
+	float field = 1.0 - smoothstep(1.0 - ubo.softness, 1.0, m);
 
 	// Very slow breathing, from two periods that don't divide into each other
 	// so the sum never visibly repeats. Small on purpose, and now smaller
@@ -68,11 +71,11 @@ void main() {
 	// the frame. Outdoor daylight doesn't gutter.
 	float breathe = 0.97 + 0.02 * sin(ubo.time * 0.53) + 0.01 * sin(ubo.time * 0.31);
 
-	// Warmer at the very rim, white everywhere else. Kept because the bloom
+	// Warmer at the very edge, white everywhere else. Kept because the bloom
 	// smears this band out over the stonework around the opening, so it is
 	// what gives the glare a colour rather than making it a grey-white hole;
 	// inside the arch it is out of frame.
-	vec3 tint = mix(ubo.color, ubo.color * vec3(1.0, 0.88, 0.70), smoothstep(0.72, 1.0, r));
+	vec3 tint = mix(ubo.color, ubo.color * vec3(1.0, 0.88, 0.70), smoothstep(0.72, 1.0, m));
 
 	float brightness = field * breathe;
 

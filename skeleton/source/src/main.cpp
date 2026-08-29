@@ -703,9 +703,20 @@ class Skeleton26ReplaceName : public BaseProject {
 		Instance *inst = nullptr;
 		glm::mat4 baseWm{1.0f};	// authored (closed, angle=0) world matrix
 		glm::vec3 promptPos{0.0f};	// point used for the interact-range check (doorway centre, not the hinge)
-		float openAngleDeg = 100.0f;	// target angle when open; sign picks swing direction
+		// How far the leaf travels when open. Only the MAGNITUDE is used at
+		// runtime: the direction is decided per opening by swingSignAwayFrom()
+		// below, so the authored sign here is just the fallback for a leaf
+		// whose geometry can't be read (degenerate transform, player exactly
+		// in the door's plane).
+		float openAngleDeg = 100.0f;
 		bool open = false;
 		float angle = 0.0f;	// current animated angle, eases toward the target
+		// Which way the leaf is currently swinging, as a sign on
+		// |openAngleDeg|. Recomputed from the player's position only while
+		// the door sits fully closed (see the toggle in GameLogic): flipping
+		// it mid-swing would sweep the leaf back through the frame it is
+		// hinged in.
+		float swingSign = 1.0f;
 		// Padlock. Empty lockKeyId = no lock at all, which is every door as
 		// shipped: E just toggles it. A non-empty id means the door won't
 		// budge until the player is carrying a key pickup whose keyId matches
@@ -757,6 +768,43 @@ class Skeleton26ReplaceName : public BaseProject {
 			if(glm::length(axis) < 1e-6f) return true;	// degenerate: don't lock anyone out
 			glm::vec3 d(p.x - promptPos.x, 0.0f, p.z - promptPos.z);
 			return glm::dot(d, glm::normalize(axis)) * lockFaceSign > 0.0f;
+		}
+		// Sign on |openAngleDeg| that swings the leaf AWAY from a player at
+		// `p` -- i.e. the door always opens outward with respect to whoever
+		// is opening it, never into their face, whichever side they walked
+		// up from.
+		//
+		// The closed leaf lies in the plane through its hinge with the leaf's
+		// local +X as normal (the panel hangs along local Z; see the struct
+		// comment), so the same normal answers both "which side is the
+		// player on" and "which side did the panel end up on". Rather than
+		// reasoning about the sign of a cross product through a transform
+		// that may carry any rotation or mirroring, just rotate a point on
+		// the panel the positive way and look at where it lands: if that is
+		// the player's side, the negative way is the one wanted.
+		//
+		// XZ only, like onLockSide: a hinge is vertical, so the player's
+		// height has no say in which way the door goes.
+		float swingSignAwayFrom(const glm::vec3 &p) const {
+			float authored = openAngleDeg < 0.0f ? -1.0f : 1.0f;
+			glm::vec3 n(baseWm[0].x, 0.0f, baseWm[0].z);	// leaf local +X, in world
+			if(glm::length(n) < 1e-6f) return authored;	// degenerate: keep the authored swing
+			n = glm::normalize(n);
+
+			glm::vec3 d(p.x - promptPos.x, 0.0f, p.z - promptPos.z);
+			float playerSide = glm::dot(d, n);
+			// Standing in the leaf's own plane (in the doorway itself): there
+			// is no "away" to pick, so don't churn -- keep what the scene asked
+			// for.
+			if(std::abs(playerSide) < 1e-4f) return authored;
+
+			glm::vec3 hinge(baseWm[3]);
+			glm::vec4 tip = baseWm
+						  * glm::rotate(glm::mat4(1.0f), glm::radians(std::abs(openAngleDeg)), glm::vec3(0.0f, 1.0f, 0.0f))
+						  * glm::vec4(0.0f, 0.0f, -1.0f, 1.0f);	// a point down the panel, swung the positive way
+			float tipSide = glm::dot(glm::vec3(tip) - hinge, n);
+			if(std::abs(tipSide) < 1e-6f) return authored;	// swings flat: nothing to choose between
+			return tipSide * playerSide > 0.0f ? -1.0f : 1.0f;
 		}
 	};
 	std::vector<Door> doors;
@@ -1517,33 +1565,61 @@ class Skeleton26ReplaceName : public BaseProject {
 	// is already over.
 	int exitDoorIndex = -1;
 
-	// Where the daylight quad stands and how big it is. World-space, and
-	// PRESSED RIGHT UP AGAINST the back of the doorway, not out on the open
-	// ground: the wall slab is x 18.758..20 and the arch spans z 28.87..31.11,
-	// so 20.15 is 15cm clear of the outer face.
+	// Where the daylight stands. Two quads, and the reason there are two is
+	// the door: it swings OUTWARD, so nothing can be parked right behind the
+	// opening without the leaf sweeping through it.
 	//
-	// That closeness is the whole point, and it was worth an earlier version
-	// standing further out to learn why. A quad a couple of units beyond the
-	// wall leaves a strip of lit ground visible through the bottom of the
-	// arch, between the threshold and the light -- and a strip of ground is
-	// exactly the "something out there" this effect exists to deny. Up
-	// against the opening there is no gap to see into: the arch frames the
-	// quad and nothing else, from every angle the player can stand at.
+	// The wall slab is x 18.758..20 and the arch spans z 28.87..31.11. The
+	// open leaf reaches x 21.78 at the widest point of its swing (its hinge is
+	// at x 19.283 and its diagonal is 2.50 long), so the upright quad stands
+	// at 22.0 -- past the leaf by 22cm, which is what lets the door open into
+	// the light and be seen as a silhouette against it instead of being cut in
+	// half by it.
 	//
-	// It also means the leaf must NOT swing outward through this plane, which
-	// is why the exit door opens inward. See its addDoor call.
+	// That distance is also what forces the second quad. Two units of open
+	// ground between the threshold and the light are visible through the
+	// bottom of the arch (the sill hides only what is within about 35cm of the
+	// wall), and a strip of lit ground is exactly the "something out there"
+	// this effect exists to deny. So the second quad lies FLAT, 6cm above the
+	// ground plane, bridging from under the wall out to the upright one. The
+	// arch then frames white above and white below, with the door swinging
+	// between the two.
 	//
-	// The half-extents overhang the arch on all four sides (z 27.55..32.43,
-	// y -0.9..5.9) so no viewing angle can catch an edge of the quad inside
-	// the opening. Everything past the arch is masked by the wall's own depth,
-	// and the part below y 0 is buried under the ground plane outside, which
-	// is what guarantees the light reaches the sill with no seam.
-	static constexpr glm::vec3 EXIT_GLOW_CENTER = glm::vec3(20.15f, 2.5f, 29.99f);
-	static constexpr float EXIT_GLOW_HALF_WIDTH = 2.44f;	// along world Z
-	static constexpr float EXIT_GLOW_HALF_HEIGHT = 3.4f;	// along world Y
+	// Both overhang what they have to cover, generously, and the margins are
+	// worked from the worst viewing angle rather than guessed. A player can
+	// stand anywhere in the dv room, which reaches back to x 12.8, and the
+	// extreme sightlines project the arch onto the upright quad's plane over
+	// roughly z 27.0..33.0 and y -0.5..6.0 -- all of which has to fall inside
+	// the quad's flat middle, not its border fade, which ExitGlow.frag starts
+	// at 78% of the half-extent. Hence half-extents of 4.4 and 4.6 rather than
+	// something that merely covers the opening head-on. Everything past the
+	// arch is masked by the wall's own depth, and the part below y 0 is buried
+	// under the ground plane outside.
+	static constexpr glm::vec3 EXIT_GLOW_CENTER = glm::vec3(22.0f, 2.8f, 29.99f);
+	static constexpr float EXIT_GLOW_HALF_WIDTH = 4.4f;		// along world Z
+	static constexpr float EXIT_GLOW_HALF_HEIGHT = 4.6f;	// along world Y
 	// Faces back into the castle, i.e. west, so the player looking out through
 	// the doorway sees it square on.
 	static constexpr glm::vec3 EXIT_GLOW_NORMAL = glm::vec3(-1.0f, 0.0f, 0.0f);
+	// The ground quad, x 19.5..22.7. Both ends are deliberately buried: the
+	// near one runs back UNDER the wall slab, so its border fade (starting at
+	// x 19.85) is hidden by stone and the light is already at full strength by
+	// the time the threshold lets you see any of it; the far one passes behind
+	// the upright quad, so the two overlap instead of meeting at a seam.
+	//
+	// 6cm above the ground plane: far enough not to z-fight it, low enough
+	// that the door -- whose own bottom edge is at y 0.2 -- always sweeps
+	// above it rather than through it.
+	static constexpr glm::vec3 EXIT_GLOW_FLOOR_CENTER = glm::vec3(21.1f, 0.06f, 29.99f);
+	static constexpr float EXIT_GLOW_FLOOR_HALF_X = 1.6f;
+	static constexpr float EXIT_GLOW_FLOOR_HALF_Z = 3.6f;
+	static constexpr glm::vec3 EXIT_GLOW_FLOOR_NORMAL = glm::vec3(0.0f, 1.0f, 0.0f);
+	// Quad ids, in the order updateUniformBuffer() writes them. Named rather
+	// than passed as bare 0/1 because the two are not interchangeable: they
+	// have different bases and different half-extents.
+	static constexpr int EXIT_GLOW_UPRIGHT = 0;
+	static constexpr int EXIT_GLOW_FLOOR = 1;
+	static constexpr int EXIT_GLOW_COUNT = 2;
 	// Peak radiance. Absurd on the face of it -- BLOOM_THRESHOLD is 1.55 --
 	// and it has to be, because of the tone map: Composite.frag divides by
 	// (Y + 1), so a value of 9 lands at 0.90 on screen and a value of 60 at
@@ -2180,9 +2256,10 @@ class Skeleton26ReplaceName : public BaseProject {
 		// rectangle, then curves in (1.91 wide at Y 4.25, 1.29 at Y 4.75) and
 		// closes at about Y 4.85. Re-measure and update this if the asset is
 		// regenerated again.
-		// openAngleDeg's sign picks which way it swings open; chosen without
-		// being able to see the render from here, so if it swings the wrong
-		// way, negate it.
+		// openAngleDeg is how FAR the leaf swings open. Which way is no
+		// longer a scene decision: every door swings away from whoever
+		// opens it (see Door::swingSignAwayFrom), so the sign here only
+		// survives as the fallback for a pose that can't be read.
 		//
 		// lockKeyId is the padlock: leave it "" for a door that just opens,
 		// or name the keyId of the pickup that opens it (see addPickup
@@ -2202,6 +2279,7 @@ class Skeleton26ReplaceName : public BaseProject {
 			d.baseWm = d.inst->Wm;
 			d.promptPos = glm::vec3(d.baseWm * glm::vec4(promptOffset, 1.0f));
 			d.openAngleDeg = openAngleDeg;
+			d.swingSign = openAngleDeg < 0.0f ? -1.0f : 1.0f;
 			d.lockKeyId = lockKeyId;
 			d.lockLabel = (lockLabel[0] != '\0') ? lockLabel : lockKeyId;
 			d.locked = !d.lockKeyId.empty();
@@ -2271,19 +2349,14 @@ class Skeleton26ReplaceName : public BaseProject {
 		// is unchanged: the doorway centre sits at the same place in the
 		// leaf's own frame no matter which way the frame points.
 		//
-		// This is the ONE door in the castle that opens INWARD, and it is the
-		// daylight behind it that decides that, not the door. The glow quad
-		// sits 15cm off the far face of the wall (see EXIT_GLOW_CENTER for why
-		// it has to be that close), and a leaf swinging out would sweep
-		// straight through it and hang there, lit from behind, in the middle
-		// of the effect. Swinging inward it clears the opening entirely and
-		// leaves the arch full of nothing but light -- which is the whole
-		// point of the door.
-		//
-		// For this leaf's mirrored frame a POSITIVE angle is the inward one.
-		// If it ever swings the wrong way, negate it, exactly as the three
-		// doors above say.
-		addDoor("dvDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f, "iron", "iron key");
+		// It opens OUTWARD, into the daylight -- which is not a special case
+		// any more but just what "away from the player" means for a leaf the
+		// player can only reach from inside. For this leaf's mirrored frame
+		// that is the NEGATIVE angle, which is what the sign below records.
+		// The swing reaches x 21.78 at its widest, which is what sets where
+		// the light behind it can stand: see EXIT_GLOW_CENTER, and the
+		// second, ground-level quad it costs.
+		addDoor("dvDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), -100.0f, "iron", "iron key");
 		// Hangs a scene instance on a door as lock hardware. Separate from
 		// addDoor() rather than another argument on it because a door can
 		// carry several (the chains and the padlock are two models: the
@@ -2584,10 +2657,12 @@ class Skeleton26ReplaceName : public BaseProject {
 		// an error.
 		flame.init(this, &DSLglobal, &DSglobal, 16);
 
-		// No DSLglobal/DSglobal here: the daylight quad isn't shaded and reads
-		// nothing the app-wide uniform carries, so it binds one set of its
-		// own. See ExitGlow.hpp.
-		exitGlow.init(this);
+		// No DSLglobal/DSglobal here: the daylight quads aren't shaded and read
+		// nothing the app-wide uniform carries, so they bind sets of their
+		// own. Two of them -- the upright wall of light and the ground it
+		// stands on. See ExitGlow.hpp, and EXIT_GLOW_CENTER for why the
+		// outward-swinging door makes the second one necessary.
+		exitGlow.init(this, EXIT_GLOW_COUNT);
 
 		lightDebug.init(this);
 
@@ -4148,35 +4223,53 @@ class Skeleton26ReplaceName : public BaseProject {
 						 tf.lean, 1.0f + GLARE_FLAME_GAIN * tf.glare, tf.color, currentImage);
 		}
 
-		// The daylight outside the exit door. Unlike the flames above this is
-		// NOT a billboard: it stands in a fixed plane on the ground outside,
-		// facing back into the castle, so its basis is built from world axes
-		// and not from the camera's. Two consequences worth knowing: seen from
-		// far off to one side it foreshortens, which is correct (you are
-		// looking along a doorway, not at a lamp), and the arch is what limits
-		// how much of it you can ever see anyway.
+		// The daylight outside the exit door. Unlike the flames above these
+		// are NOT billboards: they stand in fixed planes outside the doorway,
+		// so their bases are built from world axes and not from the camera's.
+		// Two consequences worth knowing: seen from far off to one side they
+		// foreshorten, which is correct (you are looking along a doorway, not
+		// at a lamp), and the arch is what limits how much of either one you
+		// can ever see anyway.
 		//
 		// Columns are the same convention Flame's billboard uses -- the two
 		// in-plane axes scaled to the quad's half-extents, the normal, then
 		// the centre -- so ExitGlow.vert can keep its corner parameter in
-		// -1..1 and let this matrix do the placing.
+		// -1..1 and let these matrices do the placing. It is also what lets
+		// one mesh and one pipeline serve both an upright quad and one lying
+		// flat: the difference is entirely in which world axes go in the
+		// first two columns.
 		{
-			const glm::vec3 quadRight = glm::vec3(0.0f, 0.0f, 1.0f) * EXIT_GLOW_HALF_WIDTH;
-			const glm::vec3 quadUp    = glm::vec3(0.0f, 1.0f, 0.0f) * EXIT_GLOW_HALF_HEIGHT;
-			glm::mat4 glowBasis = glm::mat4(
-				glm::vec4(quadRight, 0.0f),
-				glm::vec4(quadUp, 0.0f),
-				glm::vec4(EXIT_GLOW_NORMAL, 0.0f),
-				glm::vec4(EXIT_GLOW_CENTER, 1.0f)
-			);
 			// Squared, so the light builds late in the swing rather than
 			// tracking it: a door barely ajar should show a crack of light,
 			// not half the glare. exitOpenFrac is already smoothstepped, so
 			// this is the second shaping of the same signal and deliberately
 			// so -- the first spreads it over the swing, this one weights it
 			// towards the end of it.
-			float glow = EXIT_GLOW_INTENSITY * exitOpenFrac * exitOpenFrac;
-			exitGlow.update(ViewPrj * glowBasis, EXIT_GLOW_COLOR, glow, animTime, currentImage);
+			const float glow = EXIT_GLOW_INTENSITY * exitOpenFrac * exitOpenFrac;
+
+			// The wall of light, standing across the doorway past the leaf's
+			// reach: in-plane axes are world Z (across) and world Y (up).
+			const glm::mat4 uprightBasis = glm::mat4(
+				glm::vec4(glm::vec3(0.0f, 0.0f, 1.0f) * EXIT_GLOW_HALF_WIDTH, 0.0f),
+				glm::vec4(glm::vec3(0.0f, 1.0f, 0.0f) * EXIT_GLOW_HALF_HEIGHT, 0.0f),
+				glm::vec4(EXIT_GLOW_NORMAL, 0.0f),
+				glm::vec4(EXIT_GLOW_CENTER, 1.0f)
+			);
+			exitGlow.update(EXIT_GLOW_UPRIGHT, ViewPrj * uprightBasis,
+							EXIT_GLOW_COLOR, glow, animTime, currentImage);
+
+			// The ground it stands on, covering the strip of open earth the
+			// upright quad leaves visible under the arch: in-plane axes are
+			// world X (out from the threshold) and world Z (across), normal
+			// straight up.
+			const glm::mat4 floorBasis = glm::mat4(
+				glm::vec4(glm::vec3(1.0f, 0.0f, 0.0f) * EXIT_GLOW_FLOOR_HALF_X, 0.0f),
+				glm::vec4(glm::vec3(0.0f, 0.0f, 1.0f) * EXIT_GLOW_FLOOR_HALF_Z, 0.0f),
+				glm::vec4(EXIT_GLOW_FLOOR_NORMAL, 0.0f),
+				glm::vec4(EXIT_GLOW_FLOOR_CENTER, 1.0f)
+			);
+			exitGlow.update(EXIT_GLOW_FLOOR, ViewPrj * floorBasis,
+							EXIT_GLOW_COLOR, glow, animTime, currentImage);
 		}
 
 		// defines the local parameters for the uniforms
@@ -4713,6 +4806,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		for(Door &d : doors) {
 			d.open = false;
 			d.angle = 0.0f;
+			d.swingSign = d.openAngleDeg < 0.0f ? -1.0f : 1.0f;
 			// Padlocks come back with the run: a key spent last run is back
 			// on its table below, so the lock it opened has to be shut again
 			// or the level would get easier every restart.
@@ -5058,9 +5152,22 @@ class Skeleton26ReplaceName : public BaseProject {
 									  << "' with key '" << d.lockKeyId << "'\n";
 							consumeKey(slot);
 							d.locked = false;
+							// Pick the swing before opening, same as the unlocked
+							// case below -- a locked door is by definition still
+							// fully closed here.
+							d.swingSign = d.swingSignAwayFrom(camPos);
 							d.open = true;
 						}
 					} else {
+						// Opening from fully closed is the one moment the leaf is
+						// free to pick a side, so that is where the player's own
+						// side is read. Re-opening a leaf that is still swinging
+						// shut keeps the sign it already has: reversing it there
+						// would drag the panel back through the doorway -- and
+						// through the player -- to reach the mirrored pose.
+						if(!d.open && d.angle == 0.0f) {
+							d.swingSign = d.swingSignAwayFrom(camPos);
+						}
 						d.open = !d.open;
 					}
 				}
@@ -5101,7 +5208,10 @@ class Skeleton26ReplaceName : public BaseProject {
 			dropKeyWasPressed = dropKey;
 
 			for(Door &d : doors) {
-				float target = d.open ? d.openAngleDeg : 0.0f;
+				// Magnitude from the scene, direction from whoever opened it
+				// (swingSign, set on the press): the leaf always travels away
+				// from the player rather than into them.
+				float target = d.open ? std::abs(d.openAngleDeg) * d.swingSign : 0.0f;
 				float maxStep = DOOR_OPEN_SPEED * deltaT;
 				if(d.angle < target) d.angle = std::min(d.angle + maxStep, target);
 				else if(d.angle > target) d.angle = std::max(d.angle - maxStep, target);

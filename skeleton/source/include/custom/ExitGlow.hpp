@@ -32,8 +32,19 @@
 // populateCommandBuffer() next to Flame's), so it shares the depth buffer
 // with the castle and needs no render pass of its own.
 //
-// One instance, not a pool: there is one way out. If a second one is ever
-// wanted, this grows the same DS-per-instance vector Flame has.
+// Several quads, not one, because a single plane cannot cover what has to be
+// covered. The exit door swings OUTWARD, so the light has to stand far enough
+// out that the leaf never sweeps through it -- and at that distance a strip of
+// open ground reappears under the bottom of the arch, between the threshold
+// and the light, which is precisely the "something out there" the effect
+// exists to deny. So main.cpp uses two: an upright wall of light past the
+// leaf's reach, and a second one lying flat on the ground in front of it,
+// covering the strip. Between them the opening frames nothing but white from
+// every angle the player can stand at.
+//
+// Hence the instance pool. It is the same DS-per-instance arrangement Flame
+// has, minus the spawn() bookkeeping: the count is fixed at init() because the
+// level knows how many it wants.
 //
 // Header-only module like the rest of custom/, implementation gated behind
 // EXITGLOW_IMPLEMENTATION (defined once in Libs.cpp). Assumes
@@ -75,15 +86,23 @@ struct ExitGlowUniformBufferObject {
 struct ExitGlow {
 	// No DSLglobal/DSglobal parameters, unlike Flame::init: this shader reads
 	// nothing the app-wide uniform carries (no camera position, no lights, no
-	// debug flags -- it is not shaded at all), so it binds a single set of its
-	// own as set 0 rather than taking a dependency on main.cpp's.
-	void init(BaseProject *_BP);
-
-	// Call every frame.
+	// debug flags -- it is not shaded at all), so it binds a set of its own
+	// as set 0 rather than taking a dependency on main.cpp's.
 	//
-	//   mvpMat     the quad's basis times ViewPrj. Local space is x = +/-1
+	// `count` quads are allocated up front and every one of them is drawn
+	// every frame; there is no spawn() and no way to skip one, so a quad the
+	// caller has nothing to say about should simply be given intensity 0
+	// (ExitGlow.frag discards on it).
+	void init(BaseProject *_BP, int count = 2);
+
+	// Call every frame, for every quad.
+	//
+	//   id         0 .. count-1, in the order the caller decided.
+	//   mvpMat     that quad's basis times ViewPrj. Local space is x = +/-1
 	//              across the half-width, y = +/-1 across the half-height,
-	//              z = the plane normal. main.cpp builds it.
+	//              z = the plane normal. main.cpp builds it, which is what
+	//              lets the same mesh serve both an upright quad and one
+	//              lying flat on the ground.
 	//   color      the daylight's hue. Near-white with a touch of warmth
 	//              reads as sun rather than as a blank screen.
 	//   intensity  see the field comment above; 0 draws nothing.
@@ -91,7 +110,7 @@ struct ExitGlow {
 	//
 	// Same idea as re-mapping a scene instance's UBO: the command buffer is
 	// recorded once, only the buffer contents change per frame.
-	void update(const glm::mat4 &mvpMat, const glm::vec3 &color, float intensity,
+	void update(int id, const glm::mat4 &mvpMat, const glm::vec3 &color, float intensity,
 				float time, int currentImage);
 
 	void pipelinesAndDescriptorSetsInit(RenderPass *_RP);
@@ -110,7 +129,13 @@ struct ExitGlow {
 	DescriptorSetLayout DSLglow;
 	Pipeline P;
 	Model *M = nullptr;
-	DescriptorSet DS;
+
+	// One set per quad, all sharing the single quad mesh and pipeline: the
+	// only thing that differs between them is the basis matrix in their
+	// uniform block. Allocated in pipelinesAndDescriptorSetsInit(), once the
+	// descriptor pool exists.
+	int instanceCount = 0;
+	std::vector<DescriptorSet> DS;
 
 	// Width of the rim fade. Small: the quad is a flat plateau of blown-out
 	// white and this is only the sliver at its edge, which lives behind the
@@ -124,8 +149,9 @@ struct ExitGlow {
 
 #ifdef EXITGLOW_IMPLEMENTATION
 
-void ExitGlow::init(BaseProject *_BP) {
+void ExitGlow::init(BaseProject *_BP, int count) {
 	BP = _BP;
+	instanceCount = count > 0 ? count : 0;
 
 	// OTHER, not POSITION: the element type only matters when Starter.hpp
 	// fills a vertex buffer from a model file, and this mesh is built here by
@@ -144,9 +170,10 @@ void ExitGlow::init(BaseProject *_BP) {
 					sizeof(ExitGlowUniformBufferObject), 1}
 			  });
 
-	// One block, one set, on top of whatever the rest of the app asked for.
-	BP->DPSZs.uniformBlocksInPool += 1;
-	BP->DPSZs.setsInPool += 1;
+	// One block and one set per quad, on top of whatever the rest of the app
+	// asked for.
+	BP->DPSZs.uniformBlocksInPool += instanceCount;
+	BP->DPSZs.setsInPool += instanceCount;
 
 	P.init(BP, &VD, "shaders/ExitGlow.vert.spv", "shaders/ExitGlow.frag.spv",
 					{&DSLglow});
@@ -178,25 +205,34 @@ void ExitGlow::createMesh() {
 	M->initMesh(BP, &VD, false);
 }
 
-void ExitGlow::update(const glm::mat4 &mvpMat, const glm::vec3 &color, float intensity,
+void ExitGlow::update(int id, const glm::mat4 &mvpMat, const glm::vec3 &color, float intensity,
 					  float time, int currentImage) {
+	if(id < 0 || id >= (int)DS.size()) {
+		return;
+	}
 	ExitGlowUniformBufferObject gubo{};
 	gubo.mvpMat = mvpMat;
 	gubo.color = color;
 	gubo.intensity = intensity;
 	gubo.time = time;
 	gubo.softness = EDGE_SOFTNESS;
-	DS.map(currentImage, &gubo, 0);
+	DS[id].map(currentImage, &gubo, 0);
 }
 
 void ExitGlow::pipelinesAndDescriptorSetsInit(RenderPass *_RP) {
 	RP = _RP;
 	P.create(RP);
-	DS.init(BP, &DSLglow, {});
+
+	DS.resize(instanceCount);
+	for(int i = 0; i < instanceCount; i++) {
+		DS[i].init(BP, &DSLglow, {});
+	}
 }
 
 void ExitGlow::pipelinesAndDescriptorSetsCleanup() {
-	DS.cleanup();
+	for(auto &d : DS) {
+		d.cleanup();
+	}
 	P.cleanup();
 }
 
@@ -209,15 +245,22 @@ void ExitGlow::localCleanup() {
 }
 
 void ExitGlow::populateCommandBuffer(VkCommandBuffer commandBuffer, int currentImage) {
+	if(instanceCount == 0) {
+		return;
+	}
+
 	// Recorded unconditionally, even while the door is shut. There is no
 	// "skip this draw" available here -- the command buffer is built once and
-	// replayed -- so an intensity of 0 is what turns the effect off, and
+	// replayed -- so an intensity of 0 is what turns a quad off, and
 	// ExitGlow.frag discards on it rather than blending a black quad over the
 	// ground outside.
 	P.bind(commandBuffer);
 	M->bind(commandBuffer);
-	DS.bind(commandBuffer, P, 0, currentImage);
-	vkCmdDrawIndexed(commandBuffer, (uint32_t)M->indices.size(), 1, 0, 0, 0);
+
+	for(int i = 0; i < instanceCount; i++) {
+		DS[i].bind(commandBuffer, P, 0, currentImage);
+		vkCmdDrawIndexed(commandBuffer, (uint32_t)M->indices.size(), 1, 0, 0, 0);
+	}
 }
 
 #endif

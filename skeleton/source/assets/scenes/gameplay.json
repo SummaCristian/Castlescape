@@ -50,11 +50,13 @@
 	// in -- so nothing can be standing in it until that door has been
 	// unlocked and swung, and reaching it means being IN the doorway.
 	//
-	// Deliberately not further out. The daylight quad sits at x 20.15, and a
-	// box beyond it would hand the player their win with the light already
-	// behind them: the payoff has to land while the glare still fills the
-	// screen. xMax runs well past the quad anyway, so nothing can outrun the
-	// check by crossing the whole strip in one frame.
+	// Deliberately not further out. The daylight stands at x 22.0 with the
+	// door swinging out in front of it, and a box beyond all that would hand
+	// the player their win looking at the back of the effect: the payoff has
+	// to land while the glare still fills the screen. xMax runs well past it
+	// anyway, so nothing can outrun the check by crossing the strip in one
+	// frame. The z range stays inside the arch, clear of where the open leaf
+	// comes to rest (z 31.19..32.07).
 	//
 	// requiresKey is now false, and that is not the exit getting easier: the
 	// lock moved from here onto the door itself, which is padlocked with
