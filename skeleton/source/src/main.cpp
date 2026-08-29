@@ -904,11 +904,24 @@ class Skeleton26ReplaceName : public BaseProject {
 	// from drawing this one in the hand from the next frame on.
 	void consumeKey(int slot) {
 		if(slot < 0 || slot >= (int)keyRing.size()) return;
-		Pickup &p = pickups[keyRing[slot]];
+		int idx = keyRing[slot];
+		Pickup &p = pickups[idx];
 		p.consumed = true;
 		p.collected = true;
-		p.inst->Wm = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
 		keyRing.erase(keyRing.begin() + slot);
+		// Off the ring immediately (the lock is spent the moment E is pressed)
+		// but NOT parked below the map yet: it sinks out of frame first, the
+		// mirror image of the pick-up rise. The lowering block in GameLogic()
+		// owns the instance until the animation ends and does the parking
+		// there. Nothing can pick it back up meanwhile -- `consumed` already
+		// took it out of the in-range scan.
+		// If a key was already sinking, it gets parked now rather than left
+		// mid-air: only one can be animating, and the newer one wins.
+		if(keyLowerIdx >= 0) {
+			pickups[keyLowerIdx].inst->Wm = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
+		}
+		keyLowerIdx = idx;
+		keyLowerElapsed = 0.0f;
 	}
 	// Put a carried key back in the world: off the ring, lying flat in front
 	// of the player and facing the same way they are, so walking up to it
@@ -959,6 +972,30 @@ class Skeleton26ReplaceName : public BaseProject {
 	// bit/blade end rather than the bow/handle. If the render shows it
 	// tip-down instead, negate this to -90.
 	static constexpr glm::vec3 HAND_KEY_TILT_DEG = glm::vec3(90.0f, -20.0f, 0.0f);
+	// Pick-up animation: the key doesn't snap into the hand, it rises into
+	// frame from below over KEY_RAISE_DURATION seconds. Purely a translation
+	// along camera-local Y added to HAND_KEY_OFFSET, so it composes with the
+	// walk bob without either one knowing about the other.
+	// Short: this is a flourish, not a cutscene -- long enough to read as
+	// motion, short enough that a player grabbing a key mid-run doesn't wait.
+	static constexpr float KEY_RAISE_DURATION = 0.35f;
+	// How far below the final hand pose the key starts, in camera-local
+	// units. Roughly out of the bottom of the frame at the default FOV, which
+	// is what makes it read as "raised into view" rather than "nudged".
+	static constexpr float KEY_RAISE_DROP = 0.8f;
+	// Seconds elapsed since the key currently in hand was picked up, or
+	// >= KEY_RAISE_DURATION once the rise is over (it just keeps counting, the
+	// eased factor saturates at 1). Reset on every pickup, including the
+	// swap that drops the old key, so each new key plays the animation.
+	float keyRaiseElapsed = KEY_RAISE_DURATION;
+	// Index into `pickups` of a key spent on a lock that is still sinking out
+	// of frame, or -1. It is already off the ring (consumeKey erases it there
+	// and then), so heldKeyIdx() no longer names it and the held-key block
+	// below won't touch it -- this is the only thing still drawing it, and it
+	// parks the instance below the map when the fall finishes.
+	int keyLowerIdx = -1;
+	float keyLowerElapsed = 0.0f;
+
 	// No separate raw-mesh fix or hand-only size lives here: the held pose
 	// reads the same size as the table/dropped one (Pickup::worldScale, read
 	// once in addPickup() out of that key's own authored matrix -- see there). If a
@@ -4899,6 +4936,10 @@ class Skeleton26ReplaceName : public BaseProject {
 			p.inst->Wm = p.spawnWm;
 		}
 		keyRing.clear();
+		// A key caught mid-fall would otherwise keep being drawn off the
+		// camera -- and worse, get parked below the map a few frames into the
+		// new run, right after the loop above put it back on its table.
+		keyLowerIdx = -1;
 		nearbyDoor = -1;
 		nearbyPickup = -1;
 		atLockedExit = false;
@@ -5218,6 +5259,10 @@ class Skeleton26ReplaceName : public BaseProject {
 							dropKeyFromRing((int)keyRing.size() - 1, camPos, front, 0.5f);
 						}
 						keyRing.push_back(nearbyPickup);
+						// Restart the raise: the key is drawn from the next
+						// frame on, and it should come up from below rather
+						// than appear already in place.
+						keyRaiseElapsed = 0.0f;
 					}
 				} else if(nearbyDoor >= 0) {
 					Door &d = doors[nearbyDoor];
@@ -5748,13 +5793,61 @@ class Skeleton26ReplaceName : public BaseProject {
 			glm::mat4 grip = glm::rotate(glm::mat4(1.0f), glm::radians(HAND_KEY_TILT_DEG.x), glm::vec3(1.0f, 0.0f, 0.0f))
 							* glm::rotate(glm::mat4(1.0f), glm::radians(HAND_KEY_TILT_DEG.y), glm::vec3(0.0f, 1.0f, 0.0f))
 							* glm::rotate(glm::mat4(1.0f), glm::radians(HAND_KEY_TILT_DEG.z + bobRollDeg), glm::vec3(0.0f, 0.0f, 1.0f));
-			glm::vec3 bobbedOffset = HAND_KEY_OFFSET + glm::vec3(bobLateral, bobVertical, 0.0f);
+
+			// Pick-up rise: only the Y offset moves, so the grip and the bob
+			// above are untouched and the key simply slides up into the pose
+			// it would otherwise have snapped to. Cubic ease-out (fast off the
+			// floor, settling at the top) rather than linear, which stops dead
+			// and reads mechanical. Clamped, so once the rise is over this is
+			// exactly 0 and the pose is the plain held one.
+			keyRaiseElapsed = std::min(keyRaiseElapsed + deltaT, KEY_RAISE_DURATION);
+			float t = keyRaiseElapsed / KEY_RAISE_DURATION;
+			float eased = 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t);
+			float raiseY = -KEY_RAISE_DROP * (1.0f - eased);
+
+			glm::vec3 bobbedOffset = HAND_KEY_OFFSET + glm::vec3(bobLateral, bobVertical + raiseY, 0.0f);
 
 			Pickup &held = pickups[heldKeyIdx()];
 			held.inst->Wm = camWm
 				* glm::translate(glm::mat4(1.0f), bobbedOffset)
 				* grip
 				* glm::scale(glm::mat4(1.0f), glm::vec3(held.worldScale));
+		}
+
+		// Key spent on a lock: the exact mirror of the rise above, played
+		// downward. Same pose, same duration, same drop distance, only the
+		// easing is reversed (cubic ease-IN: it starts from the held pose and
+		// accelerates away) so the two read as one motion run backwards.
+		// Drawn from here and not from the held-key block because the key is
+		// already off the ring -- the lock took it the moment E was pressed,
+		// and only the model is still catching up. When the fall ends the
+		// instance goes below the map, which is where consumeKey used to put
+		// it immediately.
+		if(keyLowerIdx >= 0) {
+			keyLowerElapsed = std::min(keyLowerElapsed + deltaT, KEY_RAISE_DURATION);
+			float t = keyLowerElapsed / KEY_RAISE_DURATION;
+			float eased = t * t * t;
+			float lowerY = -KEY_RAISE_DROP * eased;
+
+			float bobLateral = sinf(walkBobPhase) * WALK_BOB_LATERAL * walkBobBlend;
+			float bobVertical = sinf(walkBobPhase * 2.0f) * WALK_BOB_VERTICAL * walkBobBlend;
+			float bobRollDeg = bobLateral * 90.0f;
+
+			glm::mat4 grip = glm::rotate(glm::mat4(1.0f), glm::radians(HAND_KEY_TILT_DEG.x), glm::vec3(1.0f, 0.0f, 0.0f))
+							* glm::rotate(glm::mat4(1.0f), glm::radians(HAND_KEY_TILT_DEG.y), glm::vec3(0.0f, 1.0f, 0.0f))
+							* glm::rotate(glm::mat4(1.0f), glm::radians(HAND_KEY_TILT_DEG.z + bobRollDeg), glm::vec3(0.0f, 0.0f, 1.0f));
+			glm::vec3 bobbedOffset = HAND_KEY_OFFSET + glm::vec3(bobLateral, bobVertical + lowerY, 0.0f);
+
+			Pickup &sinking = pickups[keyLowerIdx];
+			sinking.inst->Wm = camWm
+				* glm::translate(glm::mat4(1.0f), bobbedOffset)
+				* grip
+				* glm::scale(glm::mat4(1.0f), glm::vec3(sinking.worldScale));
+
+			if(keyLowerElapsed >= KEY_RAISE_DURATION) {
+				sinking.inst->Wm = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
+				keyLowerIdx = -1;
+			}
 		}
 
 		return deltaT;
