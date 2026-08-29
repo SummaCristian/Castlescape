@@ -1379,18 +1379,6 @@ class Skeleton26ReplaceName : public BaseProject {
 	// How fast walkBobBlend eases toward its target.
 	static constexpr float WALK_BOB_BLEND_TAU = 0.15f;
 
-	// A skull sitting in a torch's flame that yaws in place to face the
-	// player, updated every frame in GameLogic() -- unlike the door's angle,
-	// there's no authored target to ease toward, it just always points at
-	// camPos. worldPos is captured once at init (these instances carry no
-	// rotation/scale in scene.json, just translate), so Wm each frame is
-	// nothing but that translation with a fresh yaw appended.
-	struct WatchingSkull {
-		Instance *inst = nullptr;
-		glm::vec3 worldPos{0.0f};
-	};
-	std::vector<WatchingSkull> watchingSkulls;
-
 	// The dungeon ghost (assets/models/Entities/Ghost.gltf, "ghost" instance
 	// in scene.json): a single-mesh, single-texture prop (see the model's own
 	// notes.md-style history -- body and "orb" were originally two separate
@@ -2315,30 +2303,9 @@ class Skeleton26ReplaceName : public BaseProject {
 		// exactly one of the two padlocks can be paid for -- leaving the pair
 		// half open is what keeps that from being a trap.
 
-		// The watching skulls, one per torch (see scene.json "torchSkull"
-		// instances). One addWatchingSkull() call per skull, same reasoning as
-		// addDoor() above: adding another is one line, not new plumbing.
-		auto addWatchingSkull = [&](const char *id) {
-			auto it = SC.InstanceIds.find(id);
-			if(it == SC.InstanceIds.end()) {
-				std::cout << "Watching skull instance '" << id << "' not found, skipping\n";
-				return;
-			}
-			WatchingSkull s;
-			s.inst = SC.I[it->second];
-			s.worldPos = glm::vec3(s.inst->Wm[3]);
-			watchingSkulls.push_back(s);
-		};
-		addWatchingSkull("dhSkullTorchW1");
-		addWatchingSkull("dhSkullTorchW2");
-		addWatchingSkull("dhSkullTorchE1");
-		addWatchingSkull("dhSkullTorchE2");
-		addWatchingSkull("dcSkullTorchE");
-		addWatchingSkull("dvSkullTorch");
-
-		// World pickups. worldPos is read from the instance's own Wm, same as
-		// WatchingSkull does, since dhKey's position already lives in
-		// scene.json and shouldn't be repeated here.
+		// World pickups. worldPos is read from the instance's own Wm, since
+		// dhKey's position already lives in scene.json and shouldn't be
+		// repeated here.
 		// Passing a keyId makes the pickup a key: it goes on the ring when
 		// collected and opens any Door whose lockKeyId matches (and the exit,
 		// if exit.keyId names it). It is spent on first use -- one lock per
@@ -4994,19 +4961,6 @@ class Skeleton26ReplaceName : public BaseProject {
 				}
 			}
 
-			// Watching skulls: yaw only (they stay upright), recomputed fresh
-			// every frame from the current camera position -- there's no eased
-			// "target" the way the doors have one, it's a straight look-at.
-			// atan2(dx, dz) assumes the skull mesh's modeled front faces +Z; if
-			// it turns out to face the camera backwards, add M_PI here.
-			for(WatchingSkull &s : watchingSkulls) {
-				float dx = camPos.x - s.worldPos.x;
-				float dz = camPos.z - s.worldPos.z;
-				float yaw = std::atan2(dx, dz);
-				s.inst->Wm = glm::translate(glm::mat4(1.0f), s.worldPos)
-							* glm::rotate(glm::mat4(1.0f), yaw, glm::vec3(0.0f, 1.0f, 0.0f));
-			}
-
 			// Ghosts. See the Ghost struct for the three modes and why Return
 			// works the way it does.
 			//
@@ -5197,8 +5151,8 @@ class Skeleton26ReplaceName : public BaseProject {
 				// that isn't moving (boxed in, or standing on the player) keeps
 				// the yaw it had rather than snapping to some default.
 				//
-				// +M_PI: the ghost mesh's modeled front faces -Z, not +Z like
-				// the watching skulls -- confirmed by it walking backwards
+				// +M_PI: the ghost mesh's modeled front faces -Z, not the +Z
+				// atan2(x, z) assumes -- confirmed by it walking backwards
 				// without this.
 				if(moveDir != glm::vec2(0.0f)) {
 					float targetYaw = std::atan2(moveDir.x, moveDir.y) + (float)M_PI;

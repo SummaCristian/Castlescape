@@ -61,10 +61,9 @@ struct Material {
 
 	// Whether this model is drawn into the shadow maps at all. On for
 	// everything except the fixtures that HOLD a light: the torch bracket sits
-	// between the wall and its own flame and the skull hangs 22cm above it, and
-	// an occluder that close to a point light subtends a huge solid angle -- the
-	// pair of them threw a cone of shadow across most of the room, which read as
-	// the torch not lighting anything. There is no bias or resolution that fixes
+	// between the wall and its own flame, and an occluder that close to a point
+	// light subtends a huge solid angle -- it threw a cone of shadow across most
+	// of the room, which read as the torch not lighting anything. There is no bias or resolution that fixes
 	// an occluder practically touching the light; the fix is not to treat it as
 	// one. Not a BRDF parameter like the rest of this struct, but it is per
 	// model and this is the one per-model table the render loop already has in
