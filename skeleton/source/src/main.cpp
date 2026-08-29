@@ -17,6 +17,7 @@
 #include "custom/SceneMaterials.hpp"
 #include "custom/SceneLights.hpp"
 #include "custom/Flame.hpp"
+#include "custom/ExitGlow.hpp"
 #include "custom/CubeShadowMap.hpp"
 #include "custom/LightDebug.hpp"
 #include "custom/HuntCycle.hpp"
@@ -184,6 +185,18 @@ struct PostUniformBufferObject {
 	float exposure;			// composite
 	int debugFlags;			// composite: LIGHT_DEBUG_NO_TONEMAP
 	float time;
+	// composite: 0 normally, ramping to 1 as the player escapes. Blends the
+	// finished frame towards white.
+	//
+	// It has to be a term of its own rather than more `exposure`, because the
+	// tone map (c / (Y + 1), see Composite.frag) approaches 1 asymptotically:
+	// no exposure, however large, actually reaches white, and worse, it
+	// reaches it at wildly different rates for a lit wall and for a dark
+	// corner -- so cranking exposure alone doesn't white the frame out, it
+	// flattens it into a grey with the bright parts still winning. The
+	// exposure ramp is still there and still doing the work of blowing the
+	// scene out; this is what finishes the job.
+	float escapeFlash;
 };
 
 // A full-screen quad vertex for those passes. Only a position: Post.vert
@@ -895,6 +908,12 @@ class Skeleton26ReplaceName : public BaseProject {
 	// design was for.
 	Flame flame;
 
+	// The daylight standing outside the exit door. See custom/ExitGlow.hpp:
+	// one overbright quad on the open ground past the doorway, drawn in the
+	// main pass like the flames, whose glare is entirely the work of the
+	// bloom chain downstream. Driven by exitDoorIndex/EXIT_GLOW_* below.
+	ExitGlow exitGlow;
+
 	// Cheat-menu-gated debug overlay: colored crosses/arrows at each active
 	// light's position, and wireframe boxes at each torch's shadow-cube
 	// near/far clip distance. See custom/LightDebug.hpp for why it draws via
@@ -1486,6 +1505,101 @@ class Skeleton26ReplaceName : public BaseProject {
 	// exit without the key, read by updateUniformBuffer() to explain why
 	// nothing happened. Same pattern as nearbyDoor/nearbyPickup.
 	bool atLockedExit = false;
+
+	// --- The way out, as a door ------------------------------------------
+	//
+	// Index into `doors` of the exit leaf (dvDoorPanel), or -1 if the scene
+	// didn't have it. Everything below rides on how far THAT door has swung,
+	// rather than on the exit box or on the run state: the light outside is a
+	// fact about the door being open, so it has to arrive while the leaf is
+	// still moving and the player is still a few metres short of winning. It
+	// is the swing that is the payoff -- by the time the box triggers, the run
+	// is already over.
+	int exitDoorIndex = -1;
+
+	// Where the daylight quad stands and how big it is. World-space, and
+	// PRESSED RIGHT UP AGAINST the back of the doorway, not out on the open
+	// ground: the wall slab is x 18.758..20 and the arch spans z 28.87..31.11,
+	// so 20.15 is 15cm clear of the outer face.
+	//
+	// That closeness is the whole point, and it was worth an earlier version
+	// standing further out to learn why. A quad a couple of units beyond the
+	// wall leaves a strip of lit ground visible through the bottom of the
+	// arch, between the threshold and the light -- and a strip of ground is
+	// exactly the "something out there" this effect exists to deny. Up
+	// against the opening there is no gap to see into: the arch frames the
+	// quad and nothing else, from every angle the player can stand at.
+	//
+	// It also means the leaf must NOT swing outward through this plane, which
+	// is why the exit door opens inward. See its addDoor call.
+	//
+	// The half-extents overhang the arch on all four sides (z 27.55..32.43,
+	// y -0.9..5.9) so no viewing angle can catch an edge of the quad inside
+	// the opening. Everything past the arch is masked by the wall's own depth,
+	// and the part below y 0 is buried under the ground plane outside, which
+	// is what guarantees the light reaches the sill with no seam.
+	static constexpr glm::vec3 EXIT_GLOW_CENTER = glm::vec3(20.15f, 2.5f, 29.99f);
+	static constexpr float EXIT_GLOW_HALF_WIDTH = 2.44f;	// along world Z
+	static constexpr float EXIT_GLOW_HALF_HEIGHT = 3.4f;	// along world Y
+	// Faces back into the castle, i.e. west, so the player looking out through
+	// the doorway sees it square on.
+	static constexpr glm::vec3 EXIT_GLOW_NORMAL = glm::vec3(-1.0f, 0.0f, 0.0f);
+	// Peak radiance. Absurd on the face of it -- BLOOM_THRESHOLD is 1.55 --
+	// and it has to be, because of the tone map: Composite.frag divides by
+	// (Y + 1), so a value of 9 lands at 0.90 on screen and a value of 60 at
+	// 0.984. Everything between "bright" and "cannot look at it" lives in that
+	// last stretch, and reaching it costs an order of magnitude. The bloom
+	// chain then takes the same unclamped value and floods the stonework
+	// around the opening with it, which is the part that actually reads as
+	// dazzle rather than as a white shape.
+	static constexpr float EXIT_GLOW_INTENSITY = 60.0f;
+	// Daylight, warmed very slightly. Pure white read as a hole in the render
+	// rather than as sky.
+	static constexpr glm::vec3 EXIT_GLOW_COLOR = glm::vec3(1.0f, 0.97f, 0.90f);
+	// The light the doorway throws BACK into the room, as a spot appended
+	// straight into gubo (the same thing the torch loop does with its flames),
+	// not as a lights.json entry: its brightness is a function of the door's
+	// angle, and lights.json has no way to say that. A spot rather than a
+	// point because the light has to come through the opening -- a point light
+	// out there would wrap round and light the outside face of the east wall
+	// as brightly as the floor inside.
+	static constexpr glm::vec3 EXIT_SPILL_POS = glm::vec3(20.7f, 2.6f, 29.99f);
+	// Well over 1: this is a doorway onto open daylight standing in a room lit
+	// by torches, and a spill light that merely matched them would leave the
+	// stone around the opening looking like it was lit by another torch. The
+	// scene target is HDR, so overbright light colours are as legitimate here
+	// as they are on the flames -- and the bloom chain treats what this lights
+	// up the same way it treats the quad itself.
+	static constexpr glm::vec3 EXIT_SPILL_COLOR = glm::vec3(3.4f, 3.26f, 3.0f);
+	static constexpr float EXIT_SPILL_G = 9.0f;		// reaches across the dv room
+	static constexpr float EXIT_SPILL_BETA = 1.0f;	// inverse-linear, so it carries
+	// Narrower than it looks like it should be, because this light has no
+	// shadow map (see where it is appended): nothing stops it, so a wide cone
+	// would light the east wall's inner face right across the room as evenly
+	// as it lights the floor in front of the opening, which reads as the wall
+	// having gone transparent. Kept to a cone aimed down the doorway's own
+	// axis, the leak stays where the light would honestly be anyway.
+	static constexpr float EXIT_SPILL_INNER_DEG = 55.0f;
+	static constexpr float EXIT_SPILL_OUTER_DEG = 105.0f;
+
+	// 0 while the exit door is shut, 1 once it has finished swinging. Drives
+	// the glow, the spill light and nothing else. Smoothstepped rather than
+	// linear so the light doesn't appear at full strength the instant the
+	// padlock comes off and the leaf twitches.
+	float exitOpenFrac = 0.0f;
+
+	// The whiteout. Once the run is won, this ramps 0 -> 1 and multiplies the
+	// post chain's exposure and bloom, so the last thing the player sees is
+	// the whole frame blowing out rather than a text banner over a dungeon.
+	// It rides the two knobs the stare-at glare already uses (see the GLARE_*
+	// constants), for the same reason that effect does: they are the only two
+	// values in the post chain that mean "brighter", and reusing them means
+	// the tone map compresses the flash exactly as it compresses everything
+	// else.
+	float escapeFlash = 0.0f;
+	static constexpr float ESCAPE_FLASH_SECONDS = 1.6f;
+	static constexpr float ESCAPE_EXPOSURE_GAIN = 7.0f;
+	static constexpr float ESCAPE_BLOOM_GAIN = 3.0f;
 
 	// The player's authored starting pose, captured in localInit() before
 	// anything moves it, so restarting a run puts them back where they spawned
@@ -2125,6 +2239,51 @@ class Skeleton26ReplaceName : public BaseProject {
 		// care. What stays scarce is the COUNT: two keys, two chained doors
 		// and the exit, and only the exit gives its key back.
 		addDoor("dlDoorPanel2", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f, "iron", "iron key");
+		// The way out, in the dv room's east wall -- the only door in the
+		// castle that opens onto the outside, and the last thing between the
+		// player and the win box (see gameplay.json's "exit", which no longer
+		// checks a key of its own now that this door does).
+		//
+		// Where its wall came from, since scene.json can't carry a comment
+		// saying so (Scene.hpp parses it strictly): that corner used to be
+		// closed by dvCornSE, and a corner mesh has no hole to cut a doorway
+		// into. So it is replaced by the two pieces that reproduce its two
+		// arms exactly, one of which is a hole wall -- the same substitution
+		// the dc/dl boundary already makes with dlDoor2 + dcWallS2 at one
+		// shared translate. The two meshes do NOT share an origin convention
+		// (a corner's arms run to local -Z, the straight and hole walls from
+		// local 0 to +Z), so the numbers differ while the geometry doesn't:
+		//   dvDoor  at [20.0, 26.4] rot 0    -> x 18.758..20,  z 26.4..33.6
+		//   dvWallS at [20.0, 33.6] rot 270  -> x 12.8..20,    z 32.358..33.6
+		// which is arm 1 and arm 2 of the old dvCornSE, unmoved. The leaf then
+		// sits at the same offset from its hole wall that dlDoorPanel2 has
+		// from dlDoor2, carried across through the two walls' differing yaw,
+		// which puts the hinge on the jamb and the doorway centre at z 29.99
+		// -- the middle of the arch, whose hole spans local z 2.47..4.71, i.e.
+		// world z 28.87..31.11.
+		//
+		// Its hole wall carries no yaw, because it stands in an EAST wall
+		// rather than a west-facing one, so the leaf carries none either --
+		// and that flips which way its local +X points: outward, here, where
+		// every other leaf in the castle has it pointing into the room. Hence
+		// the flipped lock props below, which is what puts the chains on the
+		// inside face and, with them, the side E works from. The promptOffset
+		// is unchanged: the doorway centre sits at the same place in the
+		// leaf's own frame no matter which way the frame points.
+		//
+		// This is the ONE door in the castle that opens INWARD, and it is the
+		// daylight behind it that decides that, not the door. The glow quad
+		// sits 15cm off the far face of the wall (see EXIT_GLOW_CENTER for why
+		// it has to be that close), and a leaf swinging out would sweep
+		// straight through it and hang there, lit from behind, in the middle
+		// of the effect. Swinging inward it clears the opening entirely and
+		// leaves the arch full of nothing but light -- which is the whole
+		// point of the door.
+		//
+		// For this leaf's mirrored frame a POSITIVE angle is the inward one.
+		// If it ever swings the wrong way, negate it, exactly as the three
+		// doors above say.
+		addDoor("dvDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f, "iron", "iron key");
 		// Hangs a scene instance on a door as lock hardware. Separate from
 		// addDoor() rather than another argument on it because a door can
 		// carry several (the chains and the padlock are two models: the
@@ -2182,6 +2341,28 @@ class Skeleton26ReplaceName : public BaseProject {
 		// player never stands on.
 		addLockProp("dhDoorPanel", "dhDoorChains", true);
 		addLockProp("dhDoorPanel", "dhDoorPadlock", true);
+		// The exit door's set, also flipped, but for the opposite reason to
+		// dhDoorPanel's: that leaf is yawed 180 and approached from the east,
+		// this one is yawed 0 and approached from the west. Either way the
+		// models as exported end up on the face the player never stands on,
+		// and either way the half turn is what fixes it. See the addDoor call
+		// for this leaf above.
+		addLockProp("dvDoorPanel", "dvDoorChains", true);
+		addLockProp("dvDoorPanel", "dvDoorPadlock", true);
+
+		// Cache which door is the way out, so the light outside can be driven
+		// from its swing without a string compare every frame. Done here
+		// rather than in the addDoor lambda because "which door is the exit"
+		// is a property of the level, not of doors in general.
+		for(size_t i = 0; i < doors.size(); i++) {
+			if(doors[i].instanceId == "dvDoorPanel") {
+				exitDoorIndex = (int)i;
+				break;
+			}
+		}
+		if(exitDoorIndex < 0) {
+			std::cout << "Exit door 'dvDoorPanel' not found: no daylight outside it\n";
+		}
 
 		// dlDoorPanel, the southern leaf of the pair, is left unlocked on
 		// purpose: it is the way around its chained twin. Two keys exist, both
@@ -2218,17 +2399,23 @@ class Skeleton26ReplaceName : public BaseProject {
 			p.worldScale = glm::length(glm::vec3(p.inst->Wm[0]));
 			pickups.push_back(p);
 		};
-		// Two keys, and deliberately the SAME id: both are the one key mesh in
-		// the level, so a lock that accepted one and refused the other would
-		// read as a bug no matter how correct the rule was. Sharing an id is
-		// what keyRing is built for (see its declaration) -- the ring stores
-		// instances, not ids, so two "iron" keys are still two distinct
-		// objects to pick up, drop and spend.
-		// The scarcity is therefore arithmetic, not matching: two keys for
-		// the two chained doors plus the exit, and only the exit hands its
-		// key back.
+		// Three keys, and deliberately the SAME id: all three are the one key
+		// mesh in the level, so a lock that accepted one and refused another
+		// would read as a bug no matter how correct the rule was. Sharing an
+		// id is what keyRing is built for (see its declaration) -- the ring
+		// stores instances, not ids, so three "iron" keys are still three
+		// distinct objects to pick up, drop and spend.
+		// The scarcity is therefore arithmetic, not matching: three keys
+		// against three padlocks, all of them consuming what they are paid
+		// with (the exit no longer checks a key of its own -- its door does).
+		// Two of those padlocks are optional, so the budget survives a player
+		// spending both spares, and only just: waste all three and the way out
+		// stays shut.
 		addPickup("dhKey", "iron");
 		addPickup("dcKey", "iron");
+		// The third, in the coloured-torch room, added when the exit stopped
+		// being a free box and became a chained door. See scene.json's dlKey.
+		addPickup("dlKey", "iron");
 
 		// The player's spawn pose, captured before anything can move it. See
 		// spawnPos's declaration: this is what restartRun() puts them back to.
@@ -2396,6 +2583,11 @@ class Skeleton26ReplaceName : public BaseProject {
 		// leaving a torch/candle mesh with no fire and no light instead of
 		// an error.
 		flame.init(this, &DSLglobal, &DSglobal, 16);
+
+		// No DSLglobal/DSglobal here: the daylight quad isn't shaded and reads
+		// nothing the app-wide uniform carries, so it binds one set of its
+		// own. See ExitGlow.hpp.
+		exitGlow.init(this);
 
 		lightDebug.init(this);
 
@@ -3147,6 +3339,10 @@ class Skeleton26ReplaceName : public BaseProject {
 		// over-1.0 colours land in the HDR attachment where bloom can find
 		// them.
 		flame.pipelinesAndDescriptorSetsInit(&RP);
+		// Same RP, and for the same reason: the exit's daylight has to write
+		// its over-1.0 colours into the HDR attachment, which is where the
+		// bloom chain can find them.
+		exitGlow.pipelinesAndDescriptorSetsInit(&RP);
 		// Same RP too, for the same reason -- see LightDebug.hpp's header.
 		lightDebug.pipelinesAndDescriptorSetsInit(&RP);
 	}
@@ -3178,6 +3374,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		txt.pipelinesAndDescriptorSetsCleanup();
 		uiQuad.pipelinesAndDescriptorSetsCleanup();
 		flame.pipelinesAndDescriptorSetsCleanup();
+		exitGlow.pipelinesAndDescriptorSetsCleanup();
 		lightDebug.pipelinesAndDescriptorSetsCleanup();
 	}
 
@@ -3236,6 +3433,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		txt.localCleanup();
 		uiQuad.localCleanup();
 		flame.localCleanup();
+		exitGlow.localCleanup();
 		lightDebug.localCleanup();
 	}
 	
@@ -3320,6 +3518,10 @@ class Skeleton26ReplaceName : public BaseProject {
 		RP.begin(commandBuffer, currentImage);
 		SC.populateCommandBuffer(commandBuffer, 0, currentImage);
 		flame.populateCommandBuffer(commandBuffer, currentImage);
+		// After the scene, so the castle has already written the depth that
+		// masks this quad down to the shape of the doorway's arch, and after
+		// the flames, which are the only other thing it can blend against.
+		exitGlow.populateCommandBuffer(commandBuffer, currentImage);
 		lightDebug.populateCommandBuffer(commandBuffer, currentImage);
 		RP.end(commandBuffer);
 
@@ -3701,6 +3903,40 @@ class Skeleton26ReplaceName : public BaseProject {
 			}
 		}
 
+		// The light the open exit throws back into the room. Appended straight
+		// into gubo like the torch lights just above, and for the same reason
+		// they are: its brightness is a function of something that changes
+		// every frame -- how far the leaf has swung -- and lights.json has no
+		// way to express that. A closed door contributes nothing and isn't
+		// appended at all, so this costs a light slot only while it matters.
+		//
+		// It is the counterpart to the ExitGlow quad, not a substitute for it:
+		// the quad is the daylight you LOOK at, this is the daylight that
+		// lands on the stone. Neither reads right alone -- a lit floor with a
+		// dark opening looks broken, and a blazing opening that throws no
+		// light looks pasted on.
+		//
+		// No shadow map: shadowIndex is left at -1 (the "skip the lookup"
+		// value, see the torch loop above). Giving it one would mean a 2D
+		// shadow pass whose only occluder is a door that moves, i.e. a map
+		// that would have to be re-rendered every frame of the swing, and the
+		// wall it shines through already does the shaping for free.
+		if(exitOpenFrac > 0.001f && gubo.lightCount < MAX_LIGHTS) {
+			LightData L{};
+			L.pos = EXIT_SPILL_POS;
+			// Aimed back through the doorway, i.e. due west: the same axis the
+			// glow quad faces along.
+			L.dir = glm::vec3(-1.0f, 0.0f, 0.0f);
+			L.color = EXIT_SPILL_COLOR * exitOpenFrac;
+			L.g = EXIT_SPILL_G;
+			L.beta = EXIT_SPILL_BETA;
+			L.cosIn = std::cos(glm::radians(EXIT_SPILL_INNER_DEG * 0.5f));
+			L.cosOut = std::cos(glm::radians(EXIT_SPILL_OUTER_DEG * 0.5f));
+			L.type = LIGHT_SPOT;
+			L.shadowIndex = -1;
+			gubo.lights[gubo.lightCount++] = L;
+		}
+
 		// By value: with the Ambient Light cheat off there is no stored ambient
 		// to hand back a reference to. See SceneLights::ambient().
 		const AmbientLight amb = sceneLights.ambient();
@@ -3803,6 +4039,27 @@ class Skeleton26ReplaceName : public BaseProject {
 			// pumps frame-to-frame.
 			post.bloomIntensity = BLOOM_INTENSITY * (1.0f + GLARE_BLOOM_GAIN * glareSmoothed);
 			post.exposure = SCENE_EXPOSURE * (1.0f + GLARE_EXPOSURE_GAIN * glareSmoothed);
+			// The escape whiteout, on the very same two knobs and multiplied
+			// on top rather than replacing them, so a player who wins while
+			// staring into a torch gets one flash and not a fight between two.
+			// Cubed: the ramp is linear in time (see GameLogic), and a linear
+			// ramp of EXPOSURE reads as the image getting evenly brighter,
+			// which looks like a fade to white. Weighting it towards the end
+			// instead gives the eye a moment of the room still being there
+			// before it is taken, which is what makes it read as being blinded
+			// by the doorway rather than as a screen transition.
+			if(escapeFlash > 0.0f) {
+				const float f = escapeFlash * escapeFlash * escapeFlash;
+				post.exposure *= 1.0f + ESCAPE_EXPOSURE_GAIN * f;
+				post.bloomIntensity *= 1.0f + ESCAPE_BLOOM_GAIN * f;
+			}
+			// The whiteout's own term, which Composite.frag applies after the
+			// tone map -- see its declaration in PostUniformBufferObject for
+			// why the exposure ramp above cannot do this on its own. Held back
+			// until the exposure ramp has had most of the flash to work in, so
+			// the frame is already blowing out by the time the white arrives
+			// rather than being painted over while it is still readable.
+			post.escapeFlash = glm::smoothstep(0.45f, 1.0f, escapeFlash);
 			post.debugFlags = gubo.debugFlags;
 
 			// Bright pass: reads the full-resolution scene and writes the
@@ -3889,6 +4146,37 @@ class Skeleton26ReplaceName : public BaseProject {
 
 			flame.update(tf.flameId, ViewPrj * billboard, tf.intensity, tf.heightScale,
 						 tf.lean, 1.0f + GLARE_FLAME_GAIN * tf.glare, tf.color, currentImage);
+		}
+
+		// The daylight outside the exit door. Unlike the flames above this is
+		// NOT a billboard: it stands in a fixed plane on the ground outside,
+		// facing back into the castle, so its basis is built from world axes
+		// and not from the camera's. Two consequences worth knowing: seen from
+		// far off to one side it foreshortens, which is correct (you are
+		// looking along a doorway, not at a lamp), and the arch is what limits
+		// how much of it you can ever see anyway.
+		//
+		// Columns are the same convention Flame's billboard uses -- the two
+		// in-plane axes scaled to the quad's half-extents, the normal, then
+		// the centre -- so ExitGlow.vert can keep its corner parameter in
+		// -1..1 and let this matrix do the placing.
+		{
+			const glm::vec3 quadRight = glm::vec3(0.0f, 0.0f, 1.0f) * EXIT_GLOW_HALF_WIDTH;
+			const glm::vec3 quadUp    = glm::vec3(0.0f, 1.0f, 0.0f) * EXIT_GLOW_HALF_HEIGHT;
+			glm::mat4 glowBasis = glm::mat4(
+				glm::vec4(quadRight, 0.0f),
+				glm::vec4(quadUp, 0.0f),
+				glm::vec4(EXIT_GLOW_NORMAL, 0.0f),
+				glm::vec4(EXIT_GLOW_CENTER, 1.0f)
+			);
+			// Squared, so the light builds late in the swing rather than
+			// tracking it: a door barely ajar should show a crack of light,
+			// not half the glare. exitOpenFrac is already smoothstepped, so
+			// this is the second shaping of the same signal and deliberately
+			// so -- the first spreads it over the swing, this one weights it
+			// towards the end of it.
+			float glow = EXIT_GLOW_INTENSITY * exitOpenFrac * exitOpenFrac;
+			exitGlow.update(ViewPrj * glowBasis, EXIT_GLOW_COLOR, glow, animTime, currentImage);
 		}
 
 		// defines the local parameters for the uniforms
@@ -4445,6 +4733,13 @@ class Skeleton26ReplaceName : public BaseProject {
 		nearbyDoor = -1;
 		nearbyPickup = -1;
 		atLockedExit = false;
+		// The way out closes again with the rest of the doors (the loop above
+		// re-locks and re-shuts every one), so the daylight behind it has to
+		// go with them -- otherwise a restarted run would begin with a lit
+		// doorway and no door open to explain it. Same for the whiteout: it is
+		// the end of a run, and this is a new one.
+		exitOpenFrac = 0.0f;
+		escapeFlash = 0.0f;
 
 		runState = RunState::Running;
 	}
@@ -4555,6 +4850,20 @@ class Skeleton26ReplaceName : public BaseProject {
 			restartRun();
 		}
 		restartKeyWasPressed = restartKey;
+
+		// The whiteout, ramped here rather than in the frozen-movement block
+		// below precisely because this is the one thing that has to keep
+		// running after the run is over: RunState::Escaped is what starts it.
+		// Held still while the cheat HUD is open, like everything else, so
+		// pausing mid-flash doesn't skip past it.
+		if(!hud.isOpen()) {
+			float flashTarget = (runState == RunState::Escaped) ? 1.0f : 0.0f;
+			if(flashTarget > escapeFlash) {
+				escapeFlash = std::min(escapeFlash + deltaT / ESCAPE_FLASH_SECONDS, 1.0f);
+			} else {
+				escapeFlash = flashTarget;
+			}
+		}
 
 		// The hunt clock, gated on the same two conditions as the movement
 		// block below. A cycle that kept counting down behind an open cheat
@@ -4817,6 +5126,28 @@ class Skeleton26ReplaceName : public BaseProject {
 					prop.inst->Wm = d.locked ? d.inst->Wm * prop.local
 											 : glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
 				}
+			}
+
+			// How far the way out has swung, off the same animated angle the
+			// leaf is drawn with, so the light outside can never disagree with
+			// the door on screen. Read by updateUniformBuffer() for both the
+			// daylight quad and the spill light -- and by nothing else.
+			//
+			// Smoothstepped rather than linear because the two ends are what
+			// matter: the light should stay out of it while the leaf is barely
+			// moving, build through the middle of the swing, and settle
+			// instead of arriving at full strength on the last degree.
+			//
+			// Left frozen at its last value once the run ends: this whole
+			// block stops updating then, and a door that stayed open is
+			// exactly what should still be lighting the room behind the
+			// escape banner.
+			if(exitDoorIndex >= 0) {
+				const Door &exitDoor = doors[exitDoorIndex];
+				float span = std::abs(exitDoor.openAngleDeg);
+				exitOpenFrac = span > 1e-4f
+					? glm::smoothstep(0.0f, 1.0f, glm::clamp(std::abs(exitDoor.angle) / span, 0.0f, 1.0f))
+					: 0.0f;
 			}
 
 			// Ghosts. See the Ghost struct for the three modes and why Return

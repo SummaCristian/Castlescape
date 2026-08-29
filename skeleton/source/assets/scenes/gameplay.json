@@ -43,27 +43,35 @@
 	// Where the run is won. An axis-aligned world-space box the player has to
 	// stand inside, given as [xMin, yMin, zMin, xMax, yMax, zMax].
 	//
-	// Currently the east end of the dv room, which is simply the far end of
-	// the level: there is no exit door modelled yet. When one exists, move this
-	// box onto it -- nothing else needs to change.
+	// The exit doorway itself (dvDoor, in the dv room's east wall: its slab is
+	// x 18.758..20 and the arch spans z 28.87..31.11, worked out at the
+	// addDoor("dvDoorPanel") call in main.cpp). The box starts at x 19.6,
+	// which is inside the opening but past the plane the closed leaf stands
+	// in -- so nothing can be standing in it until that door has been
+	// unlocked and swung, and reaching it means being IN the doorway.
 	//
-	// requiresKey gates it behind a key the player is carrying, which is what
-	// finally gives the key a job. Set it false to make the exit unconditional.
+	// Deliberately not further out. The daylight quad sits at x 20.15, and a
+	// box beyond it would hand the player their win with the light already
+	// behind them: the payoff has to land while the glare still fills the
+	// screen. xMax runs well past the quad anyway, so nothing can outrun the
+	// check by crossing the whole strip in one frame.
 	//
-	// keyId names WHICH key opens it, matching the id given to addPickup() in
-	// main.cpp. Both keys in the level are "iron" on purpose -- they are the
-	// same mesh, so no lock is allowed to prefer one over the other -- and so
-	// naming the id here says nothing more than "a key", it just says it
-	// explicitly rather than relying on the empty-string default.
-	// What gates the run is the count, not the id: two keys, two padlocked
-	// doors, and one key has to still be on the ring when the player gets
-	// here. Both padlocks are optional -- the one behind the spawn opens onto
-	// the outer wall, the one east of the antechamber has an unchained twin
-	// beside it -- so the budget works out, but only just. Unlike a door
-	// lock, the exit does not consume what it checks.
+	// requiresKey is now false, and that is not the exit getting easier: the
+	// lock moved from here onto the door itself, which is padlocked with
+	// "iron" (see addDoor("dvDoorPanel") in main.cpp). A visible chained door
+	// says "you need a key" where an invisible box could only say it after
+	// the fact, and it also fixes a rule collision -- a door lock CONSUMES the
+	// key it is paid with, so a door-locked exit that then re-checked the ring
+	// here could never be passed.
+	//
+	// The key budget still works out, and still only just: three padlocks
+	// (behind the spawn, east of the antechamber, and this one) against three
+	// keys, with the first two padlocks both optional -- one opens onto the
+	// outer wall, the other has an unchained twin beside it. So a player can
+	// waste two keys and still leave, but cannot waste all three.
 	"exit": {
-		"box": [21.0, -1.0, 20.0, 25.0, 5.0, 30.0],
-		"requiresKey": true,
+		"box": [19.6, -1.0, 28.95, 25.0, 5.0, 31.05],
+		"requiresKey": false,
 		"keyId": "iron"
 	},
 

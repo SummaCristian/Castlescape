@@ -26,6 +26,7 @@ layout(binding = 0, set = 0) uniform PostUniformBufferObject {
 	float exposure;
 	int   debugFlags;
 	float time;
+	float escapeFlash;
 } post;
 
 layout(binding = 1, set = 0) uniform sampler2D srcTex;
