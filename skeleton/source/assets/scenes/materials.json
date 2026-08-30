@@ -29,8 +29,10 @@
 //
 //   ambientWeight       this model's share of INDIRECT light, overriding the
 //                       scene's "weight" in lights.json. Set to 0.20 on the
-//                       models under the open sky; left off everywhere else,
-//                       so anything enclosed inherits the scene's indoor 0.05.
+//                       models under the open sky -- since the castle exterior
+//                       came out, that is the ground plane and nothing else;
+//                       left off everywhere else, so anything enclosed
+//                       inherits the scene's indoor 0.05.
 //                       It exists because hemispheric ambient has no visibility
 //                       term: nothing in it can tell a corridor from a
 //                       courtyard, so the number has to be authored.
@@ -45,66 +47,28 @@
 	"default": { "specularColor": [1.0, 1.0, 1.0], "roughness": 0.6, "F0": 0.04, "k": 0.9 },
 
 	"models": {
-		// Everything from here down to the dungeon set is OUTDOORS, and carries
-		// "ambientWeight": 0.20 for it -- four times the scene's indoor default,
-		// because these surfaces really can see the sky. See the header above
-		// for why the default is the indoor value and this is the exception.
+		// The ground plane (Plane.gltf, scaled 100x in scene.json). Dry dirt and
+		// cobbles: about as rough as a surface gets, and almost purely diffuse.
 		//
-		// Ground. Dry dirt and cobbles: about as rough as a surface gets, and
-		// almost purely diffuse.
+		// The only model in the scene genuinely under the open sky, and so the
+		// only one carrying "ambientWeight": 0.20 -- four times the scene's
+		// indoor default. See the header above for why the default is the
+		// indoor value and this is the exception.
+		//
+		// The castle exterior that used to stand on it -- walls, towers, gate,
+		// keep, steps, the road, the crates, the flag and the brass gate
+		// lanterns -- is gone from scene.json, and its entries went with it. A
+		// material keyed on a model id that no longer exists is dead weight
+		// nothing warns about, and these still carried the outdoor 0.20, which
+		// left the file reading as if there were an exterior to light.
 		"floor": { "roughness": 0.92, "F0": 0.04, "k": 0.96, "ambientWeight": 0.20 },
-		"road":  { "roughness": 0.92, "F0": 0.04, "k": 0.96, "ambientWeight": 0.20 },
 
-		// Castle stone. Rough, but not as much as bare earth: enough of a sheen
-		// left to pick out the curvature of the towers.
-		"castleWall01": { "roughness": 0.78, "F0": 0.04, "k": 0.93, "ambientWeight": 0.20 },
-		"castleWall02": { "roughness": 0.78, "F0": 0.04, "k": 0.93, "ambientWeight": 0.20 },
-		"castleTower":  { "roughness": 0.78, "F0": 0.04, "k": 0.93, "ambientWeight": 0.20 },
-		"castleGate":   { "roughness": 0.78, "F0": 0.04, "k": 0.93, "ambientWeight": 0.20 },
-		"castleKeep":   { "roughness": 0.78, "F0": 0.04, "k": 0.93, "ambientWeight": 0.20 },
-		// flatNormals: this mesh averages its vertex normals across the hard
-		// edges of every tread and riser, so each face shades with a gradient
-		// across it instead of one value, and the whole flight looks smeared.
-		// With the flag on, the shader derives the face's own normal. Only set
-		// where the geometry really is hard-edged: the towers are cylinders and
-		// want the averaged normals they came with.
-		"castleSteps":  { "roughness": 0.78, "F0": 0.04, "k": 0.93, "flatNormals": true, "ambientWeight": 0.20 },
-
-		// Wood. Old varnish, so smoother than stone and a touch more reflective.
-		"barrel": { "roughness": 0.55, "F0": 0.05, "k": 0.90, "ambientWeight": 0.20 },
-		"box01":  { "roughness": 0.55, "F0": 0.05, "k": 0.90, "ambientWeight": 0.20 },
-		"box02":  { "roughness": 0.55, "F0": 0.05, "k": 0.90, "ambientWeight": 0.20 },
-		"box03":  { "roughness": 0.55, "F0": 0.05, "k": 0.90, "ambientWeight": 0.20 },
-
-		// Cloth. Very rough and essentially all diffuse.
-		"flag": { "roughness": 0.95, "F0": 0.03, "k": 0.97, "ambientWeight": 0.20 },
-
-		// The gate lanterns, in brass, and the first of the three metals in the
-		// file. This is the entry that shows what these parameters are for: a
-		// metal has no diffuse component at all ("metallic", which forces k to
-		// 0 -- the 0.15 this used to carry was an approximation of that, and
-		// left enough albedo showing to read as painted rather than cast),
-		// reflects strongly even head-on (high F0), and colours what it
-		// reflects with itself instead of with the lamp (mS is not white).
-		//
-		// mS * F0 = (0.92, 0.72, 0.42), brass's measured reflectance to within
-		// the eye's ability to tell on a lantern across a courtyard. That
-		// product is the quantity to preserve if either number is retuned:
-		// F0 alone is how bright, mS alone is what hue, and only together are
-		// they "brass". Same pair on "padlock01" below, which is the same
-		// metal on a smaller object.
-		//
-		// No "interior": these hang outdoors, so their reflection really does
-		// take the sky at the top and the courtyard at the bottom, and that
-		// gradient is the point rather than an artefact. The dungeon metals
-		// below are the opposite case.
-		"light": { "specularColor": [1.00, 0.78, 0.46], "roughness": 0.32, "F0": 0.92, "metallic": true, "ambientWeight": 0.20 },
-
-		// Dungeon set (Dracula's Castle Assetpack, see README credits). Same
-		// categories as the castle above: rougher/more-diffuse for the stone
-		// pieces, a touch of sheen for the wood, near-fully-diffuse for cloth.
-		// Candle, plate, skull and torch are left on "default": too small and
-		// varied in surface (wax, bone, metal+wood) to lump into one entry.
+		// Dungeon set (Dracula's Castle Assetpack, see README credits), which
+		// since the exterior came out is the whole scene. Three categories:
+		// rough and near-fully-diffuse for the stone pieces, a touch of sheen
+		// for the wood, rougher still for cloth. Candle, plate, skull and torch
+		// are left on "default": too small and varied in surface (wax, bone,
+		// metal+wood) to lump into one entry.
 		//
 		// Nothing below sets "ambientWeight": these are the enclosed models, so
 		// they inherit the scene's indoor 0.05 from lights.json, and that is the
@@ -152,9 +116,14 @@
 		"dungeonDoorWall":  { "roughness": 0.80, "F0": 0.04, "k": 0.93 },
 		"dungeonDoorPanel": { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
 		// The chains and padlock on a locked door (tools/make_door_lock.py):
-		// wrought iron and the same brass as "light" above, and the only metal
-		// indoors. Both carry "metallic", and it is the flag rather than the
+		// wrought iron and brass, and with "key" below the only metals left in
+		// the scene. Both carry "metallic", and it is the flag rather than the
 		// numbers that does the work here.
+		//
+		// These are also the entries that show what these parameters are for: a
+		// metal has no diffuse component at all ("metallic", which forces k to
+		// 0), reflects strongly even head-on (high F0), and colours what it
+		// reflects with itself instead of with the lamp (mS is not white).
 		//
 		// The reason is what the two pieces are made of. Nearly everything you
 		// see on a real chain is a reflection of the room, not the chain's own
@@ -174,7 +143,10 @@
 		// The numbers are then just the two metals, measured, with mS * F0
 		// landing on the real reflectance: (0.55, 0.56, 0.57) for iron, which
 		// is all but neutral and so leaves mS near white, and (0.92, 0.72,
-		// 0.42) for brass, the same pair as "light". Wrought iron on a dungeon
+		// 0.42) for brass, the same pair as "key" below. That product is the
+		// quantity to preserve if either number is retuned: F0 alone is how
+		// bright, mS alone is what hue, and only together are they "brass".
+		// Wrought iron on a dungeon
 		// door is rougher than a lantern's polished bowl, and rougher again
 		// than the cast padlock hanging off it, hence 0.62 against 0.40. The
 		// chains went from 0.45 to 0.62 deliberately: pitted iron on a cellar
@@ -225,8 +197,8 @@
 		// the pair look like two different brasses side by side.
 		"padlock01":    { "specularColor": [1.00, 0.78, 0.46], "roughness": 0.40, "F0": 0.92, "metallic": true, "interior": true },
 
-		// The pickup key, same brass as "padlock01" and "light" -- it is the
-		// object whose albedo those two borrow, so leaving it on "default"
+		// The pickup key, same brass as "padlock01" -- it is the object whose
+		// albedo the padlock borrows, so leaving it on "default"
 		// was the same failure the padlock comment describes: the leftover
 		// diffuse share painted the solid-brass albedo flat orange and it read
 		// as a yellow plastic toy. "metallic" drops that lobe and reflects the
