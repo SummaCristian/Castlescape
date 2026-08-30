@@ -1,0 +1,41 @@
+// The rooms the corner minimap knows about, and how the minimap panel looks.
+// Read once at startup by main.cpp's localInit(); see custom/MiniMap.hpp for
+// what is done with it.
+//
+// The minimap is a round, player-centred "fog of war" view: it always shows a
+// fixed radius of world around the player and pans with them, and a room's
+// walls/floor only appear once the player has stood inside that room's box.
+// "visited" resets at the start of every run (restartRun() calls
+// MiniMap::reset()).
+//
+// Each room's "aabb" is [minX, minZ, maxX, maxZ] in world units -- the same
+// coordinates scene.json uses. Y is ignored: the level is a single storey.
+// Boxes may overlap a little on purpose: the strip of floor inside a doorway
+// then belongs to both rooms and reveals whichever the player reaches first.
+// A wall segment shows as soon as any room box it touches has been visited.
+// "name" isn't drawn yet; it's here for a future room label.
+{
+	"panel": {
+		// Which screen corner the (square) panel sits in: "top-left",
+		// "top-right", "bottom-left" or "bottom-right".
+		"corner": "top-right",
+		// Gap (px) between the panel and the two screen edges it hugs.
+		"marginPx": 16,
+		// Panel size in px. The visible map is the disc inscribed in it.
+		"widthPx": 200,
+		// Inset (px) from the panel edge to the disc.
+		"paddingPx": 6,
+		// How many world units from the player the edge of the disc reaches.
+		// Smaller = more zoomed in.
+		"radiusWorld": 20,
+		// Soft edge on the disc, in px.
+		"featherPx": 2
+	},
+
+	"rooms": [
+		{ "id": "dh", "name": "Dining Hall", "aabb": [-38.5, 18.0, -13.0, 42.0] },
+		{ "id": "dc", "name": "Corridor",    "aabb": [-16.0, 18.0,  -1.6, 34.5] },
+		{ "id": "dl", "name": "Library",     "aabb": [ -1.6, 18.0,  13.0, 34.5] },
+		{ "id": "dv", "name": "Vault",       "aabb": [ 13.0, 18.0,  22.5, 34.5] }
+	]
+}

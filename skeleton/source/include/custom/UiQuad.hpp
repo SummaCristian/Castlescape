@@ -35,6 +35,9 @@ struct UiQuadAndModel {
 
 struct UiQuadColorPushConstant {
 	alignas(16) glm::vec4 color;
+	// Optional circular clip (minimap only): xy = centre px, z = radius px,
+	// w = feather px. z <= 0 disables it -- the default for every other user.
+	alignas(16) glm::vec4 circle;
 };
 
 struct UiQuad {
@@ -49,6 +52,11 @@ struct UiQuad {
 	Model *M = nullptr;
 
 	std::vector<UiRect> rects = {};
+	// Circular clip applied to every quad this instance draws: xy = centre in
+	// pixels, z = radius in pixels, w = feather in pixels. Left at 0 (radius 0)
+	// it does nothing, so the cheat HUD and crosshair are unaffected; the
+	// minimap sets it each frame to get its round, player-centred view.
+	glm::vec4 circleClip = glm::vec4(0.0f);
 	bool commandBufferMustUpdate = false;
 	// Named command-buffer slot this instance submits under. Two UiQuad
 	// instances with the same name fight over one slot (each tears down the
@@ -219,6 +227,7 @@ void UiQuad::populateCommandBuffer(VkCommandBuffer commandBuffer, int currentIma
 		for(int i = 0; i < (int)rects.size(); i++) {
 			UiQuadColorPushConstant PKv;
 			PKv.color = rects[i].color;
+			PKv.circle = circleClip;
 			vkCmdPushConstants(
 				commandBuffer,
 				P.pipelineLayout,

@@ -18,6 +18,9 @@
 #define UIQUAD_IMPLEMENTATION
 #include "custom/UiQuad.hpp"
 
+#define MINIMAP_IMPLEMENTATION
+#include "custom/MiniMap.hpp"
+
 #define CHEATHUD_IMPLEMENTATION
 #include "custom/CheatHud.hpp"
 

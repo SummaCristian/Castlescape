@@ -12,6 +12,7 @@
 #include "modules/TextMaker.hpp"
 #include "modules/Scene.hpp"
 #include "custom/UiQuad.hpp"
+#include "custom/MiniMap.hpp"
 #include "custom/CheatHud.hpp"
 #include "custom/SceneColliders.hpp"
 #include "custom/SceneMaterials.hpp"
@@ -552,6 +553,12 @@ class Skeleton26ReplaceName : public BaseProject {
 				   glm::vec4(1.0f, 1.0f, 1.0f, 0.5f)}
 		});
 	}
+
+	// Corner "fog of war" minimap. `minimap` owns the room boxes and the
+	// visited state; `minimapQuad` is the UiQuad instance that actually draws
+	// the rectangles it produces (own command-buffer slot, like crosshair).
+	MiniMap minimap;
+	UiQuad minimapQuad;
 
 	// Toggle-based pause menu for the cheats below, opened/closed with L.
 	CheatHud hud;
@@ -1984,6 +1991,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		txt.resizeScreen(w, h);
 		uiQuad.resizeScreen(w, h);
 		crosshair.resizeScreen(w, h);
+		minimapQuad.resizeScreen(w, h);
 		setCrosshairQuad();
 		// The collider visualizer owns a swapchain-attached render pass too
 		// (Colliders.hpp), and it was never being told about resizes -- its own
@@ -2474,6 +2482,22 @@ class Skeleton26ReplaceName : public BaseProject {
 		// data file instead of scene.json or here.
 		colliderSet.init(&SC, "assets/scenes/colliders.json");
 		allColliders = colliderSet.list();
+
+		// The corner minimap's room boxes and panel layout, then its wall
+		// geometry: the XZ footprint of every collider tall enough to be a
+		// wall (>= 3 units) rather than a barrel/table/chair. This reuses the
+		// merged collider list SceneColliders just built.
+		minimap.init("assets/scenes/minimap.json");
+		{
+			std::vector<MiniMapWall> minimapWalls;
+			for(Collider *c : colliderSet.list()) {
+				AABBextents e = c->getExtents();
+				if(e.yMax - e.yMin < 3.0f) continue;
+				minimapWalls.push_back(MiniMapWall{
+					glm::vec2(e.xMin, e.zMin), glm::vec2(e.xMax, e.zMax)});
+			}
+			minimap.setWalls(std::move(minimapWalls));
+		}
 
 		// Interactable doors. Each door leaf instance's own origin sits at
 		// its hinge (see the Door struct comment above), so promptOffset is
@@ -3080,6 +3104,9 @@ class Skeleton26ReplaceName : public BaseProject {
 		// over the same named command buffer
 		crosshair.init(this, windowWidth, windowHeight, 9002, "crosshair");
 		setCrosshairQuad();
+		// the minimap's own flat-quad layer; again a distinct submitOrder/
+		// buffer name so it doesn't fight crosshair or uiQuad for a slot
+		minimapQuad.init(this, windowWidth, windowHeight, 9003, "minimap");
 
 		// submits the main command buffer
 		submitCommandBuffer("main", 0, populateCommandBufferAccess, this);
@@ -3643,6 +3670,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		txt.pipelinesAndDescriptorSetsInit();
 		uiQuad.pipelinesAndDescriptorSetsInit();
 		crosshair.pipelinesAndDescriptorSetsInit();
+		minimapQuad.pipelinesAndDescriptorSetsInit();
 		// Same RP as the scene: the flame draws inside it, right after the
 		// scene geometry, so it shares the depth buffer instead of needing its
 		// own render pass the way UiQuad's 2D overlay does -- and so its
@@ -3684,6 +3712,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		txt.pipelinesAndDescriptorSetsCleanup();
 		uiQuad.pipelinesAndDescriptorSetsCleanup();
 		crosshair.pipelinesAndDescriptorSetsCleanup();
+		minimapQuad.pipelinesAndDescriptorSetsCleanup();
 		flame.pipelinesAndDescriptorSetsCleanup();
 		exitGlow.pipelinesAndDescriptorSetsCleanup();
 		lightDebug.pipelinesAndDescriptorSetsCleanup();
@@ -3744,6 +3773,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		txt.localCleanup();
 		uiQuad.localCleanup();
 		crosshair.localCleanup();
+		minimapQuad.localCleanup();
 		flame.localCleanup();
 		exitGlow.localCleanup();
 		lightDebug.localCleanup();
@@ -4853,9 +4883,28 @@ class Skeleton26ReplaceName : public BaseProject {
 			endBannerShown = false;
 		}
 
+		// Minimap: reveal the room the player is standing in, then rebuild the
+		// quad list (player/ghost dots move almost every frame, same as the FPS
+		// text above, so this just rebuilds unconditionally).
+		minimap.update(camPos);
+		{
+			std::vector<glm::vec3> ghostPositions;
+			ghostPositions.reserve(ghosts.size());
+			for(const Ghost &g : ghosts) {
+				ghostPositions.push_back(g.pos);
+			}
+			glm::vec4 minimapCircle;
+			minimapQuad.setQuads(minimap.buildQuads(
+				windowWidth, windowHeight, camPos, camYaw,
+				ghostPositions.data(), (int)ghostPositions.size(),
+				minimapCircle));
+			minimapQuad.circleClip = minimapCircle;
+		}
+
 		txt.updateCommandBuffer();
 		uiQuad.updateCommandBuffer();
 		crosshair.updateCommandBuffer();
+		minimapQuad.updateCommandBuffer();
 	}
 	
 	// --- Ghost navigation ---------------------------------------------------
@@ -5083,6 +5132,11 @@ class Skeleton26ReplaceName : public BaseProject {
 		walkBobBlend = 0.0f;
 
 		huntCycle.reset();
+
+		// A new run is a clean slate: the map goes dark again until the player
+		// re-enters each room. Remove this line to keep the map discovered
+		// across deaths instead.
+		minimap.reset();
 
 		for(Ghost &g : ghosts) {
 			g.mode = GhostMode::Patrol;
