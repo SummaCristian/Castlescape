@@ -1,5 +1,5 @@
 // FRAGMENT SHADER for the light/shadow debug line overlay. Nothing to shade:
-// LightDebug.vert already resolved each vertex's color, so this just carries
+// DebugLines.vert already resolved each vertex's color, so this just carries
 // the interpolated value to the framebuffer.
 
 #version 450

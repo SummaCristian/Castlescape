@@ -19,7 +19,7 @@
 #include "custom/Flame.hpp"
 #include "custom/ExitGlow.hpp"
 #include "custom/CubeShadowMap.hpp"
-#include "custom/LightDebug.hpp"
+#include "custom/DebugLines.hpp"
 #include "custom/HuntCycle.hpp"
 
 // Our own files, and where to start reading.
@@ -683,12 +683,24 @@ class Skeleton26ReplaceName : public BaseProject {
 		bool torchShadowsEnabled = true;
 		bool candleShadowsEnabled = true;
 
-		// Geometry overlays (LightDebug.hpp), independent of the shading
+		// Geometry overlays (DebugLines.hpp), independent of the shading
 		// debug views above: crosses/arrows at each active light's position,
 		// and wireframe boxes at each torch's shadow-cube near/far clip
 		// distance. Off by default, same reasoning as showCoordinates.
 		bool showLightGizmos = false;
 		bool showShadowFrustums = false;
+		// Wireframe box around every collider the gameplay actually tests
+		// against (SceneColliders::list(), i.e. scene.json's auto-fit boxes
+		// plus colliders.json's authored ones), and the inclined quad of every
+		// ramp. The one view that answers "is this wall solid where it looks
+		// solid" without walking into it, and the fastest way to spot a box
+		// that filled in an archway or a ramp that doesn't reach its landing.
+		// Drawn from getExtents(), which is world-space axis-ALIGNED, so an
+		// OOBB shows up as its fattened envelope rather than its true oriented
+		// box -- the same envelope the ground pass itself uses (see the
+		// collision loops in GameLogic()), so what's drawn is what's collided
+		// against, not a prettier version of it.
+		bool showColliders = false;
 		// Shader-side, unlike the two above: recolors surfaces by incoming
 		// light intensity instead of drawing extra geometry. See
 		// LIGHT_DEBUG_HEATMAP in CookTorrance.frag.
@@ -1278,11 +1290,12 @@ class Skeleton26ReplaceName : public BaseProject {
 	// bloom chain downstream. Driven by exitDoorIndex/EXIT_GLOW_* below.
 	ExitGlow exitGlow;
 
-	// Cheat-menu-gated debug overlay: colored crosses/arrows at each active
-	// light's position, and wireframe boxes at each torch's shadow-cube
-	// near/far clip distance. See custom/LightDebug.hpp for why it draws via
-	// vertex pulling instead of a vertex buffer.
-	LightDebug lightDebug;
+	// Line renderer for the cheat-menu-gated debug overlays: crosses/arrows at
+	// each active light, wireframe boxes at each torch's shadow-cube near/far
+	// clip distance, and the collider wireframes. What each overlay draws is
+	// decided in updateUniformBuffer(), not here. See custom/DebugLines.hpp for
+	// why it draws via vertex pulling instead of a vertex buffer.
+	DebugLines debugLines;
 
 	// One entry per torch that got a flame, filled once in localInit() (see
 	// addTorchFlame there) and walked every frame in updateUniformBuffer()
@@ -3246,7 +3259,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		// outward-swinging door makes the second one necessary.
 		exitGlow.init(this, EXIT_GLOW_COUNT);
 
-		lightDebug.init(this);
+		debugLines.init(this);
 
 		// seed just spreads each flame's sway/flicker phase (see Flame.hpp),
 		// not a real RNG: index * a large-ish irrational-ish constant keeps
@@ -3489,6 +3502,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		hud.addToggle("Show Normals", &cheats.showNormals);
 		hud.addToggle("Light Gizmos", &cheats.showLightGizmos);
 		hud.addToggle("Shadow Frustums", &cheats.showShadowFrustums);
+		hud.addToggle("Show Colliders", &cheats.showColliders);
 		hud.addToggle("Light Heatmap", &cheats.showLightHeatmap);
 	}
 
@@ -4021,8 +4035,8 @@ class Skeleton26ReplaceName : public BaseProject {
 		// its over-1.0 colours into the HDR attachment, which is where the
 		// bloom chain can find them.
 		exitGlow.pipelinesAndDescriptorSetsInit(&RP);
-		// Same RP too, for the same reason -- see LightDebug.hpp's header.
-		lightDebug.pipelinesAndDescriptorSetsInit(&RP);
+		// Same RP too, for the same reason -- see DebugLines.hpp's header.
+		debugLines.pipelinesAndDescriptorSetsInit(&RP);
 	}
 
 	// Here you destroy your pipelines and Descriptor Sets!
@@ -4054,7 +4068,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		crosshair.pipelinesAndDescriptorSetsCleanup();
 		flame.pipelinesAndDescriptorSetsCleanup();
 		exitGlow.pipelinesAndDescriptorSetsCleanup();
-		lightDebug.pipelinesAndDescriptorSetsCleanup();
+		debugLines.pipelinesAndDescriptorSetsCleanup();
 	}
 
 	// Here you destroy all the Models, Texture and Desc. Set Layouts you created!
@@ -4114,7 +4128,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		crosshair.localCleanup();
 		flame.localCleanup();
 		exitGlow.localCleanup();
-		lightDebug.localCleanup();
+		debugLines.localCleanup();
 	}
 	
 	// Here it is the creation of the command buffer:
@@ -4202,7 +4216,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		// masks this quad down to the shape of the doorway's arch, and after
 		// the flames, which are the only other thing it can blend against.
 		exitGlow.populateCommandBuffer(commandBuffer, currentImage);
-		lightDebug.populateCommandBuffer(commandBuffer, currentImage);
+		debugLines.populateCommandBuffer(commandBuffer, currentImage);
 		RP.end(commandBuffer);
 
 		// 2-5. Four full-screen quads: threshold, blur across, blur down,
@@ -4925,7 +4939,7 @@ class Skeleton26ReplaceName : public BaseProject {
 			DSshadowCube[t].map(currentImage, &cubeUbo, 0);
 		}
 
-		// Debug overlay (LightDebug.hpp, cheat-menu gated): gizmos at each
+		// Debug overlay (DebugLines.hpp, cheat-menu gated): gizmos at each
 		// active light's position/direction, and/or wireframe boxes at each
 		// torch's shadow-cube clip planes. Built here so gubo.lights[]/
 		// activeCubeShadows/torchLightPos[] are all current for this frame,
@@ -4943,26 +4957,68 @@ class Skeleton26ReplaceName : public BaseProject {
 					// at a point in space.
 					glm::vec3 anchor = eyePos + glm::vec3(0.0f, 2.0f, 0.0f);
 					glm::vec3 tip = anchor + L.dir * 3.0f;
-					LightDebug::PushLine(anchor, tip, color, dbgPos, dbgColor);
+					DebugLines::PushLine(anchor, tip, color, dbgPos, dbgColor);
 					glm::vec3 upHint = (std::abs(L.dir.y) > 0.99f) ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
 					glm::vec3 side = glm::normalize(glm::cross(L.dir, upHint)) * 0.3f;
 					glm::vec3 back = -L.dir * 0.3f;
-					LightDebug::PushLine(tip, tip + back + side, color, dbgPos, dbgColor);
-					LightDebug::PushLine(tip, tip + back - side, color, dbgPos, dbgColor);
+					DebugLines::PushLine(tip, tip + back + side, color, dbgPos, dbgColor);
+					DebugLines::PushLine(tip, tip + back - side, color, dbgPos, dbgColor);
 				} else {
-					LightDebug::PushCross(L.pos, 0.3f, color, dbgPos, dbgColor);
+					DebugLines::PushCross(L.pos, 0.3f, color, dbgPos, dbgColor);
 				}
 			}
 		}
 		if(cheats.showShadowFrustums) {
 			for(int t = 0; t < activeCubeShadows; t++) {
-				LightDebug::PushBox(torchLightPos[t], TORCH_SHADOW_NEAR_CONST,
+				DebugLines::PushBox(torchLightPos[t], TORCH_SHADOW_NEAR_CONST,
 									glm::vec4(1.0f, 1.0f, 0.0f, 1.0f), dbgPos, dbgColor);
-				LightDebug::PushBox(torchLightPos[t], TORCH_SHADOW_FAR_CONST,
+				DebugLines::PushBox(torchLightPos[t], TORCH_SHADOW_FAR_CONST,
 									glm::vec4(1.0f, 0.5f, 0.0f, 1.0f), dbgPos, dbgColor);
 			}
 		}
-		lightDebug.update(currentImage, ViewPrj, dbgPos, dbgColor);
+		// Collision geometry (CheatFlags::showColliders). Read straight off the
+		// same list and the same accessors the collision loops in GameLogic()
+		// use, so the overlay can't drift from what actually blocks the player.
+		if(cheats.showColliders) {
+			// Every box is grown outward by this much before being drawn. A
+			// collider box normally sits exactly ON the surface it was fitted
+			// to, and coincident depth on a wall we already know z-fights
+			// badly (see the dungeon meshes) would make the overlay flicker in
+			// and out along its own edges. The DebugLines pipeline depth-tests
+			// like the rest of the scene, on purpose -- an overlay that ignored
+			// depth would show every collider in the castle through the walls,
+			// which is unreadable -- so the fix is the nudge, not the test.
+			const float COLLIDER_DRAW_EPS = 0.01f;
+			for(Collider *C : allColliders) {
+				AABBextents E = C->getExtents();
+				DebugLines::PushAABB(glm::vec3(E.xMin, E.yMin, E.zMin) - COLLIDER_DRAW_EPS,
+									 glm::vec3(E.xMax, E.yMax, E.zMax) + COLLIDER_DRAW_EPS,
+									 glm::vec4(0.0f, 1.0f, 0.2f, 1.0f), dbgPos, dbgColor);
+			}
+			// Ramps in a different color because they behave differently: they
+			// are ground-only, never walls, and their surface is the drawn quad
+			// itself rather than the top of a box.
+			for(const GroundVolume &G : colliderSet.ramps()) {
+				// The four corners of the walkable surface, built in the model's
+				// local space (where the footprint is axis-aligned whatever the
+				// instance's rotation, exactly as groundAt() tests it) and then
+				// sent through the same world matrix.
+				glm::vec3 corners[4];
+				const float runs[4]   = {G.runFrom, G.runTo, G.runTo, G.runFrom};
+				const float rises[4]  = {G.riseFrom, G.riseTo, G.riseTo, G.riseFrom};
+				const float widths[4] = {G.widthFrom, G.widthFrom, G.widthTo, G.widthTo};
+				for(int i = 0; i < 4; i++) {
+					glm::vec3 p(0.0f);
+					p[G.runAxis]   = runs[i];
+					p[G.riseAxis]  = rises[i];
+					p[G.widthAxis] = widths[i];
+					corners[i] = glm::vec3(G.Wm * glm::vec4(p, 1.0f));
+				}
+				DebugLines::PushQuad(corners[0], corners[1], corners[2], corners[3],
+									 glm::vec4(0.2f, 0.6f, 1.0f, 1.0f), dbgPos, dbgColor);
+			}
+		}
+		debugLines.update(currentImage, ViewPrj, dbgPos, dbgColor);
 
 		// The gazed door's chains/padlock are separate instances (see
 		// Door::LockProp) but should glow along with the door leaf -- they
