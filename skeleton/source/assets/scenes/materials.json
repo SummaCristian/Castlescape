@@ -238,6 +238,24 @@
 		// one number we can carry matches the texture we cannot. "interior":
 		// the key lives and is carried in the dungeon, same as the padlock.
 		"key":          { "specularColor": [1.00, 0.78, 0.46], "roughness": 0.40, "F0": 0.92, "metallic": true, "interior": true },
+		// The bookcase that hides the secret passage (tools/make_bookshelf.py).
+		// Same values as "dungeonDoorPanel" and for the same reason: it samples
+		// that leaf's own texture and it has to pass for a piece of the same
+		// carpentry. A mobile that shaded differently from the doors would be
+		// the one object in the room announcing that it isn't furniture --
+		// which is exactly what a secret door must not do.
+		//
+		// "interior": it stands inside a doorway with a wall on either side and
+		// sees no sky, same as the chains and the ceiling beams.
+		"bookshelf01": { "roughness": 0.55, "F0": 0.05, "k": 0.90, "interior": true },
+		// The book that opens it. Tooled leather over a gilt block: rougher
+		// than varnished wood and almost purely diffuse, which is what keeps
+		// the crimson reading as cloth-grained hide rather than as the polished
+		// panel it sits on. Deliberately NOT metallic despite the gold on the
+		// page edges -- the gilding is a stripe of the banner texture, not the
+		// material, and the key next door already owns the one brass in the
+		// castle.
+		"book01": { "roughness": 0.78, "F0": 0.04, "k": 0.94, "interior": true },
 		"dungeonBarrel":  { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
 		"dungeonTable":   { "roughness": 0.55, "F0": 0.05, "k": 0.90 },
 		"dungeonChair":   { "roughness": 0.55, "F0": 0.05, "k": 0.90 },

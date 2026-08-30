@@ -730,6 +730,22 @@ class Skeleton26ReplaceName : public BaseProject {
 		Instance *inst = nullptr;
 		glm::mat4 baseWm{1.0f};	// authored (closed, angle=0) world matrix
 		glm::vec3 promptPos{0.0f};	// point used for the interact-range check (doorway centre, not the hinge)
+		// The same point in the leaf's LOCAL frame, kept so it can be put
+		// through the live Wm as well as through baseWm. promptPos is the
+		// DOORWAY -- it is measured once, off the closed pose, and stays put
+		// while the leaf swings. That is what it should be: a doorway does not
+		// move. But it means a wide-open leaf is aimed at nowhere near it, and
+		// a player standing in the passage looking straight at the panel could
+		// not close it again. leafPos() below is the same offset carried by the
+		// panel, and the two are tested as alternatives.
+		glm::vec3 promptOffset{0.0f};
+		// Where that offset has ended up this frame, i.e. the middle of the
+		// leaf wherever it currently is. Equal to promptPos while the door is
+		// shut, which is why the closed case needs no special handling.
+		glm::vec3 leafPos() const {
+			return inst == nullptr ? promptPos
+								   : glm::vec3(inst->Wm * glm::vec4(promptOffset, 1.0f));
+		}
 		// How far the leaf travels when open. Only the MAGNITUDE is used at
 		// runtime: the direction is decided per opening by swingSignAwayFrom()
 		// below, so the authored sign here is just the fallback for a leaf
@@ -753,6 +769,32 @@ class Skeleton26ReplaceName : public BaseProject {
 		// Human-readable name for the locked prompt ("needs the <lockLabel>").
 		// Defaults to lockKeyId in addDoor() when not given.
 		std::string lockLabel;
+		// Per-door wording for the three locked prompts, or empty to use the
+		// generic padlock lines built from lockLabel (see the prompt block in
+		// updateUniformBuffer). Empty on every chained door in the castle,
+		// which is the point: "Locked - needs the iron key" is exactly right
+		// for a door with a padlock hanging off it, and exactly wrong for a
+		// bookcase, where the whole trick is that the player must work out that
+		// the gap on the shelf IS a keyhole. A door that reads differently has
+		// to be allowed to say so.
+		std::string promptReady;	// carrying what it wants
+		std::string promptMissing;	// not carrying it
+		std::string promptBlocked;	// standing on the far side of the lock
+		// A door that does not admit to being a door until it can be opened.
+		// While this is set AND the lock still holds AND the player is not
+		// carrying what it wants, the door is not offered as a gaze target at
+		// all (see doorIsHidden): no focus aura, no prompt, nothing. It is
+		// furniture.
+		//
+		// The red "you can't do this yet" aura every other lock wears is right
+		// for a padlock -- the player can SEE the padlock, so the game telling
+		// them it is shut is not telling them anything they didn't know. On a
+		// bookcase it would be the opposite: the aura would be the game
+		// pointing at the secret door and saying "here it is". The gap in the
+		// row of books has to do that work on its own, and the reward for
+		// noticing it is that the shelf lights up the moment you come back with
+		// the book.
+		bool secret = false;
 		// Runtime state: true while the padlock still holds. Set from
 		// lockKeyId at load and again in restartRun(), cleared for good (for
 		// this run) the moment a matching key is spent on it -- keys are
@@ -774,6 +816,20 @@ class Skeleton26ReplaceName : public BaseProject {
 			// turn below (see addLockProp's `flip`) for one approached from
 			// the other.
 			glm::mat4 local;
+			// Inverts the whole thing: hardware that appears when the lock
+			// COMES OFF instead of hardware that disappears with it. One user,
+			// the secret bookcase (see addSlotProp): what pays for that door is
+			// a book, and a book handed over does not vanish, it ends up in the
+			// gap on the shelf the player was looking at. Same "an instance
+			// riding the leaf's local frame" machinery either way, so this is a
+			// flag rather than a second list.
+			//
+			// With it set, the prop is NOT parked below the map while the door
+			// is locked -- it is simply left alone, because until it is spent
+			// that instance is a Pickup lying on a table somewhere and the
+			// pickup code owns its matrix. Taking it over from here would drag
+			// the book underground the moment restartRun() re-locked the door.
+			bool whenUnlocked = false;
 		};
 		std::vector<LockProp> lockProps;
 		// Which face of the leaf the hardware ended up on, as a sign on the
@@ -890,6 +946,24 @@ class Skeleton26ReplaceName : public BaseProject {
 		// and the held/dropped poses both rebuild the matrix from scratch and
 		// so both need it back.
 		float worldScale = 1.0f;
+		// Euler angles (degrees, X then Y then Z) that orient this item in the
+		// player's hand. Per-pickup and not one shared constant, because the
+		// grip is a fact about the MESH's own axes rather than about hands: the
+		// key's long axis is its local Z and has to be swung upright, the book
+		// lies flat in its own frame and has to be tilted up to be read. Filled
+		// by addPickup(), which defaults it to HAND_KEY_TILT_DEG -- declared
+		// further down with the rest of the held pose, hence the plain zero
+		// here rather than a default that would have to name it.
+		glm::vec3 handTiltDeg{0.0f};
+		// Where the item hangs relative to the eye, in camera space. Also
+		// per-pickup, and for a reason that is easy to miss: this positions the
+		// mesh's ORIGIN, and two meshes can carry their origin in quite
+		// different places. The key's sits near one end, so the key mostly
+		// hangs upward from it; the book's sits at the middle of its page
+		// height, so the book straddles it and rides visibly lower from the
+		// same offset. Same default treatment as the tilt: HAND_KEY_OFFSET,
+		// filled by addPickup().
+		glm::vec3 handOffset{0.0f};
 	};
 	std::vector<Pickup> pickups;
 	// The player's key ring: indices into `pickups`, in the order collected.
@@ -960,6 +1034,14 @@ class Skeleton26ReplaceName : public BaseProject {
 		return true;
 	}
 
+	// True for a secret door the player has no business seeing yet. Gating it
+	// inside findGazedDoor rather than at each consumer is what stops the aura,
+	// the prompt and the E key from ever disagreeing about whether the thing is
+	// there: all three read the one nearbyDoor this decides.
+	bool doorIsHidden(const Door &d) const {
+		return d.secret && d.locked && findKeyInRing(d.lockKeyId) < 0;
+	}
+
 	// Index into `doors` the player is currently aiming at within look
 	// range, or -1. Does NOT check DOOR_INTERACT_RADIUS -- that's re-checked
 	// by the caller once a gaze candidate is found, keeping "can be
@@ -969,16 +1051,39 @@ class Skeleton26ReplaceName : public BaseProject {
 		int best = -1;
 		float bestCos = -1.0f;
 		for(int i = 0; i < (int)doors.size(); i++) {
-			float cosAngle;
-			if(isGazedAt(front, doors[i].promptPos, DOOR_LOOK_DISTANCE,
-						 DOOR_AIM_RADIUS, cosAngle)) {
-				if(best < 0 || cosAngle > bestCos) {
-					best = i;
-					bestCos = cosAngle;
-				}
+			if(doorIsHidden(doors[i])) continue;
+			// Two points, not one: the doorway (fixed, correct while the leaf
+			// is shut or nearly so) and the leaf itself in its live pose. An
+			// open door swings right out of its own doorway, so aiming at the
+			// panel -- which is the obvious thing to do when you want to shut
+			// it, and the ONLY thing in sight from inside a passage you have
+			// just walked through -- used to select nothing at all. Whichever
+			// of the two is aimed at more squarely wins.
+			float cosAngle = -1.0f;
+			bool hit = isGazedAt(front, doors[i].promptPos, DOOR_LOOK_DISTANCE,
+								 DOOR_AIM_RADIUS, cosAngle);
+			float leafCos = -1.0f;
+			if(isGazedAt(front, doors[i].leafPos(), DOOR_LOOK_DISTANCE,
+						 DOOR_AIM_RADIUS, leafCos) && (!hit || leafCos > cosAngle)) {
+				cosAngle = leafCos;
+				hit = true;
+			}
+			if(hit && (best < 0 || cosAngle > bestCos)) {
+				best = i;
+				bestCos = cosAngle;
 			}
 		}
 		return best;
+	}
+	// How far the player is from a door for the interact-range gate: the
+	// NEARER of its doorway and its leaf, matching the two points
+	// findGazedDoor aims at. XZ only, as this check has always been.
+	float doorDistance(const Door &d, const glm::vec3 &p) const {
+		auto flat = [&](const glm::vec3 &q) {
+			float dx = p.x - q.x, dz = p.z - q.z;
+			return std::sqrt(dx * dx + dz * dz);
+		};
+		return std::min(flat(d.promptPos), flat(d.leafPos()));
 	}
 
 	// Same as findGazedDoor, for pickups. Skips already-collected ones, same
@@ -1100,7 +1205,19 @@ class Skeleton26ReplaceName : public BaseProject {
 	// what maps to +Y at this angle, which is the assumption that it's the
 	// bit/blade end rather than the bow/handle. If the render shows it
 	// tip-down instead, negate this to -90.
+	// It is the DEFAULT rather than the only one: each pickup carries its own
+	// (Pickup::handTiltDeg, filled by addPickup), because the numbers above
+	// describe the key mesh's axes and nothing else's.
 	static constexpr glm::vec3 HAND_KEY_TILT_DEG = glm::vec3(90.0f, -20.0f, 0.0f);
+	// The held item's orientation: the item's own tilt, with the walk's roll
+	// added to the last axis so the hand sways with the step. Shared by the
+	// rise and the sink so the two animations can't drift apart -- they are
+	// meant to read as one motion played in both directions.
+	static glm::mat4 handGrip(const glm::vec3 &tiltDeg, float bobRollDeg) {
+		return glm::rotate(glm::mat4(1.0f), glm::radians(tiltDeg.x), glm::vec3(1.0f, 0.0f, 0.0f))
+			 * glm::rotate(glm::mat4(1.0f), glm::radians(tiltDeg.y), glm::vec3(0.0f, 1.0f, 0.0f))
+			 * glm::rotate(glm::mat4(1.0f), glm::radians(tiltDeg.z + bobRollDeg), glm::vec3(0.0f, 0.0f, 1.0f));
+	}
 	// Pick-up animation: the key doesn't snap into the hand, it rises into
 	// frame from below over KEY_RAISE_DURATION seconds. Purely a translation
 	// along camera-local Y added to HAND_KEY_OFFSET, so it composes with the
@@ -2590,6 +2707,7 @@ class Skeleton26ReplaceName : public BaseProject {
 			d.instanceId = id;
 			d.inst = SC.I[it->second];
 			d.baseWm = d.inst->Wm;
+			d.promptOffset = promptOffset;
 			d.promptPos = glm::vec3(d.baseWm * glm::vec4(promptOffset, 1.0f));
 			d.openAngleDeg = openAngleDeg;
 			d.swingSign = openAngleDeg < 0.0f ? -1.0f : 1.0f;
@@ -2597,6 +2715,33 @@ class Skeleton26ReplaceName : public BaseProject {
 			d.lockLabel = (lockLabel[0] != '\0') ? lockLabel : lockKeyId;
 			d.locked = !d.lockKeyId.empty();
 			doors.push_back(d);
+		};
+		// Finds a door by its instance id, for the two helpers below that
+		// decorate one after addDoor() has made it. Both could have been extra
+		// arguments on addDoor instead; they are not, because a door that needs
+		// neither -- which is every door but the bookcase -- should not have to
+		// read past them on its own line.
+		auto findDoor = [&](const char *id) -> Door * {
+			auto it = std::find_if(doors.begin(), doors.end(),
+								   [&](const Door &x) { return x.instanceId == id; });
+			return it == doors.end() ? nullptr : &*it;
+		};
+		// Replaces the generic padlock prompts on one door and marks it secret,
+		// which are one call because they are one decision: a door that has its
+		// own wording is a door that isn't a door, and a door that isn't a door
+		// must not wear the focus aura either. See Door::promptReady and
+		// Door::secret. `blocked` may be empty for the generic line.
+		auto setSecretDoor = [&](const char *id, const char *ready,
+								 const char *missing, const char *blocked = "") {
+			Door *d = findDoor(id);
+			if(d == nullptr) {
+				std::cout << "Door '" << id << "' not found, prompts not set\n";
+				return;
+			}
+			d->promptReady = ready;
+			d->promptMissing = missing;
+			d->promptBlocked = blocked;
+			d->secret = true;
 		};
 		// The door at the player's back. They spawn at x = -33.5 facing +X and
 		// this leaf sits at x = -36.883 in the hall's west wall, so it is the
@@ -2670,6 +2815,47 @@ class Skeleton26ReplaceName : public BaseProject {
 		// the light behind it can stand: see EXIT_GLOW_CENTER, and the
 		// second, ground-level quad it costs.
 		addDoor("dvDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), -100.0f, "iron", "iron key");
+		// The secret passage: a bookcase standing in the dl room's north wall,
+		// where a plain wall tile (dlWallN2) used to be. It is a Door and
+		// nothing else -- same hinge convention, same swing, same padlock rule
+		// -- because it wants to behave exactly like one and the only thing
+		// that differs is what it is paid with and what it says about itself.
+		//
+		// tools/make_bookshelf.py builds SM_Bookshelf_01 in SM_Door_01's own
+		// local frame for that reason: origin on the hinge, panel hanging to
+		// local -Z, and a silhouette that follows the hole wall's arch (the
+		// carcass is rectangular to y 4.12, then an arched cap over it). A
+		// rectangular case would have poked through the arch; a short one would
+		// have left the lunette open and the secret room visible above the
+		// books. It sits INSIDE the wall's thickness like every other leaf here
+		// rather than in front of it, which is also what lets it swing either
+		// way: a bookcase standing proud of the wall could only ever open into
+		// the player's face.
+		//
+		// promptOffset X is 0.25 and not 0: the point the range check measures
+		// from should be the shelf FACE the player is looking at, not the plane
+		// of the hinge two thirds of the case's depth behind it.
+		//
+		// Locked with "book", which no other lock in the castle takes and which
+		// the exit does not accept (gameplay.json's exit.keyId is "iron"), so
+		// the one book in the level can only ever be spent here -- there is no
+		// way to waste it and no way to strand a run on it.
+		addDoor("dsShelfPanel", glm::vec3(0.25f, 2.20f, -1.231f), 100.0f, "book", "old book");
+		// What the bookcase says, and when it says anything at all. Marking it
+		// secret means both prompts below only ever appear with the book in
+		// hand -- until then the shelf is furniture and does not glow (see
+		// Door::secret), so "A book is missing from this shelf" is not a hint
+		// that leads the player to the gap, it is the game agreeing with them
+		// once they have already worked the gap out and gone and found the
+		// book. Nothing here uses the word "locked" or names a key: a padlock
+		// can afford to, because the player can see the padlock.
+		//
+		// No blocked line: it would be unreachable. The only way to stand on
+		// the far side is to have opened the thing, and it never re-locks
+		// within a run.
+		setSecretDoor("dsShelfPanel",
+					  "[E] Slide the book into the gap",
+					  "A book is missing from this shelf");
 		// Hangs a scene instance on a door as lock hardware. Separate from
 		// addDoor() rather than another argument on it because a door can
 		// carry several (the chains and the padlock are two models: the
@@ -2763,7 +2949,13 @@ class Skeleton26ReplaceName : public BaseProject {
 		// collected and opens any Door whose lockKeyId matches (and the exit,
 		// if exit.keyId names it). It is spent on first use -- one lock per
 		// key, no take-backs.
-		auto addPickup = [&](const char *id, const char *keyId = "") {
+		// handTiltDeg/handOffset are how this item sits in the hand once
+		// carried. Both have defaults because the key is the item this pose was
+		// built for and three of the four calls below are keys -- see
+		// HAND_KEY_TILT_DEG and HAND_KEY_OFFSET.
+		auto addPickup = [&](const char *id, const char *keyId = "",
+							 glm::vec3 handTiltDeg = HAND_KEY_TILT_DEG,
+							 glm::vec3 handOffset = HAND_KEY_OFFSET) {
 			auto it = SC.InstanceIds.find(id);
 			if(it == SC.InstanceIds.end()) {
 				std::cout << "Pickup instance '" << id << "' not found, skipping\n";
@@ -2776,6 +2968,8 @@ class Skeleton26ReplaceName : public BaseProject {
 			p.spawnWm = p.inst->Wm;
 			p.spawnPos = p.worldPos;
 			p.keyId = keyId;
+			p.handTiltDeg = handTiltDeg;
+			p.handOffset = handOffset;
 			// Read the uniform scale straight out of the authored world
 			// matrix -- column 0's length, which is the scale for any
 			// instance scaled uniformly, rotated or not. This is the single
@@ -2802,6 +2996,81 @@ class Skeleton26ReplaceName : public BaseProject {
 		// The third, in the coloured-torch room, added when the exit stopped
 		// being a free box and became a chained door. See scene.json's dlKey.
 		addPickup("dlKey", "iron");
+		// The fourth pickup is not a key, or rather it is a key that does not
+		// look like one: the book on the hall table, which opens the bookcase
+		// three rooms east and nothing else. It rides the SAME machinery as the
+		// keys (keyRing, findKeyInRing, consumeKey) on purpose -- "carry a
+		// thing to the lock that wants it, and spend it there" is already the
+		// rule of this level, and a second parallel system for one object would
+		// only be a second place for it to go wrong.
+		//
+		// The rule it does inherit and is worth knowing about: one free hand.
+		// Picking the book up while carrying a key puts that key on the floor
+		// at the player's feet (see the pickup branch in GameLogic), which is
+		// not a bug to fix here -- the torch owns the other hand, and a player
+		// juggling the ring is the cost of that decision, not of this book.
+		//
+		// The tilt is the book's own: its mesh lies FLAT in its local frame (x
+		// spine to fore-edge, z the height of the page, y the thickness, see
+		// make_bookshelf.py), so ~90 about X is what stands it up with the
+		// cover toward the camera, and the rest is the same eyeballed turn the
+		// key carries.
+		//
+		// The offset is HAND_KEY_OFFSET raised by 0.16. Not a taste decision
+		// about books: the key's origin sits near one end of its mesh so the
+		// key hangs UP out of the anchor, while the book's sits at the middle
+		// of its page height (local Z is -0.170..0.170, symmetric) so the book
+		// straddles it and half of it hangs below. Same number, lower object.
+		// The lift puts the two at roughly the same height on screen.
+		addPickup("dhBook", "book", glm::vec3(84.0f, -24.0f, 0.0f),
+				  HAND_KEY_OFFSET + glm::vec3(0.0f, 0.16f, 0.0f));
+
+		// Where the book ends up once it has been spent: standing in the gap on
+		// the bookcase's third shelf, riding the leaf's local frame like the
+		// padlocks do, so it swings with the case instead of hanging in the
+		// doorway. See Door::LockProp::whenUnlocked.
+		//
+		// The three numbers are the fessura's, and they live in TWO places by
+		// necessity: here, and in make_bookshelf.py's BOOK_SLOT_* which is what
+		// actually leaves the gap in the row of books. Move one and move the
+		// other.
+		//   x 0.454  the spine plane of the surrounding books (0.470) minus the
+		//            book's own 0.016 of spine bulge, so the new volume lines up
+		//            with its neighbours instead of standing proud of them
+		//   y 1.730  the shelf's face (1.56) plus half the book's height, since
+		//            the mesh is centred on Z and Z is what becomes "up" here
+		//   z -1.280 the 0.110-wide gap (-1.300..-1.190) minus the book's 0.070
+		//            of thickness, halved: centred in the hole it was left
+		//
+		// The rotation is the one that stands a flat-lying book on a shelf with
+		// its spine out: book x -> leaf -x (spine at the front, fore-edge going
+		// back into the case), book y -> leaf z (thickness along the shelf), book
+		// z -> leaf y (the page's height becomes the height). That is exactly
+		// rotY(180) * rotX(-90), and it is a rotation and not a mirror -- a
+		// mirror would flip the winding and turn the book inside out under
+		// backface culling.
+		auto addSlotProp = [&](const char *doorId, const char *pickupId,
+							   const glm::mat4 &local) {
+			Door *d = findDoor(doorId);
+			auto p = std::find_if(pickups.begin(), pickups.end(),
+								  [&](const Pickup &x) { return x.instanceId == pickupId; });
+			if(d == nullptr || p == pickups.end()) {
+				std::cout << "Slot prop '" << pickupId << "' or its door '" << doorId
+						  << "' not found, skipping\n";
+				return;
+			}
+			// The scale comes from the pickup's own authored matrix, same
+			// single read scene.json's "scale" feeds everywhere else, so a
+			// resized book still lands in its gap at the size it has in the
+			// world.
+			d->lockProps.push_back({p->inst,
+									local * glm::scale(glm::mat4(1.0f), glm::vec3(p->worldScale)),
+									true});
+		};
+		addSlotProp("dsShelfPanel", "dhBook",
+					glm::translate(glm::mat4(1.0f), glm::vec3(0.454f, 1.730f, -1.280f))
+				  * glm::rotate(glm::mat4(1.0f), glm::radians(180.0f), glm::vec3(0.0f, 1.0f, 0.0f))
+				  * glm::rotate(glm::mat4(1.0f), glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f)));
 
 		// The player's spawn pose, captured before anything can move it. See
 		// spawnPos's declaration: this is what restartRun() puts them back to.
@@ -4876,13 +5145,23 @@ class Skeleton26ReplaceName : public BaseProject {
 							 ? "[E] Light the candle"
 							 : "You need a lit torch to light this";
 		} else if(nearbyDoor >= 0 && doors[nearbyDoor].locked) {
+			// Each of the three has a per-door override (Door::promptReady and
+			// friends) that wins when it isn't empty. Only the bookcase sets
+			// them: a padlock explains itself and wants the generic wording,
+			// while a bookcase must never say "locked" -- it is furniture until
+			// the player decides it isn't.
 			const Door &d = doors[nearbyDoor];
 			if(!d.onLockSide(camPos)) {
-				wantedPromptText = "This door is blocked";
-			} else {
-				wantedPromptText = (findKeyInRing(d.lockKeyId) >= 0)
+				wantedPromptText = d.promptBlocked.empty() ? "This door is blocked"
+														   : d.promptBlocked;
+			} else if(findKeyInRing(d.lockKeyId) >= 0) {
+				wantedPromptText = d.promptReady.empty()
 								 ? "[E] Unlock (uses the " + d.lockLabel + ")"
-								 : "Locked - needs the " + d.lockLabel;
+								 : d.promptReady;
+			} else {
+				wantedPromptText = d.promptMissing.empty()
+								 ? "Locked - needs the " + d.lockLabel
+								 : d.promptMissing;
 			}
 		} else {
 			wantedPromptText = "[E] Interact";
@@ -5508,13 +5787,8 @@ class Skeleton26ReplaceName : public BaseProject {
 			nearbyDoor = -1;
 			{
 				int gazed = findGazedDoor(front);
-				if(gazed >= 0) {
-					float dx = camPos.x - doors[gazed].promptPos.x;
-					float dz = camPos.z - doors[gazed].promptPos.z;
-					float dist = std::sqrt(dx * dx + dz * dz);
-					if(dist < DOOR_INTERACT_RADIUS) {
-						nearbyDoor = gazed;
-					}
+				if(gazed >= 0 && doorDistance(doors[gazed], camPos) < DOOR_INTERACT_RADIUS) {
+					nearbyDoor = gazed;
 				}
 			}
 
@@ -5663,7 +5937,22 @@ class Skeleton26ReplaceName : public BaseProject {
 						if(slot >= 0) {
 							std::cout << "[door] unlocked '" << d.instanceId
 									  << "' with key '" << d.lockKeyId << "'\n";
+							Instance *spent = pickups[keyRing[slot]].inst;
 							consumeKey(slot);
+							// A door that has this very item as a whenUnlocked
+							// prop takes it IN rather than off the board, so
+							// the sink-out-of-frame animation consumeKey() just
+							// queued is wrong for it: the book would drop out
+							// of the bottom of the screen and then wink into
+							// existence on a shelf a third of a second later.
+							// Cancelling the sink hands the instance to the
+							// prop loop below on this same frame, and "it went
+							// from your hand into the gap" is all one motion.
+							for(const Door::LockProp &prop : d.lockProps) {
+								if(prop.whenUnlocked && prop.inst == spent) {
+									keyLowerIdx = -1;
+								}
+							}
 							d.locked = false;
 							// Pick the swing before opening, same as the unlocked
 							// case below -- a locked door is by definition still
@@ -5723,9 +6012,20 @@ class Skeleton26ReplaceName : public BaseProject {
 				// from here every frame rather than only on the unlock press,
 				// so restartRun() re-locking a door brings them back with no
 				// extra bookkeeping.
+				//
+				// A whenUnlocked prop is the mirror image and gets the mirrored
+				// treatment: it appears when the lock comes off (the book that
+				// paid for the bookcase, now standing in the gap on its shelf),
+				// and while the door is still locked it is left ALONE rather
+				// than parked -- see LockProp::whenUnlocked for why parking it
+				// would bury the book that is still lying on its table.
 				for(const Door::LockProp &prop : d.lockProps) {
-					prop.inst->Wm = d.locked ? d.inst->Wm * prop.local
-											 : glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
+					if(prop.whenUnlocked) {
+						if(!d.locked) prop.inst->Wm = d.inst->Wm * prop.local;
+					} else {
+						prop.inst->Wm = d.locked ? d.inst->Wm * prop.local
+												 : glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
+					}
 				}
 			}
 
@@ -6165,13 +6465,15 @@ class Skeleton26ReplaceName : public BaseProject {
 		// and a key spent on a lock leaves the ring (and is parked below the
 		// map by consumeKey) so it stops being drawn on the very next frame.
 		if(heldKeyIdx() >= 0) {
+			Pickup &held = pickups[heldKeyIdx()];
 			float bobLateral = sinf(walkBobPhase) * WALK_BOB_LATERAL * walkBobBlend;
 			float bobVertical = sinf(walkBobPhase * 2.0f) * WALK_BOB_VERTICAL * walkBobBlend;
 			float bobRollDeg = bobLateral * 90.0f;
 
-			glm::mat4 grip = glm::rotate(glm::mat4(1.0f), glm::radians(HAND_KEY_TILT_DEG.x), glm::vec3(1.0f, 0.0f, 0.0f))
-							* glm::rotate(glm::mat4(1.0f), glm::radians(HAND_KEY_TILT_DEG.y), glm::vec3(0.0f, 1.0f, 0.0f))
-							* glm::rotate(glm::mat4(1.0f), glm::radians(HAND_KEY_TILT_DEG.z + bobRollDeg), glm::vec3(0.0f, 0.0f, 1.0f));
+			// Tilt and offset off the item itself, not off one pair of
+			// constants: the ring can hold a key and a book, and they are two
+			// different shapes carrying their origins in two different places.
+			glm::mat4 grip = handGrip(held.handTiltDeg, bobRollDeg);
 
 			// Pick-up rise: only the Y offset moves, so the grip and the bob
 			// above are untouched and the key simply slides up into the pose
@@ -6184,9 +6486,8 @@ class Skeleton26ReplaceName : public BaseProject {
 			float eased = 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t);
 			float raiseY = -KEY_RAISE_DROP * (1.0f - eased);
 
-			glm::vec3 bobbedOffset = HAND_KEY_OFFSET + glm::vec3(bobLateral, bobVertical + raiseY, 0.0f);
+			glm::vec3 bobbedOffset = held.handOffset + glm::vec3(bobLateral, bobVertical + raiseY, 0.0f);
 
-			Pickup &held = pickups[heldKeyIdx()];
 			held.inst->Wm = camWm
 				* glm::translate(glm::mat4(1.0f), bobbedOffset)
 				* grip
@@ -6212,12 +6513,10 @@ class Skeleton26ReplaceName : public BaseProject {
 			float bobVertical = sinf(walkBobPhase * 2.0f) * WALK_BOB_VERTICAL * walkBobBlend;
 			float bobRollDeg = bobLateral * 90.0f;
 
-			glm::mat4 grip = glm::rotate(glm::mat4(1.0f), glm::radians(HAND_KEY_TILT_DEG.x), glm::vec3(1.0f, 0.0f, 0.0f))
-							* glm::rotate(glm::mat4(1.0f), glm::radians(HAND_KEY_TILT_DEG.y), glm::vec3(0.0f, 1.0f, 0.0f))
-							* glm::rotate(glm::mat4(1.0f), glm::radians(HAND_KEY_TILT_DEG.z + bobRollDeg), glm::vec3(0.0f, 0.0f, 1.0f));
-			glm::vec3 bobbedOffset = HAND_KEY_OFFSET + glm::vec3(bobLateral, bobVertical + lowerY, 0.0f);
-
 			Pickup &sinking = pickups[keyLowerIdx];
+			glm::mat4 grip = handGrip(sinking.handTiltDeg, bobRollDeg);
+			glm::vec3 bobbedOffset = sinking.handOffset + glm::vec3(bobLateral, bobVertical + lowerY, 0.0f);
+
 			sinking.inst->Wm = camWm
 				* glm::translate(glm::mat4(1.0f), bobbedOffset)
 				* grip
