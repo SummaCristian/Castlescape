@@ -862,17 +862,25 @@ void main() {
         // ubo.glow (set in main.cpp's updateUniformBuffer, see gazedGlowKind
         // and gazedInteractionDisabled there) packs two things into one
         // scalar: rounded magnitude selects the category color (1 = Door,
-        // gold; 2 = Pickup, blue/purple), then a negative sign overrides
-        // that with red -- the player is aimed at something disabled right
-        // now (e.g. a locked door with no matching key). Same aura either
-        // way, just a different color, so everything below is shared.
+        // gold; 2 = Pickup, blue/purple; 3 = Candle, warm flame orange),
+        // then a negative sign overrides that with red -- the player is
+        // aimed at something disabled right now (e.g. a locked door with no
+        // matching key, or a candle with nothing to light it with). Same
+        // aura either way, just a different color, so everything below is
+        // shared.
         const vec3 GLOW_COLOR_DOOR = vec3(1.0, 0.78, 0.25);
         const vec3 GLOW_COLOR_PICKUP = vec3(0.55, 0.35, 1.0);
+        // Hotter and redder than the door's gold, so the two read apart at a
+        // glance: a candle promises FIRE, and the aura is the only cue the
+        // player gets before pressing the key.
+        const vec3 GLOW_COLOR_CANDLE = vec3(1.0, 0.45, 0.10);
         const vec3 GLOW_COLOR_DISABLED = vec3(1.0, 0.15, 0.1);
         vec3 GLOW_COLOR;
         if(ubo.glow < 0.0) {
             GLOW_COLOR = GLOW_COLOR_DISABLED;
-        } else if(abs(ubo.glow) > 1.5) {
+        } else if(ubo.glow > 2.5) {
+            GLOW_COLOR = GLOW_COLOR_CANDLE;
+        } else if(ubo.glow > 1.5) {
             GLOW_COLOR = GLOW_COLOR_PICKUP;
         } else {
             GLOW_COLOR = GLOW_COLOR_DOOR;

@@ -50,11 +50,19 @@
 		// lightScale: a candle's light should be a faint, local pool, not a
 		// torch-strength source that merely came out of a smaller flame --
 		// scaled well below sizeScale, independently of it.
+		//
+		// burning: false means the candle starts DARK and the player lights it
+		// with [E] while holding the torch (see nearbyCandle in main.cpp's
+		// GameLogic). Authored here rather than per instance because every
+		// candle in the castle starts out unlit -- an already-burning one
+		// would just be scenery. An individual candle can still be shipped
+		// alight with an "overrides" entry setting "burning": true.
 		"dungeonCandle": {
 			"anchor": [0.0, 0.73, 0.0],
 			"sizeScale": 0.40,
 			"lightScale": 0.08,
-			"isCandle": true
+			"isCandle": true,
+			"burning": false
 		}
 	},
 

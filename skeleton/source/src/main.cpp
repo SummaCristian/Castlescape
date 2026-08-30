@@ -620,7 +620,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		// it's over the moment it starts working.
 		bool ghostsCanCatch = true;
 
-		// The two flame switches, read by flameLit() -- which is what every
+		// The two flame switches, read by flameBurning() -- which is what every
 		// path that can show a flame goes through: its point light, its
 		// billboard, its shadow-slot candidacy and its stare-at glare.
 		//
@@ -932,11 +932,11 @@ class Skeleton26ReplaceName : public BaseProject {
 	// What kind of thing gazedInstance is, so CookTorrance.frag can pick a
 	// distinct aura color per category (doors gold, pickups blue/purple)
 	// instead of every interactable looking the same. Encoded as
-	// ubo.glow's magnitude (1 = Door, 2 = Pickup) alongside the sign for
-	// gazedInteractionDisabled -- see the assignment in
-	// updateUniformBuffer(). A plain enum rather than a bool so a third
-	// category can slot in later without renaming anything.
-	enum class GlowKind { Door = 1, Pickup = 2 };
+	// ubo.glow's magnitude (1 = Door, 2 = Pickup, 3 = Candle) alongside the
+	// sign for gazedInteractionDisabled -- see the assignment in
+	// updateUniformBuffer(). A plain enum rather than a bool, which is what
+	// let Candle slot in later without renaming anything.
+	enum class GlowKind { Door = 1, Pickup = 2, Candle = 3 };
 	GlowKind gazedGlowKind = GlowKind::Door;
 
 	// True if `front` (the camera's normalized forward vector) is aimed
@@ -1288,6 +1288,30 @@ class Skeleton26ReplaceName : public BaseProject {
 		// it is a torch, matching every model but dungeonCandle.
 		bool isCandle = false;
 
+		// Is this flame actually burning? Read through flameBurning() (see there),
+		// so switching it off takes the point light, the billboard, the sparks,
+		// the shadow-slot candidacy and the stare-at glare with it in one go --
+		// nothing here is "spawned" or "destroyed" at runtime, since Flame.hpp
+		// hands out its instance ids once at init (flame.spawn in
+		// addTorchFlame) and has no way to give one back.
+		//
+		// False only for a candle authored unlit in flames.json ("burning": false),
+		// which is every candle as shipped: lighting one with [E] off the held
+		// torch is the interaction (see nearbyCandle in GameLogic). Torches are
+		// authored burning and no code ever puts them out.
+		bool burning = true;
+		// What `burning` was authored as, so restartRun() can blow the candles the
+		// player lit back out -- a run that started dark has to start dark
+		// again, same reasoning as re-locking the doors there.
+		bool spawnBurning = true;
+
+		// This flame's anchor in WORLD space, computed once at spawn. Only
+		// meaningful for a static flame (!heldByCamera): the held torch's
+		// anchor moves with the camera every frame and is recomputed in the
+		// flame-update loop instead. Used by findGazedCandle() as the aim
+		// target, and by the shadow face matrices below.
+		glm::vec3 anchorWorld = glm::vec3(0.0f);
+
 		// True for every flame that competes for a slot in the DYNAMIC
 		// shadow-cube pool (updateDynamicShadowSlots()) -- set automatically
 		// in addTorchFlame() as !heldByCamera, not passed in by callers:
@@ -1320,16 +1344,76 @@ class Skeleton26ReplaceName : public BaseProject {
 	};
 	std::vector<TorchFlame> torchFlames;
 
+	// Candle lighting: the third interactable, alongside Door and Pickup, and
+	// the one that needed no list of its own -- a candle IS a TorchFlame that
+	// happens to be authored unlit, so `nearbyCandle` indexes torchFlames
+	// directly rather than duplicating anything into a parallel vector.
+	//
+	// Same gaze-then-proximity shape as the other two (findGazedCandle picks
+	// the target, the radius below gates whether it's reachable), so the
+	// crosshair, the focus glow and the [E] prompt all behave the way the
+	// player already learned them on doors and keys.
+	//
+	// Radii: measured in 3D like a pickup's, not XZ-only like a door's -- a
+	// candle sits on a table, well above the player's feet. Tighter than the
+	// pickup's, because a candle is a small prop AND because reaching one
+	// means holding a burning torch up to it, which is a close-range gesture,
+	// not something done from across the room.
+	static constexpr float CANDLE_INTERACT_RADIUS = 2.5f;
+	static constexpr float CANDLE_LOOK_DISTANCE = 5.0f;
+	// Half-width for the aiming cone. As tight as a pickup's: the wick is a
+	// small target and the candle's own body is most of the model.
+	static constexpr float CANDLE_AIM_RADIUS = 0.35f;
+	// Index into `torchFlames` of the unlit candle currently in range, or -1.
+	// Mirrors nearbyDoor/nearbyPickup, set every frame in GameLogic().
+	int nearbyCandle = -1;
+
+	// Index into `torchFlames` of the unlit candle the player is aiming at
+	// within look range, or -1. Same two-gate split as findGazedDoor: this
+	// answers "targeted at all", CANDLE_INTERACT_RADIUS answers "close enough
+	// to light". Already-lit candles are skipped rather than reported and
+	// rejected later, so a lit one neither glows nor steals the aim from an
+	// unlit one behind it -- there is nothing left to do to it.
+	int findGazedCandle(const glm::vec3 &front) const {
+		int best = -1;
+		float bestCos = -1.0f;
+		for(int i = 0; i < (int)torchFlames.size(); i++) {
+			const TorchFlame &tf = torchFlames[i];
+			if(!tf.isCandle || tf.burning || tf.heldByCamera) continue;
+			float cosAngle;
+			if(isGazedAt(front, tf.anchorWorld, CANDLE_LOOK_DISTANCE,
+						 CANDLE_AIM_RADIUS, cosAngle)) {
+				if(best < 0 || cosAngle > bestCos) {
+					best = i;
+					bestCos = cosAngle;
+				}
+			}
+		}
+		return best;
+	}
+
 	// Is this flame currently burning at all? The single question the two
 	// flame cheats (CheatFlags::roomTorchesEnabled/handTorchEnabled) are asked
 	// through, so every consequence of a flame -- its point light, its
 	// billboard, its shadow-slot candidacy, its stare-at glare -- switches off
 	// together instead of each site testing a different flag and drifting.
-	// Candles answer true unconditionally: neither row claims them.
-	bool flameLit(const TorchFlame &tf) const {
+	// Candles answer with their own runtime `burning` flag instead: no cheat row
+	// claims them, and whether one burns is gameplay (the player lit it, see
+	// the candle block in GameLogic) rather than a debug switch.
+	bool flameBurning(const TorchFlame &tf) const {
 		if(tf.heldByCamera) return cheats.handTorchEnabled;
-		if(tf.isCandle)     return true;
+		if(tf.isCandle)     return tf.burning;
 		return cheats.roomTorchesEnabled;
+	}
+
+	// Does the player currently have fire in hand to light something WITH?
+	// The held torch is a scene instance that always exists, so today this is
+	// only ever false with the "Holding Torch" cheat off -- but the candles
+	// ask through this rather than reading the cheat, so the day the torch
+	// becomes something that can be dropped or put out, the answer changes in
+	// one place.
+	bool hasBurningTorch() const {
+		return handTorchInst != nullptr && cheats.handTorchEnabled;
 	}
 
 	// Global glare level, 0..1: the max over every wall torch's own stare-at
@@ -2900,7 +2984,8 @@ class Skeleton26ReplaceName : public BaseProject {
 		// them decorrelated without needing a seeded generator for one call.
 		auto addTorchFlame = [&](const char *id, glm::vec3 anchor, bool heldByCamera = false,
 								 glm::vec3 color = TORCH_LIGHT_COLOR, float sizeScale = 1.0f,
-								 float lightScale = 1.0f, bool isCandle = false) {
+								 float lightScale = 1.0f, bool isCandle = false,
+								 bool burning = true) {
 			auto it = SC.InstanceIds.find(id);
 			if(it == SC.InstanceIds.end()) {
 				std::cout << "Torch instance '" << id << "' not found, skipping its flame\n";
@@ -2925,6 +3010,14 @@ class Skeleton26ReplaceName : public BaseProject {
 			tf.sizeScale = sizeScale;
 			tf.lightScale = lightScale;
 			tf.isCandle = isCandle;
+			tf.burning = burning;
+			tf.spawnBurning = burning;
+			// Static flames only: the held torch's anchor is rebuilt from the
+			// camera every frame, so a world position captured here would be
+			// wrong from the next one on. Nothing reads it for the held torch.
+			if(!heldByCamera) {
+				tf.anchorWorld = glm::vec3(inst->Wm * glm::vec4(anchor, 1.0f));
+			}
 			// Automatic, not a parameter: every flame this project has is
 			// either the one held torch or a static object, and every
 			// static one belongs in the dynamic shadow pool -- there is no
@@ -2936,8 +3029,7 @@ class Skeleton26ReplaceName : public BaseProject {
 				// here, the same way computeShadowMatrices() used to for
 				// the lights.json torches, rather than every frame like the
 				// held torch.
-				glm::vec3 anchorWorld = glm::vec3(inst->Wm * glm::vec4(anchor, 1.0f));
-				tf.shadowFaceMatrices = cubeFaceMatricesFor(anchorWorld);
+				tf.shadowFaceMatrices = cubeFaceMatricesFor(tf.anchorWorld);
 			}
 			// Offsets this torch into a different part of the CPU noise field,
 			// so no two gutter at the same moment. Scaled up because fireNoise
@@ -2971,6 +3063,11 @@ class Skeleton26ReplaceName : public BaseProject {
 					float sizeScale = 1.0f;
 					float lightScale = 1.0f;
 					bool isCandle = false;
+					// Authored burning state. True for anything that doesn't
+					// say otherwise, so every torch in the castle is alight at
+					// load exactly as before; the candles set it false and
+					// wait for the player (see TorchFlame::burning).
+					bool burning = true;
 				};
 				// Same "only overwrite what's present" shape as
 				// SceneLights::readVec3, so a def can start from another
@@ -2986,6 +3083,7 @@ class Skeleton26ReplaceName : public BaseProject {
 					if(j.contains("sizeScale"))  def.sizeScale = j["sizeScale"].get<float>();
 					if(j.contains("lightScale")) def.lightScale = j["lightScale"].get<float>();
 					if(j.contains("isCandle"))   def.isCandle = j["isCandle"].get<bool>();
+					if(j.contains("burning"))    def.burning = j["burning"].get<bool>();
 					return def;
 				};
 
@@ -3021,7 +3119,8 @@ class Skeleton26ReplaceName : public BaseProject {
 					if(overrides != nullptr && overrides->contains(id)) {
 						def = applyFlameDef((*overrides)[id], def);
 					}
-					addTorchFlame(id.c_str(), def.anchor, false, def.color, def.sizeScale, def.lightScale, def.isCandle);
+					addTorchFlame(id.c_str(), def.anchor, false, def.color, def.sizeScale,
+								  def.lightScale, def.isCandle, def.burning);
 				}
 			}
 		}
@@ -3105,7 +3204,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		// "Sun"/"Spotlight"/"Ambient Light" point straight into sceneLights,
 		// which owns those lights (see SceneLights.hpp); "Torches"/"Holding
 		// Torch" into cheats, because the flames' point lights never go
-		// through SceneLights at all (see CheatFlags and flameLit()); the rest
+		// through SceneLights at all (see CheatFlags and flameBurning()); the rest
 		// into cheats too, where they become gubo.debugFlags.
 		hud.addToggle("Sun", &sceneLights.directEnabled);
 		hud.addToggle("Torches", &cheats.roomTorchesEnabled);
@@ -3288,7 +3387,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		// isn't burning, and holding a cube slot for it would keep a shadow
 		// rendering for a light that no longer reaches gubo.
 		auto categoryEnabled = [&](const TorchFlame &tf) {
-			if(!flameLit(tf)) return false;
+			if(!flameBurning(tf)) return false;
 			return tf.isCandle ? cheats.candleShadowsEnabled : cheats.torchShadowsEnabled;
 		};
 		for(int s = base; s < base + count; s++) {
@@ -4068,7 +4167,7 @@ class Skeleton26ReplaceName : public BaseProject {
 			// frame it goes away and the frame it comes back would otherwise
 			// read as an enormous velocity and bring the flame back folded
 			// over at its lean cap.
-			if(!flameLit(tf)) {
+			if(!flameBurning(tf)) {
 				tf.velPrimed = false;
 				tf.smoothedVel = glm::vec3(0.0f);
 				tf.lean = glm::vec2(0.0f);
@@ -4151,7 +4250,7 @@ class Skeleton26ReplaceName : public BaseProject {
 				// Switched-off flames never even enter the contest: not culled
 				// late, just absent, so they can't take a live slot from a
 				// torch that IS burning either.
-				if(!flameLit(tf)) {
+				if(!flameBurning(tf)) {
 					continue;
 				}
 				glm::vec3 worldPos = glm::vec3(tf.inst->Wm * glm::vec4(tf.anchor, 1.0f));
@@ -4296,10 +4395,10 @@ class Skeleton26ReplaceName : public BaseProject {
 			float glareTarget = 0.0f;
 			for(TorchFlame &tf : torchFlames) {
 				float tfTarget = 0.0f;
-				// An extinguished torch doesn't dazzle: without flameLit()
+				// An extinguished torch doesn't dazzle: without flameBurning()
 				// here the exposure/bloom would still ramp up when the player
 				// stares at a torch that is no longer drawn at all.
-				if(!tf.heldByCamera && flameLit(tf)) {
+				if(!tf.heldByCamera && flameBurning(tf)) {
 					glm::vec3 fpos = glm::vec3(tf.inst->Wm * glm::vec4(tf.anchor, 1.0f));
 					glm::vec3 to = fpos - eyePos;
 					float dist = glm::length(to);
@@ -4441,7 +4540,7 @@ class Skeleton26ReplaceName : public BaseProject {
 			// basis columns put all three cards' vertices on the anchor, i.e.
 			// zero-area triangles the rasterizer produces no fragments for --
 			// well-defined, unlike leaving w degenerate.
-			float sizeScale = flameLit(tf) ? tf.sizeScale : 0.0f;
+			float sizeScale = flameBurning(tf) ? tf.sizeScale : 0.0f;
 			float halfWidth = FLAME_HALF_WIDTH * instScale * sizeScale;
 			float height = FLAME_HEIGHT * instScale * sizeScale;
 
@@ -4755,7 +4854,8 @@ class Skeleton26ReplaceName : public BaseProject {
 		// in range on the last live frame would otherwise sit there under the
 		// game-over text still inviting a keypress that does nothing.
 		bool showInteractPrompt = runState == RunState::Running &&
-								  (nearbyDoor >= 0 || nearbyPickup >= 0 || atLockedExit);
+								  (nearbyDoor >= 0 || nearbyPickup >= 0 ||
+								   nearbyCandle >= 0 || atLockedExit);
 		// Door prompts split four ways once locks exist: a padlock the
 		// player can open ("[E] Unlock", and the wording warns the key is
 		// spent, since it can't be got back), one they can't (what to go find
@@ -4768,6 +4868,13 @@ class Skeleton26ReplaceName : public BaseProject {
 			wantedPromptText = "The way out is locked - find the key";
 		} else if(nearbyPickup >= 0) {
 			wantedPromptText = "[E] Pick up";
+		} else if(nearbyCandle >= 0) {
+			// Two ways, matching the aura the candle is wearing right now:
+			// with fire in hand it's an invitation, without it's the reason
+			// the candle won't take.
+			wantedPromptText = hasBurningTorch()
+							 ? "[E] Light the candle"
+							 : "You need a lit torch to light this";
 		} else if(nearbyDoor >= 0 && doors[nearbyDoor].locked) {
 			const Door &d = doors[nearbyDoor];
 			if(!d.onLockSide(camPos)) {
@@ -5124,8 +5231,18 @@ class Skeleton26ReplaceName : public BaseProject {
 		// camera -- and worse, get parked below the map a few frames into the
 		// new run, right after the loop above put it back on its table.
 		keyLowerIdx = -1;
+
+		// Every candle the player lit goes back out, for the same reason the
+		// doors above are re-locked: a castle that keeps the light it was
+		// given gets brighter with every restart, and the whole point of the
+		// candles is that the player earns the light.
+		for(TorchFlame &tf : torchFlames) {
+			tf.burning = tf.spawnBurning;
+		}
+
 		nearbyDoor = -1;
 		nearbyPickup = -1;
+		nearbyCandle = -1;
 		gazedInstance = nullptr;
 		atLockedExit = false;
 		// The way out closes again with the rest of the doors (the loop above
@@ -5420,14 +5537,46 @@ class Skeleton26ReplaceName : public BaseProject {
 				}
 			}
 
-			// Whichever single instance is currently targeted (pickup wins
-			// over door, same priority as the E-key handling below), for the
-			// per-instance focus glow -- see ubo.glow in updateUniformBuffer().
+			// Candles: an unlit one within reach, aimed at, is lit by [E] off
+			// the torch in the player's hand. Same gaze-then-proximity pair as
+			// the two above, in 3D like the pickup's since a candle stands on
+			// furniture. Whether the player actually HAS fire to light it with
+			// isn't checked here: the candle still gets targeted, so the
+			// disabled-glow and the prompt below can explain why nothing
+			// happens, which is more use than the candle silently not
+			// responding.
+			nearbyCandle = -1;
+			{
+				int gazed = findGazedCandle(front);
+				if(gazed >= 0) {
+					const TorchFlame &tf = torchFlames[gazed];
+					float dx = camPos.x - tf.anchorWorld.x;
+					float dy = camPos.y - tf.anchorWorld.y;
+					float dz = camPos.z - tf.anchorWorld.z;
+					float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+					if(dist < CANDLE_INTERACT_RADIUS) {
+						nearbyCandle = gazed;
+					}
+				}
+			}
+
+			// Whichever single instance is currently targeted (pickup first,
+			// then candle, then door -- same priority as the E-key handling
+			// below), for the per-instance focus glow -- see ubo.glow in
+			// updateUniformBuffer(). Candles sit above doors because one
+			// stands in front of a wall or a doorway more often than not, and
+			// the smaller, nearer thing is the one the player means.
 			gazedInstance = nullptr;
 			gazedInteractionDisabled = false;
 			if(nearbyPickup >= 0) {
 				gazedInstance = pickups[nearbyPickup].inst;
 				gazedGlowKind = GlowKind::Pickup;
+			} else if(nearbyCandle >= 0) {
+				gazedInstance = torchFlames[nearbyCandle].inst;
+				gazedGlowKind = GlowKind::Candle;
+				// Nothing to light it with: red aura, and the prompt (see
+				// updateUniformBuffer) says what's missing.
+				gazedInteractionDisabled = !hasBurningTorch();
 			} else if(nearbyDoor >= 0) {
 				const Door &d = doors[nearbyDoor];
 				gazedInstance = d.inst;
@@ -5472,6 +5621,27 @@ class Skeleton26ReplaceName : public BaseProject {
 						// frame on, and it should come up from below rather
 						// than appear already in place.
 						keyRaiseElapsed = 0.0f;
+					}
+				} else if(nearbyCandle >= 0) {
+					// Lighting a candle is one bool: `burning` is what flameBurning()
+					// answers with, and every consequence of a burning flame
+					// -- the billboard, the sparks, the point light, the
+					// dynamic shadow slot it now competes for -- already asks
+					// through flameBurning() and turns itself on this frame. See
+					// TorchFlame::burning for why nothing is spawned here.
+					//
+					// Only with fire in hand. Nothing is reported on failure:
+					// the red aura and the prompt have been saying so for as
+					// long as the player has been aiming at it.
+					if(hasBurningTorch()) {
+						torchFlames[nearbyCandle].burning = true;
+						std::cout << "[candle] lit '"
+								  << *torchFlames[nearbyCandle].inst->id << "'\n";
+						// The candle is lit from here on, so it stops being a
+						// target this frame rather than staying aimed at with
+						// a prompt inviting a press that would do nothing.
+						nearbyCandle = -1;
+						gazedInstance = nullptr;
 					}
 				} else if(nearbyDoor >= 0) {
 					Door &d = doors[nearbyDoor];
@@ -5961,7 +6131,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		// which is how everything else here hides a mesh (see consumeKey():
 		// Starter draws every instance every frame, there's no per-instance
 		// visibility flag). Its flame and light are dropped separately, through
-		// flameLit().
+		// flameBurning().
 		if(handTorchInst != nullptr && !cheats.handTorchEnabled) {
 			handTorchInst->Wm = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
 		} else if(handTorchInst != nullptr) {
