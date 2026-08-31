@@ -5,10 +5,13 @@
 // Keyed by MODEL, not by instance id: any level reusing the standard torch/
 // candle meshes below gets flames automatically, with no main.cpp changes
 // and no per-instance authoring. "overrides" is for the rare one-off that
-// can't be derived from the mesh alone -- right now just the dl room's
-// colored demo torches, which are the "dungeonTorch" model wearing a
-// non-default color -- applied on top of the matching model's defaults,
-// keyed by instance id.
+// can't be derived from the mesh alone -- an instance wanting a different
+// color, size or burning state from its model's -- applied on top of the
+// matching model's defaults, keyed by instance id. Empty right now: it used
+// to hold the dl room's four coloured demo torches (red/green/blue/purple),
+// removed because four saturated sources on one wall give every prop in the
+// room four overlapping shadows tinted by whichever lights still reach it.
+// A single ordinary torch stands there now, see scene.json's "dlTorch".
 //
 // The held torch is the one thing NOT listed here even though it uses the
 // "dungeonTorchHeld" model below: main.cpp spawns it by literal id
@@ -67,9 +70,5 @@
 	},
 
 	"overrides": {
-		"dlTorchRed":    { "color": [1.00, 0.10, 0.05] },
-		"dlTorchGreen":  { "color": [0.15, 1.00, 0.20] },
-		"dlTorchBlue":   { "color": [0.15, 0.45, 1.00] },
-		"dlTorchPurple": { "color": [0.65, 0.15, 1.00] }
 	}
 }

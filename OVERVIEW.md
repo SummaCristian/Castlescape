@@ -1244,7 +1244,7 @@ duplicare `vkCreateRenderPass` a mano.
 ## 5.5 Il pool dinamico e il caching — la parte più interessante
 
 Ci sono più point light degne di un'ombra che slot disponibili (sei torce a
-muro, quattro torce colorate decorative, due candele, la torcia in mano...).
+muro, la torcia decorativa della sala dl, due candele, la torcia in mano...).
 Quindi gli slot **non** sono assegnati al momento del caricamento:
 
 - l'**ultimo** slot (`HAND_TORCH_SHADOW_INDEX = NUM_SHADOW_CUBES - 1`) è riservato alla torcia in mano, che non passa da `lights.json`: la sua matrice di mondo non esiste in forma sensata finché `GameLogic()` non comincia a riscriverla ogni frame, quindi non può ricevere un indice fisso a load time né matrici fisse in `computeShadowMatrices()`. `updateHandTorchShadow()` gliele ricalcola ogni frame.
@@ -1434,7 +1434,7 @@ Per ogni modello:
 - `anchor` — il punto, **in spazio locale del modello**, dove sta lo stoppino. Ricavato camminando l'accessor POSITION della mesh (per la candela: il tappo di cera si chiude a Y 0.618..0.638, poi c'è spazio vuoto perché il fianco del lucignolo non è modellato, poi la punta si chiude a Y 0.731..0.734; l'ancora sta a 0.70, in mezzo a quel vuoto).
 - `sizeScale`, `lightScale` — default 1.0.
 - `isCandle` — cambia solo quale toggle del menu debug la governa.
-- `overrides` per istanza, per i pochi casi che la mesh da sola non può determinare: oggi solo le torce colorate della sala dl, che sono il modello `dungeonTorch` che indossa un colore non standard.
+- `overrides` per istanza, per i pochi casi che la mesh da sola non può determinare: un'istanza che vuole colore, dimensione o stato acceso/spento diversi da quelli del suo modello. Oggi è vuoto: conteneva le quattro torce colorate della sala dl (rossa, verde, blu, viola), rimosse perché quattro sorgenti sature sulla stessa parete davano a ogni oggetto della stanza quattro ombre sovrapposte, ciascuna tinta dalle luci che ancora la raggiungono. Al loro posto c'è una singola torcia arancione normale (`dlTorch` in `scene.json`).
 
 La torcia in mano è l'unica esclusa, pur usando `dungeonTorchHeld`: `main.cpp` la
 spawna per id letterale (`handTorch`) prima ancora di leggere il file, perché è
