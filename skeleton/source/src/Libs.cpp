@@ -36,8 +36,8 @@
 #define EXITGLOW_IMPLEMENTATION
 #include "custom/ExitGlow.hpp"
 
-#define LIGHTDEBUG_IMPLEMENTATION
-#include "custom/LightDebug.hpp"
+#define DEBUGLINES_IMPLEMENTATION
+#include "custom/DebugLines.hpp"
 
 #define HUNTCYCLE_IMPLEMENTATION
 #include "custom/HuntCycle.hpp"

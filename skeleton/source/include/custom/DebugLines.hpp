@@ -1,11 +1,21 @@
 // ***** CUSTOM *****
 //
-// Debug line overlay for lights/shadows: colored crosses at each light's
-// position (or an arrow for the sun, which has none), and wireframe boxes
-// at each torch's shadow-cube near/far clip distance. Cheat-menu gated
-// (CheatFlags::showLightGizmos / showShadowFrustums in main.cpp).
+// The app's line renderer for debug overlays. It knows nothing about what the
+// lines MEAN: callers build a list of world-space segments with the Push*
+// helpers below and hand it over, so every overlay drawn as lines shares this
+// one pipeline instead of cloning it. Today that's the light gizmos, the
+// shadow-cube frustums and the collider wireframes, each cheat-menu gated
+// (CheatFlags::showLightGizmos / showShadowFrustums / showColliders in
+// main.cpp), which is also where the geometry and the colors are decided.
 //
-// VERTEX PULLING instead of a vertex buffer -- see LightDebug.vert's header
+// The framework does ship its own collider visualizer (ColliderShow, in
+// modules/Colliders.hpp), deliberately not used here: it wants a RenderPass of
+// its own, caps out at MAX_COLLIDERS 20 (this scene has ~54), and re-records
+// its command buffer whenever a collider moves. This class re-pushes every
+// line from scratch each frame, so nothing has to be told that the world
+// changed.
+//
+// VERTEX PULLING instead of a vertex buffer -- see DebugLines.vert's header
 // for why: BaseProject::createBuffer() (Starter.hpp) is only reachable by
 // its fixed friend list (Model, DescriptorSet, ...), which a new class can't
 // join without editing that immutable file. So every line endpoint lives in
@@ -21,24 +31,30 @@
 // only the mapped CONTENTS change per frame, never the count.
 //
 // Rendered inline in the main scene pass, right after Flame's draw calls
-// (main.cpp), so gizmos/frustums depth-test against castle/dungeon geometry
-// like everything else there -- no separate RenderPass needed.
+// (main.cpp), so the lines depth-test against castle/dungeon geometry like
+// everything else there -- no separate RenderPass needed.
 //
 // Header-only like the rest of custom/, implementation gated behind
-// LIGHTDEBUG_IMPLEMENTATION (defined once in Libs.cpp). Assumes
+// DEBUGLINES_IMPLEMENTATION (defined once in Libs.cpp). Assumes
 // modules/Starter.hpp is already included by whoever includes this one.
 
 #include <algorithm>
 #include <array>
 #include <vector>
 
-struct LightDebugVPUBO {
+struct DebugLinesVPUBO {
 	glm::mat4 vpMat;
 };
 
-class LightDebug {
+class DebugLines {
 	public:
-	static constexpr int MAX_VERTS = 512;
+	// 2048 rather than a few hundred because the collider overlay
+	// (CheatFlags::showColliders) draws every gameplay collider at once: ~54
+	// boxes today at 24 vertices each, and that list grows with every model
+	// scene.json/colliders.json adds. Still well inside the guaranteed
+	// maxUniformBufferRange of 64KB -- each array below is MAX_VERTS vec4s,
+	// i.e. 32KB, so both fit with room to spare.
+	static constexpr int MAX_VERTS = 2048;
 
 	void init(BaseProject *_BP);
 	void pipelinesAndDescriptorSetsInit(RenderPass *_RP);
@@ -77,6 +93,19 @@ class LightDebug {
 	static void PushBox(const glm::vec3 &center, float halfExtent, const glm::vec4 &color,
 						 std::vector<glm::vec4> &pos, std::vector<glm::vec4> &colorOut);
 
+	// Same 12 edges, but from an arbitrary min/max corner pair instead of a
+	// cube's center+half-extent -- what Collider::getExtents() hands back, and
+	// so what the collider overlay draws.
+	static void PushAABB(const glm::vec3 &lo, const glm::vec3 &hi, const glm::vec4 &color,
+						  std::vector<glm::vec4> &pos, std::vector<glm::vec4> &colorOut);
+
+	// A closed 4-point loop (4 segments, 8 vertices), in the given order. Used
+	// for the ramps' inclined quads, which are the one piece of collision
+	// geometry an axis-aligned box genuinely cannot stand in for.
+	static void PushQuad(const glm::vec3 &a, const glm::vec3 &b, const glm::vec3 &c,
+						  const glm::vec3 &d, const glm::vec4 &color,
+						  std::vector<glm::vec4> &pos, std::vector<glm::vec4> &colorOut);
+
 	private:
 	BaseProject *BP = nullptr;
 	RenderPass *RP = nullptr;
@@ -87,19 +116,19 @@ class LightDebug {
 	DescriptorSet DS;
 };
 
-#ifdef LIGHTDEBUG_IMPLEMENTATION
+#ifdef DEBUGLINES_IMPLEMENTATION
 
-void LightDebug::init(BaseProject *_BP) {
+void DebugLines::init(BaseProject *_BP) {
 	BP = _BP;
 
 	// No vertex attributes at all -- see this file's header. gl_VertexIndex
-	// alone drives LightDebug.vert's lookup, so there is nothing per-vertex
+	// alone drives DebugLines.vert's lookup, so there is nothing per-vertex
 	// to bind.
 	VD.init(BP, {}, {});
 
 	DSL.init(BP, {
 				{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT,
-					sizeof(LightDebugVPUBO), 1},
+					sizeof(DebugLinesVPUBO), 1},
 				{1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT,
 					(int)(sizeof(glm::vec4) * MAX_VERTS), 1},
 				{2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT,
@@ -112,7 +141,7 @@ void LightDebug::init(BaseProject *_BP) {
 	BP->DPSZs.uniformBlocksInPool += 3;
 	BP->DPSZs.setsInPool += 1;
 
-	P.init(BP, &VD, "shaders/LightDebug.vert.spv", "shaders/LightDebug.frag.spv", {&DSL});
+	P.init(BP, &VD, "shaders/DebugLines.vert.spv", "shaders/DebugLines.frag.spv", {&DSL});
 	P.setTopology(VK_PRIMITIVE_TOPOLOGY_LINE_LIST);
 	P.setCullMode(VK_CULL_MODE_NONE);	// lines have no facing to cull
 	// LESS_OR_EQUAL, not the default LESS: a gizmo/box edge that lands exactly
@@ -121,25 +150,25 @@ void LightDebug::init(BaseProject *_BP) {
 	P.setCompareOp(VK_COMPARE_OP_LESS_OR_EQUAL);
 }
 
-void LightDebug::pipelinesAndDescriptorSetsInit(RenderPass *_RP) {
+void DebugLines::pipelinesAndDescriptorSetsInit(RenderPass *_RP) {
 	RP = _RP;
 	P.create(RP);
 	DS.init(BP, &DSL, {});
 }
 
-void LightDebug::pipelinesAndDescriptorSetsCleanup() {
+void DebugLines::pipelinesAndDescriptorSetsCleanup() {
 	DS.cleanup();
 	P.cleanup();
 }
 
-void LightDebug::localCleanup() {
+void DebugLines::localCleanup() {
 	DSL.cleanup();
 	P.destroy();
 }
 
-void LightDebug::update(int currentImage, const glm::mat4 &vpMat,
+void DebugLines::update(int currentImage, const glm::mat4 &vpMat,
 						 const std::vector<glm::vec4> &pos, const std::vector<glm::vec4> &color) {
-	LightDebugVPUBO vpUbo{};
+	DebugLinesVPUBO vpUbo{};
 	vpUbo.vpMat = vpMat;
 	DS.map(currentImage, &vpUbo, 0);
 
@@ -161,13 +190,13 @@ void LightDebug::update(int currentImage, const glm::mat4 &vpMat,
 	DS.map(currentImage, colorPad.data(), 2);
 }
 
-void LightDebug::populateCommandBuffer(VkCommandBuffer commandBuffer, int currentImage) {
+void DebugLines::populateCommandBuffer(VkCommandBuffer commandBuffer, int currentImage) {
 	P.bind(commandBuffer);
 	DS.bind(commandBuffer, P, 0, currentImage);
 	vkCmdDraw(commandBuffer, MAX_VERTS, 1, 0, 0);
 }
 
-void LightDebug::PushLine(const glm::vec3 &a, const glm::vec3 &b, const glm::vec4 &color,
+void DebugLines::PushLine(const glm::vec3 &a, const glm::vec3 &b, const glm::vec4 &color,
 						   std::vector<glm::vec4> &pos, std::vector<glm::vec4> &colorOut) {
 	pos.push_back(glm::vec4(a, 1.0f));
 	pos.push_back(glm::vec4(b, 1.0f));
@@ -175,25 +204,30 @@ void LightDebug::PushLine(const glm::vec3 &a, const glm::vec3 &b, const glm::vec
 	colorOut.push_back(color);
 }
 
-void LightDebug::PushCross(const glm::vec3 &center, float halfSize, const glm::vec4 &color,
+void DebugLines::PushCross(const glm::vec3 &center, float halfSize, const glm::vec4 &color,
 							std::vector<glm::vec4> &pos, std::vector<glm::vec4> &colorOut) {
 	PushLine(center - glm::vec3(halfSize, 0, 0), center + glm::vec3(halfSize, 0, 0), color, pos, colorOut);
 	PushLine(center - glm::vec3(0, halfSize, 0), center + glm::vec3(0, halfSize, 0), color, pos, colorOut);
 	PushLine(center - glm::vec3(0, 0, halfSize), center + glm::vec3(0, 0, halfSize), color, pos, colorOut);
 }
 
-void LightDebug::PushBox(const glm::vec3 &center, float halfExtent, const glm::vec4 &color,
+void DebugLines::PushBox(const glm::vec3 &center, float halfExtent, const glm::vec4 &color,
 						  std::vector<glm::vec4> &pos, std::vector<glm::vec4> &colorOut) {
-	// Corner index bits: 4*xBit + 2*yBit + zBit, xBit/yBit/zBit each 0 (-1) or
-	// 1 (+1) -- matches the nested loop's emission order below.
+	PushAABB(center - glm::vec3(halfExtent), center + glm::vec3(halfExtent), color, pos, colorOut);
+}
+
+void DebugLines::PushAABB(const glm::vec3 &lo, const glm::vec3 &hi, const glm::vec4 &color,
+						   std::vector<glm::vec4> &pos, std::vector<glm::vec4> &colorOut) {
+	// Corner index bits: 4*xBit + 2*yBit + zBit, each bit 0 (lo) or 1 (hi) --
+	// matches the nested loop's emission order below.
 	glm::vec3 c[8];
 	int idx = 0;
-	for(int sx = -1; sx <= 1; sx += 2)
-		for(int sy = -1; sy <= 1; sy += 2)
-			for(int sz = -1; sz <= 1; sz += 2)
-				c[idx++] = center + glm::vec3((float)sx, (float)sy, (float)sz) * halfExtent;
+	for(int sx = 0; sx <= 1; sx++)
+		for(int sy = 0; sy <= 1; sy++)
+			for(int sz = 0; sz <= 1; sz++)
+				c[idx++] = glm::vec3(sx ? hi.x : lo.x, sy ? hi.y : lo.y, sz ? hi.z : lo.z);
 
-	// The 12 edges of a cube: two corners connected by an edge differ in
+	// The 12 edges of a box: two corners connected by an edge differ in
 	// exactly one bit. Grouped by which axis differs.
 	static const int edges[12][2] = {
 		{0,1}, {2,3}, {4,5}, {6,7},	// z-edges (bit 0 differs)
@@ -203,6 +237,15 @@ void LightDebug::PushBox(const glm::vec3 &center, float halfExtent, const glm::v
 	for(auto &e : edges) {
 		PushLine(c[e[0]], c[e[1]], color, pos, colorOut);
 	}
+}
+
+void DebugLines::PushQuad(const glm::vec3 &a, const glm::vec3 &b, const glm::vec3 &c,
+						   const glm::vec3 &d, const glm::vec4 &color,
+						   std::vector<glm::vec4> &pos, std::vector<glm::vec4> &colorOut) {
+	PushLine(a, b, color, pos, colorOut);
+	PushLine(b, c, color, pos, colorOut);
+	PushLine(c, d, color, pos, colorOut);
+	PushLine(d, a, color, pos, colorOut);
 }
 
 #endif
