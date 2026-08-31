@@ -98,6 +98,10 @@ layout(binding = 0, set = 0) uniform GlobalUniformBufferObject {
     // The scene's default share of ambient, 0..1. See ambientShare() below.
     // Rides in the padding before lights[], like debugFlags and time.
     float ambientWeight;
+    // Share of a point/spot light's radiance that comes back as INDIRECT
+    // light. See AmbientLight::bounce in SceneLights.hpp and pointBounce()
+    // below. Rides in the same padding.
+    float ambientBounce;
     Light lights[MAX_LIGHTS];
 } gubo;
 
@@ -330,25 +334,43 @@ float shadowFromMap2D(int idx, vec3 pos, float bias) {
 // the same reason the bias is: pushed far enough along the normal the sample
 // point would eventually cross an occluder standing right in front of the
 // surface, which is the leak again by another route.
+//
+// It is also capped in TEXELS, and scaled by sin of the incidence angle
+// rather than tan. Cancelling the whole across-texel depth error would want
+// texelWorld*sin/cos^2, which diverges at grazing incidence -- and the first
+// version, texelWorld*(1 + 2*tan) against a flat 0.12 cap, effectively always
+// paid that cap on a grazing surface: ~12 texels at 5 units from the light,
+// where a normal offset wants one or two. What that buys is not a leak
+// through the occluder (the offset is along the normal, away from it) but
+// PETER-PANNING, the offset's own failure mode: moving the sample point off
+// the floor and towards the light shifts the shadow's edge sideways by
+// offset/tan(the light's elevation over that floor), so with a wall torch a
+// few metres away a barrel's shadow detached from its base by a third of a
+// unit -- a visibly lit strip between the barrel and its own shadow. Scaled
+// by sin the offset stays bounded by its texel budget at every angle, and the
+// residual grazing error is left to the depth bias and the softening band,
+// which is what they are for.
 float shadowFromCube(int idx, vec3 pos, vec3 N, vec3 lightPos, float NdotL) {
     // Depth slack: a couple of texels' worth, floored so a surface right next
     // to the light still gets some, capped far below the door-leaf gap.
     const float CUBE_BIAS_MIN = 0.02;
     const float CUBE_BIAS_MAX = 0.06;
-    const float CUBE_SOFT_MIN = 0.08;
-    const float NORMAL_OFFSET_MAX = 0.12;
+    const float CUBE_SOFT_MIN = 0.05;
+    const float NORMAL_OFFSET_TEXELS = 2.0;
+    const float NORMAL_OFFSET_MAX = 0.04;
 
     float rawDist = length(pos - lightPos);
     float texelWorld = 2.0 * rawDist / float(SHADOW_CUBE_RES);
 
-    // tan of the incidence angle, floored before the division: it goes to
-    // infinity at exactly 90 degrees, and a fragment that close to edge-on
-    // receives almost nothing from this light anyway (the BRDF's own NdotL
-    // factor), so there is nothing to protect there.
+    // sin of the incidence angle. cosI is still floored -- a fragment that
+    // close to edge-on receives almost nothing from this light anyway (the
+    // BRDF's own NdotL factor), so there is nothing to protect there, and the
+    // floor keeps sinI from reaching 1 and spending the full budget on a
+    // surface that cannot show the acne it would be paying for.
     float cosI = max(NdotL, 0.15);
-    float slope = sqrt(1.0 - cosI * cosI) / cosI;
+    float sinI = sqrt(1.0 - cosI * cosI);
 
-    float offset = min(texelWorld * (1.0 + 2.0 * slope), NORMAL_OFFSET_MAX);
+    float offset = min(texelWorld * NORMAL_OFFSET_TEXELS * sinI, NORMAL_OFFSET_MAX);
     vec3 samplePos = pos + N * offset;
 
     vec3 toFrag = samplePos - lightPos;
@@ -790,6 +812,20 @@ void main() {
     const float LIGHT_ATTEN_EPS = 1e-3;
 
     vec3 Lo = vec3(0.0);
+    // The point/spot lights' INDIRECT contribution, accumulated alongside
+    // their direct one. Spent below, out of the ambient share rather than
+    // added to the frame -- see the blend.
+    //
+    // In this loop rather than a pointBounce() of its own purely so it can
+    // reuse `radiance` and `L`: those two are the whole cost of the term, and
+    // computing them twice would double the length()/pow() work in the
+    // hottest loop in the shader to produce identical numbers. What it does
+    // NOT reuse is the expensive half -- no BRDF, no shadowFactor(), no
+    // dependent texture fetch. Bounced light is what fills a shadow rather
+    // than something a shadow can block (see the note above), and a wall
+    // being unable to see the flame directly is exactly when this term is
+    // the only light it gets.
+    vec3 bounce = vec3(0.0);
     for(int i = 0; i < gubo.lightCount; i++) {
         vec3 radiance = lightRadiance(gubo.lights[i], fragPos);
 
@@ -810,6 +846,25 @@ void main() {
         Lo += radiance
             * BRDF(N, L, V, mD, mSG, roughG, ubo.F0, k)
             * shadowFactor(gubo.lights[i].shadowIndex, gubo.lights[i].type, fragPos, N, gubo.lights[i].pos, NdotL);
+
+        // Wrap-around diffuse, NOT the clamped cosine the BRDF just used:
+        // (dot + 1) / 2 instead of max(dot, 0). Light that reaches a surface
+        // after bouncing arrives from most of the hemisphere rather than from
+        // the flame's own direction, so it has no terminator -- a face turned
+        // away from a torch is dimmer than one facing it, not black. Exactly
+        // the remap hemisphereColor() does on the ambient axis, applied to
+        // the light's direction instead of world up.
+        //
+        // Direct lights are excluded, and that is deliberate rather than an
+        // optimisation: the sun's own indirect contribution is what the
+        // hemispheric term already IS (sky above, ground bounce below, E07
+        // s.47-54), so feeding it in here would double it. This term exists
+        // for the sources the hemisphere cannot represent -- the ones with a
+        // position, that light one end of a corridor and not the other. It is
+        // therefore entirely independent of whether the sun exists at all.
+        if(gubo.lights[i].type != LIGHT_DIRECT) {
+            bounce += radiance * (dot(N, L) * 0.5 + 0.5);
+        }
     }
 
     // E17's blend (LambertBlinnTexture.frag:51-52), not a sum: ambient is a
@@ -831,9 +886,27 @@ void main() {
     // the room instead of on a diffuse bounce -- see metalAmbient(). Same
     // blend, same weight: what changes is only what the indirect light does
     // once it lands.
+    // Indirect light now has two sources, and they answer different questions.
+    // hemisphericAmbient() is "what arrives from the sky and from the ground",
+    // which is the right model outdoors and vacuous in a sealed corridor. The
+    // bounce is "what arrives from the torches after hitting a wall", which is
+    // the only indirect light there actually is down there. Summed, because
+    // they are genuinely two different sources -- but summed INSIDE the
+    // ambient bucket, so the pair still cannot take more than `aw` of the
+    // frame and the E17 blend's guarantee below is untouched.
+    //
+    // mD for the same reason hemisphericAmbient() applies it: this is indirect
+    // light landing on a diffuse surface, and it gets reflected by the base
+    // colour exactly like direct light does.
+    //
+    // Metals take the hemisphere alone. Their indirect term is a REFLECTION,
+    // sampled along the reflected view direction (metalAmbient()); a wrap
+    // diffuse term has no direction to reflect and adding it would just paint
+    // a diffuse lobe back onto the one surface type defined by not having one.
+    // The chains and the padlock hang in torchlight and get it directly.
     float aw = ambientShare();
     vec3 ambient = metal ? metalAmbient(N, V, mSG, roughG, ubo.F0)
-                         : hemisphericAmbient(N, mD);
+                         : hemisphericAmbient(N, mD) + bounce * gubo.ambientBounce * mD;
     vec3 color = Lo * (1.0 - aw) + ambient * aw;
 
     if(heatmap) {

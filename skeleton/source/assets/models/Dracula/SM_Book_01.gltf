@@ -1,0 +1,108 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "convert_assets.py"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "SM_Book_01",
+   "mesh": 0
+  }
+ ],
+ "meshes": [
+  {
+   "name": "SM_Book_01",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "mode": 4
+    }
+   ]
+  }
+ ],
+ "buffers": [
+  {
+   "uri": "SM_Book_01.bin",
+   "byteLength": 3496
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 1104,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 1104,
+   "byteLength": 1104,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 2208,
+   "byteLength": 736,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 2944,
+   "byteLength": 552,
+   "target": 34963
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 92,
+   "type": "VEC3",
+   "min": [
+    -0.015588457696139812,
+    0.0,
+    -0.17000000178813934
+   ],
+   "max": [
+    0.23000000417232513,
+    0.07000000029802322,
+    0.17000000178813934
+   ]
+  },
+  {
+   "bufferView": 1,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 92,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 92,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 3,
+   "byteOffset": 0,
+   "componentType": 5125,
+   "count": 138,
+   "type": "SCALAR"
+  }
+ ]
+}
