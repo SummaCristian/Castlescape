@@ -334,25 +334,43 @@ float shadowFromMap2D(int idx, vec3 pos, float bias) {
 // the same reason the bias is: pushed far enough along the normal the sample
 // point would eventually cross an occluder standing right in front of the
 // surface, which is the leak again by another route.
+//
+// It is also capped in TEXELS, and scaled by sin of the incidence angle
+// rather than tan. Cancelling the whole across-texel depth error would want
+// texelWorld*sin/cos^2, which diverges at grazing incidence -- and the first
+// version, texelWorld*(1 + 2*tan) against a flat 0.12 cap, effectively always
+// paid that cap on a grazing surface: ~12 texels at 5 units from the light,
+// where a normal offset wants one or two. What that buys is not a leak
+// through the occluder (the offset is along the normal, away from it) but
+// PETER-PANNING, the offset's own failure mode: moving the sample point off
+// the floor and towards the light shifts the shadow's edge sideways by
+// offset/tan(the light's elevation over that floor), so with a wall torch a
+// few metres away a barrel's shadow detached from its base by a third of a
+// unit -- a visibly lit strip between the barrel and its own shadow. Scaled
+// by sin the offset stays bounded by its texel budget at every angle, and the
+// residual grazing error is left to the depth bias and the softening band,
+// which is what they are for.
 float shadowFromCube(int idx, vec3 pos, vec3 N, vec3 lightPos, float NdotL) {
     // Depth slack: a couple of texels' worth, floored so a surface right next
     // to the light still gets some, capped far below the door-leaf gap.
     const float CUBE_BIAS_MIN = 0.02;
     const float CUBE_BIAS_MAX = 0.06;
-    const float CUBE_SOFT_MIN = 0.08;
-    const float NORMAL_OFFSET_MAX = 0.12;
+    const float CUBE_SOFT_MIN = 0.05;
+    const float NORMAL_OFFSET_TEXELS = 2.0;
+    const float NORMAL_OFFSET_MAX = 0.04;
 
     float rawDist = length(pos - lightPos);
     float texelWorld = 2.0 * rawDist / float(SHADOW_CUBE_RES);
 
-    // tan of the incidence angle, floored before the division: it goes to
-    // infinity at exactly 90 degrees, and a fragment that close to edge-on
-    // receives almost nothing from this light anyway (the BRDF's own NdotL
-    // factor), so there is nothing to protect there.
+    // sin of the incidence angle. cosI is still floored -- a fragment that
+    // close to edge-on receives almost nothing from this light anyway (the
+    // BRDF's own NdotL factor), so there is nothing to protect there, and the
+    // floor keeps sinI from reaching 1 and spending the full budget on a
+    // surface that cannot show the acne it would be paying for.
     float cosI = max(NdotL, 0.15);
-    float slope = sqrt(1.0 - cosI * cosI) / cosI;
+    float sinI = sqrt(1.0 - cosI * cosI);
 
-    float offset = min(texelWorld * (1.0 + 2.0 * slope), NORMAL_OFFSET_MAX);
+    float offset = min(texelWorld * NORMAL_OFFSET_TEXELS * sinI, NORMAL_OFFSET_MAX);
     vec3 samplePos = pos + N * offset;
 
     vec3 toFrag = samplePos - lightPos;
