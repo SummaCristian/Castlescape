@@ -20,6 +20,22 @@
 // header for why: a push constant is frozen into the command buffer at
 // record time, which happens once and is then reused every frame, so it
 // can't track a torch (the held one) that keeps moving after that.
+//
+// The distance stored is the raw one, with no bias of any kind folded into
+// it, and that is deliberate.
+//
+// A slope-scaled bias used to be added here, on the theory that shadow acne
+// belongs to the surface being sampled and should be paid for by it rather
+// than by whatever it shades. The theory is right and the practice was not:
+// a bias baked into the map is invisible to everything downstream, including
+// LIGHT_DEBUG_SHADOW_GAP, which computes its gap from the stored value and
+// so reported every fragment that bias forgave as geometrically unoccluded.
+// It hid the very artifact it was contributing to. Whatever a shadow map
+// stores should be a measurement; slack belongs where it can still be seen.
+//
+// Acne is dealt with upstream of all of it now, by culling FRONT faces in
+// this pass so a lit surface is never in the map to compare against itself.
+// See PShadowCube.setCullMode() in main.cpp.
 
 #version 450
 #extension GL_ARB_separate_shader_objects : enable

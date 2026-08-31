@@ -179,43 +179,55 @@ float sampleShadowMap2D(int idx, vec2 uv) {
     return texture(shadowMap2D_1, uv).r;
 }
 
-// Same idea for the cube maps, sampled by direction rather than by UV.
-// NUM_SHADOW_CUBES is 20 (LightConstants.glsl: 19 dynamically-assigned slots
+// Same idea for the cube maps, sampled by direction rather than by UV, with
+// one difference that matters: this returns FOUR taps, not one.
+//
+// The PCF this feeds was tried once before as four separate one-tap calls and
+// reverted as unaffordable, correctly -- the chain below is a linear walk of
+// up to 32 comparisons to pick a binding, so calling it four times walks it
+// four times, and it is the walk, not the fetch, that costs. Taking all four
+// taps INSIDE the branch that already resolved pays for the walk once and
+// adds three texture reads to it, on texels adjacent to the first, which is
+// the cheapest thing a sampler can be asked to do.
+//
+// NUM_SHADOW_CUBES is 32 (LightConstants.glsl: 31 dynamically-assigned slots
 // shared by every wall/dl torch and candle, plus the held torch's own fixed
 // last one); a case has to be added or removed here by hand if that changes.
-float sampleShadowCube(int idx, vec3 dir) {
-    if(idx == 0) return texture(shadowCube0, dir).r;
-    if(idx == 1) return texture(shadowCube1, dir).r;
-    if(idx == 2) return texture(shadowCube2, dir).r;
-    if(idx == 3) return texture(shadowCube3, dir).r;
-    if(idx == 4) return texture(shadowCube4, dir).r;
-    if(idx == 5) return texture(shadowCube5, dir).r;
-    if(idx == 6) return texture(shadowCube6, dir).r;
-    if(idx == 7) return texture(shadowCube7, dir).r;
-    if(idx == 8) return texture(shadowCube8, dir).r;
-    if(idx == 9) return texture(shadowCube9, dir).r;
-    if(idx == 10) return texture(shadowCube10, dir).r;
-    if(idx == 11) return texture(shadowCube11, dir).r;
-    if(idx == 12) return texture(shadowCube12, dir).r;
-    if(idx == 13) return texture(shadowCube13, dir).r;
-    if(idx == 14) return texture(shadowCube14, dir).r;
-    if(idx == 15) return texture(shadowCube15, dir).r;
-    if(idx == 16) return texture(shadowCube16, dir).r;
-    if(idx == 17) return texture(shadowCube17, dir).r;
-    if(idx == 18) return texture(shadowCube18, dir).r;
-    if(idx == 19) return texture(shadowCube19, dir).r;
-    if(idx == 20) return texture(shadowCube20, dir).r;
-    if(idx == 21) return texture(shadowCube21, dir).r;
-    if(idx == 22) return texture(shadowCube22, dir).r;
-    if(idx == 23) return texture(shadowCube23, dir).r;
-    if(idx == 24) return texture(shadowCube24, dir).r;
-    if(idx == 25) return texture(shadowCube25, dir).r;
-    if(idx == 26) return texture(shadowCube26, dir).r;
-    if(idx == 27) return texture(shadowCube27, dir).r;
-    if(idx == 28) return texture(shadowCube28, dir).r;
-    if(idx == 29) return texture(shadowCube29, dir).r;
-    if(idx == 30) return texture(shadowCube30, dir).r;
-    return texture(shadowCube31, dir).r;
+#define CUBE_TAP4(s) vec4(texture(s, d0).r, texture(s, d1).r, \
+                          texture(s, d2).r, texture(s, d3).r)
+vec4 sampleShadowCube4(int idx, vec3 d0, vec3 d1, vec3 d2, vec3 d3) {
+    if(idx == 0) return CUBE_TAP4(shadowCube0);
+    if(idx == 1) return CUBE_TAP4(shadowCube1);
+    if(idx == 2) return CUBE_TAP4(shadowCube2);
+    if(idx == 3) return CUBE_TAP4(shadowCube3);
+    if(idx == 4) return CUBE_TAP4(shadowCube4);
+    if(idx == 5) return CUBE_TAP4(shadowCube5);
+    if(idx == 6) return CUBE_TAP4(shadowCube6);
+    if(idx == 7) return CUBE_TAP4(shadowCube7);
+    if(idx == 8) return CUBE_TAP4(shadowCube8);
+    if(idx == 9) return CUBE_TAP4(shadowCube9);
+    if(idx == 10) return CUBE_TAP4(shadowCube10);
+    if(idx == 11) return CUBE_TAP4(shadowCube11);
+    if(idx == 12) return CUBE_TAP4(shadowCube12);
+    if(idx == 13) return CUBE_TAP4(shadowCube13);
+    if(idx == 14) return CUBE_TAP4(shadowCube14);
+    if(idx == 15) return CUBE_TAP4(shadowCube15);
+    if(idx == 16) return CUBE_TAP4(shadowCube16);
+    if(idx == 17) return CUBE_TAP4(shadowCube17);
+    if(idx == 18) return CUBE_TAP4(shadowCube18);
+    if(idx == 19) return CUBE_TAP4(shadowCube19);
+    if(idx == 20) return CUBE_TAP4(shadowCube20);
+    if(idx == 21) return CUBE_TAP4(shadowCube21);
+    if(idx == 22) return CUBE_TAP4(shadowCube22);
+    if(idx == 23) return CUBE_TAP4(shadowCube23);
+    if(idx == 24) return CUBE_TAP4(shadowCube24);
+    if(idx == 25) return CUBE_TAP4(shadowCube25);
+    if(idx == 26) return CUBE_TAP4(shadowCube26);
+    if(idx == 27) return CUBE_TAP4(shadowCube27);
+    if(idx == 28) return CUBE_TAP4(shadowCube28);
+    if(idx == 29) return CUBE_TAP4(shadowCube29);
+    if(idx == 30) return CUBE_TAP4(shadowCube30);
+    return CUBE_TAP4(shadowCube31);
 }
 
 // The sun/spot path: unchanged from the single-perspective-map technique,
@@ -262,19 +274,34 @@ float shadowFromMap2D(int idx, vec3 pos, float bias) {
 // fallback to a second slot.
 //
 // A plain (dist - bias > closestDist) ? 0.0 : 1.0 comparison is a binary
-// lit/unlit test, which reads as a razor-sharp edge on a wall. Multi-sample
-// PCF (jittering the lookup direction and averaging several taps) was tried
-// here and reverted: with only a few taps -- more wasn't affordable, since
-// sampleShadowCube() below is a linear branch chain picking one of
-// NUM_SHADOW_CUBES samplerCube bindings rather than a plain texture() call,
-// so every tap repeats that whole chain -- the samples land far enough apart
-// to show up as separate overlapping blobs instead of blending into one soft
-// edge.
+// lit/unlit test, which reads as a razor-sharp edge on a wall. The softening
+// is four-tap PCF: sampleShadowCube4() reads the map at four directions
+// around the lookup and this averages the four verdicts.
 //
-// This does the softening with the SAME single sample instead: rather than a
-// hard step, it ramps from fully lit down to fully shadowed across a small
-// band of world-space distance, starting exactly where the hard test's
-// threshold used to sit.
+// Two earlier attempts at that softness are worth keeping straight, because
+// the shape of this one is a reaction to both.
+//
+// PCF was tried first as four separate one-tap calls and reverted as
+// unaffordable -- correctly, for the reason sampleShadowCube4()'s header
+// gives, and the fix was to restructure the fetch rather than to give up on
+// the technique. It was also reverted as ugly, the taps reading as separate
+// overlapping blobs; that was the kernel, jittered far enough apart to alias
+// with four samples. The kernel here is a few texels wide and rotated.
+//
+// What replaced it was softening from the SAME single sample: ramp the lit
+// factor down across a band of occluderGap instead of stepping it. That is
+// the version this one replaces, and its failure is worth stating because it
+// is not obvious. occluderGap measures how far INTO a shadow a fragment is,
+// not how far the occluder is from it, and the two come apart badly wherever
+// a shape overhangs its own base. Around the foot of a barrel -- widest at
+// its waist, so the floor by its base sits under the bulge -- the occluder
+// stays barely in front of the floor for some way out, the gap crawls, and a
+// band 0.03 wide in gap spread over roughly 0.1 of floor. The band could only
+// ever spill to the LIT side of the silhouette, so what it produced there was
+// a bright strip between the barrel and its own shadow, and every value that
+// made the strip acceptable made the shadow edge hard. A kernel has no such
+// bind: its taps straddle the silhouette, so the transition is centred on the
+// true edge and widening it costs no contact.
 //
 // occluderGap is how much closer the stored occluder is than this fragment:
 // ~0 (or negative, floating-point noise aside) when the map's closest hit
@@ -323,41 +350,83 @@ float shadowFromMap2D(int idx, vec3 pos, float bias) {
 // version held, at the blue and purple torches' 10 and 12 it hit its cap and
 // let them through, which is exactly the two colours that survived.
 //
-// NORMAL OFFSET instead, which spends the same quantity in a direction where
-// it costs nothing: the lookup is moved along the surface's own normal,
-// off the surface and towards the light side, so it lands in a texel whose
-// recorded distance actually belongs to this surface rather than to the
-// stretch of it half a texel away. The depth threshold stays small and
-// distance-independent, so a door thickness always beats it.
+// The version after that spent it on a NORMAL OFFSET instead -- move the
+// lookup along the surface's own normal, off the surface and towards the
+// light, so it lands in a texel whose recorded distance belongs to this
+// surface rather than to the stretch of it half a texel away -- sized
+// texelWorld*(1 + 2*tan) against a flat 0.12 cap. That does not leak through
+// the occluder, but it buys the offset's own failure mode instead:
+// PETER-PANNING. tan diverges at grazing incidence, so a floor lit obliquely
+// by a wall torch always paid the cap, ~12 texels at 5 units where a normal
+// offset wants one or two; lifting the sample point 0.12 off the floor shifts
+// the shadow's edge sideways by 0.12/tan(the torch's elevation over that
+// floor), and a barrel's shadow detached from its base by a third of a unit.
 //
-// The offset is capped well under any real occluder gap in this scene, for
-// the same reason the bias is: pushed far enough along the normal the sample
-// point would eventually cross an occluder standing right in front of the
-// surface, which is the leak again by another route.
+// BOTH of those are the same misattribution, and the fix is neither: the
+// across-texel error belongs to the surface being SAMPLED, so it is charged
+// there, baked into the stored distance by ShadowCube.frag using that
+// surface's own tilt. See its header. What is left here is a token constant
+// for floating-point noise -- the cube sampler is NEAREST, so there is no
+// filtering error on top -- and one texel of normal offset, sin-scaled so it
+// stays inside that budget at every angle, against the cube's own
+// quantisation of the receiver's position. At 5 units from a torch the two
+// together come to under two centimetres of world space, which is where the
+// lit strip between a barrel and its shadow went.
+// LIGHT_DEBUG_SHADOW_GAP's working state, written by shadowFromCube() and
+// read once at the end of main(). Globals rather than out-parameters because
+// the call sits inside the light loop's expression and there is exactly one
+// invocation's worth of them.
 //
-// It is also capped in TEXELS, and scaled by sin of the incidence angle
-// rather than tan. Cancelling the whole across-texel depth error would want
-// texelWorld*sin/cos^2, which diverges at grazing incidence -- and the first
-// version, texelWorld*(1 + 2*tan) against a flat 0.12 cap, effectively always
-// paid that cap on a grazing surface: ~12 texels at 5 units from the light,
-// where a normal offset wants one or two. What that buys is not a leak
-// through the occluder (the offset is along the normal, away from it) but
-// PETER-PANNING, the offset's own failure mode: moving the sample point off
-// the floor and towards the light shifts the shadow's edge sideways by
-// offset/tan(the light's elevation over that floor), so with a wall torch a
-// few metres away a barrel's shadow detached from its base by a third of a
-// unit -- a visibly lit strip between the barrel and its own shadow. Scaled
-// by sin the offset stays bounded by its texel budget at every angle, and the
-// residual grazing error is left to the depth bias and the softening band,
-// which is what they are for.
+// A shadow belongs to a specific light, so this reports ONE of them: the one
+// whose radiance dominates this fragment, picked in the light loop below.
+//
+// Two earlier choices were both wrong in the same way -- they picked the
+// light by something other than which one is actually lighting the fragment.
+// Keeping the smallest gap, i.e. the light most willing to call it lit,
+// paints the frame green: with several torches burning almost every fragment
+// has at least one flame with a clear line to it. Pinning it to the held
+// torch instead answers honestly but about the wrong light -- a floor
+// shadowed by a WALL torch is genuinely unoccluded as far as the torch in
+// your hand is concerned, so that reads green too, and says nothing about
+// the shadow being looked at.
+//
+// dbgLast* is scratch: shadowFromCube() fills it for whichever light it was
+// just called for, and the loop promotes it to dbg* if that light is the
+// brightest seen so far.
+bool  dbgLastValid = false;
+float dbgLastGap = 0.0;
+float dbgLastBias = 0.0;
+float dbgLastSoft = 0.0;
+
+bool  dbgCube = false;
+float dbgGap = 0.0;
+float dbgBias = 0.0;
+float dbgSoft = 0.0;
+float dbgBestLum = -1.0;
+
 float shadowFromCube(int idx, vec3 pos, vec3 N, vec3 lightPos, float NdotL) {
-    // Depth slack: a couple of texels' worth, floored so a surface right next
-    // to the light still gets some, capped far below the door-leaf gap.
-    const float CUBE_BIAS_MIN = 0.02;
-    const float CUBE_BIAS_MAX = 0.06;
-    const float CUBE_SOFT_MIN = 0.05;
-    const float NORMAL_OFFSET_TEXELS = 2.0;
-    const float NORMAL_OFFSET_MAX = 0.04;
+    // Depth slack: floating-point noise only. There is no acne left for it to
+    // cover -- the capture culls front faces, so this surface is not in the
+    // map to be compared against itself (see PShadowCube.setCullMode() in
+    // main.cpp). What remains is the difference between a distance computed
+    // here and the same distance computed in ShadowCube.frag from an
+    // interpolated position, which is a few ULPs, not millimetres.
+    const float CUBE_BIAS_MIN = 0.0015;
+    const float CUBE_BIAS_MAX = 0.004;
+    const float CUBE_SOFT_MIN = 0.002;
+    // No normal offset. It existed to land the lookup in a texel whose record
+    // belongs to this surface rather than to the stretch of it half a texel
+    // away -- a concern that only arises when the surface is IN the map, which
+    // it no longer is. It cost a lateral shift of the shadow edge for that,
+    // which is the artifact this whole path was chasing.
+    const float NORMAL_OFFSET_TEXELS = 0.0;
+    const float NORMAL_OFFSET_MAX = 0.0;
+    // Radius of the PCF kernel, in texels of the cube face. This is the only
+    // thing that sets how wide a shadow's edge reads now, and it is the one
+    // place where widening it does NOT eat the contact: the taps sit around
+    // the lookup direction, so the transition straddles the true silhouette
+    // instead of spilling to the lit side of it.
+    const float PCF_KERNEL_TEXELS = 3.0;
 
     float rawDist = length(pos - lightPos);
     float texelWorld = 2.0 * rawDist / float(SHADOW_CUBE_RES);
@@ -375,15 +444,50 @@ float shadowFromCube(int idx, vec3 pos, vec3 N, vec3 lightPos, float NdotL) {
 
     vec3 toFrag = samplePos - lightPos;
     float dist = length(toFrag);
-    float closestDist = sampleShadowCube(idx, toFrag);
 
-    float bias = clamp(2.0 * texelWorld, CUBE_BIAS_MIN, CUBE_BIAS_MAX);
-    // The softening band (see the header above) scales with the bias for the
-    // same reason the bias scales: it absorbs the same uncertainty.
-    float softEdge = max(2.0 * bias, CUBE_SOFT_MIN);
+    float bias = clamp(0.5 * texelWorld, CUBE_BIAS_MIN, CUBE_BIAS_MAX);
+    // Per-tap band, not the shadow's edge softness -- that is the kernel's job
+    // now. This one only keeps a single tap from being a hard step, so the
+    // four of them average into something continuous instead of five levels.
+    float softEdge = CUBE_SOFT_MIN;
 
-    float occluderGap = dist - closestDist;
-    return 1.0 - clamp((occluderGap - bias) / softEdge, 0.0, 1.0);
+    // The four tap directions: the lookup direction pushed sideways in the
+    // plane perpendicular to it. Offsetting by `r` world units at right angles
+    // to a direction of length dist turns it by r/dist, and one texel subtends
+    // texelWorld/dist, so an offset measured in texelWorld is an offset
+    // measured in texels of the face being read -- the same currency the bias
+    // is in, and independent of how far the light is.
+    vec3 axis = abs(toFrag.y) < 0.99 * dist ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 T = normalize(cross(toFrag, axis));
+    vec3 B = normalize(cross(toFrag, T));
+    float r = PCF_KERNEL_TEXELS * texelWorld;
+
+    // Rotated grid rather than a 2x2 box: four points on a square grid share
+    // two x and two y coordinates, so they straddle a straight silhouette in
+    // only three distinct ways and the edge steps in thirds. Rotated, all four
+    // cross it at different offsets.
+    vec3 d0 = toFrag + r * ( 0.33 * T + 1.00 * B);
+    vec3 d1 = toFrag + r * ( 1.00 * T - 0.33 * B);
+    vec3 d2 = toFrag + r * (-0.33 * T - 1.00 * B);
+    vec3 d3 = toFrag + r * (-1.00 * T + 0.33 * B);
+
+    // One `dist` for all four. Each tap's own direction is longer than toFrag
+    // by r^2/(2*dist) -- at three texels that is under a micrometre of world
+    // space, far below the bias, and using it would only mean four different
+    // thresholds for what is meant to be one test sampled four times.
+    vec4 gaps = vec4(dist) - sampleShadowCube4(idx, d0, d1, d2, d3);
+    vec4 lit = vec4(1.0) - clamp((gaps - vec4(bias)) / softEdge, 0.0, 1.0);
+
+    // Scratch for the debug view, for whichever light this call was for; the
+    // light loop decides which one survives. The tap reported is the one most
+    // willing to call this lit, which is what the whole answer would have
+    // been before the kernel existed.
+    dbgLastValid = true;
+    dbgLastGap = min(min(gaps.x, gaps.y), min(gaps.z, gaps.w));
+    dbgLastBias = bias;
+    dbgLastSoft = softEdge;
+
+    return dot(lit, vec4(0.25));
 }
 
 // 1.0: fully lit. 0.0: this light's shadow map says something else is closer
@@ -795,11 +899,13 @@ void main() {
 
     // Rendering equation: sum over the sources of radiance times BRDF, each
     // term zeroed by shadowFactor() wherever that one light doesn't reach
-    // this point. Ambient below is untouched by it on purpose: shadow mapping
-    // only ever blocks a light's DIRECT contribution, never the indirect
-    // bounce hemisphericAmbient() stands in for -- otherwise a shadow would
-    // read as a hole into pure black instead of the dim, indirectly-lit area
-    // a real one is.
+    // this point. hemisphericAmbient() below is untouched by it on purpose:
+    // shadow mapping only ever blocks a light's DIRECT contribution, never
+    // the sky-and-ground indirect that term stands in for -- otherwise a
+    // shadow would read as a hole into pure black instead of the dim,
+    // indirectly-lit area a real one is. That exemption is the hemisphere's
+    // alone. The per-light bounce accumulated in the loop below is shadowed
+    // like everything else there, for the reason given at its own site.
     // Below this, a light's radiance at this fragment is darker than the
     // final image can show even before the BRDF and shadow map get
     // involved -- well under 1 LSB of an 8-bit display once exposure and
@@ -817,14 +923,13 @@ void main() {
     // added to the frame -- see the blend.
     //
     // In this loop rather than a pointBounce() of its own purely so it can
-    // reuse `radiance` and `L`: those two are the whole cost of the term, and
-    // computing them twice would double the length()/pow() work in the
-    // hottest loop in the shader to produce identical numbers. What it does
-    // NOT reuse is the expensive half -- no BRDF, no shadowFactor(), no
-    // dependent texture fetch. Bounced light is what fills a shadow rather
-    // than something a shadow can block (see the note above), and a wall
-    // being unable to see the flame directly is exactly when this term is
-    // the only light it gets.
+    // reuse `radiance`, `L` and the light's visibility: those are the whole
+    // cost of the term, and computing them twice would double the
+    // length()/pow() work and a second shadow-map fetch in the hottest loop
+    // in the shader to produce identical numbers. It still skips the BRDF,
+    // which is the other expensive half and the one it genuinely does not
+    // want -- bounced light arrives from most of the hemisphere, so it has no
+    // lobe and no terminator.
     vec3 bounce = vec3(0.0);
     for(int i = 0; i < gubo.lightCount; i++) {
         vec3 radiance = lightRadiance(gubo.lights[i], fragPos);
@@ -843,9 +948,22 @@ void main() {
         // Same clamped dot the BRDF uses, computed once here because
         // shadowFactor scales its depth bias by it too.
         float NdotL = clamp(dot(N, L), 0.0, 1.0);
+        dbgLastValid = false;
+        float vis = shadowFactor(gubo.lights[i].shadowIndex, gubo.lights[i].type, fragPos, N, gubo.lights[i].pos, NdotL);
+        // See the dbg* globals: keep the cube-shadowed light that contributes
+        // most radiance here, which is the one whose shadow this fragment is
+        // in or out of in any way worth looking at.
+        float dbgLum = dot(radiance, vec3(0.2126, 0.7152, 0.0722));
+        if(dbgLastValid && dbgLum > dbgBestLum) {
+            dbgBestLum = dbgLum;
+            dbgCube = true;
+            dbgGap = dbgLastGap;
+            dbgBias = dbgLastBias;
+            dbgSoft = dbgLastSoft;
+        }
         Lo += radiance
             * BRDF(N, L, V, mD, mSG, roughG, ubo.F0, k)
-            * shadowFactor(gubo.lights[i].shadowIndex, gubo.lights[i].type, fragPos, N, gubo.lights[i].pos, NdotL);
+            * vis;
 
         // Wrap-around diffuse, NOT the clamped cosine the BRDF just used:
         // (dot + 1) / 2 instead of max(dot, 0). Light that reaches a surface
@@ -862,8 +980,24 @@ void main() {
         // for the sources the hemisphere cannot represent -- the ones with a
         // position, that light one end of a corridor and not the other. It is
         // therefore entirely independent of whether the sun exists at all.
+        //
+        // `vis` applies here too, and originally it did not: bounced light was
+        // held to be what FILLS a shadow rather than something a shadow can
+        // block, which is true of the light itself and false of the number
+        // used to stand in for it. Its magnitude is `radiance`, the direct,
+        // unoccluded, inverse-square arrival from the flame -- so a shadow
+        // cast by anything near a torch got filled most brightly at the end
+        // nearest the torch, fading along its own length. That is the glow at
+        // the start of a barrel's shadow, and no amount of shadow-map work
+        // could reach it: the term was never consulting the shadow map.
+        //
+        // Shadowing it does not put the scene back to a black shadow, which
+        // is what the original reasoning was protecting against.
+        // hemisphericAmbient() below is still unshadowed and still the floor
+        // under every fragment; what goes away is only the part that was
+        // tracking distance to a flame the fragment cannot see.
         if(gubo.lights[i].type != LIGHT_DIRECT) {
-            bounce += radiance * (dot(N, L) * 0.5 + 0.5);
+            bounce += radiance * (dot(N, L) * 0.5 + 0.5) * vis;
         }
     }
 
@@ -912,6 +1046,20 @@ void main() {
     if(heatmap) {
         float intensity = dot(color, vec3(0.2126, 0.7152, 0.0722));
         outColor = vec4(heatmapRamp(intensity), 1.0);
+        return;
+    }
+
+    // See LIGHT_DEBUG_SHADOW_GAP. Sits after the light loop because that is
+    // what fills dbgGap, and before the glow/tone-map tail because none of
+    // that means anything in a false-colour view.
+    if(debugOn(LIGHT_DEBUG_SHADOW_GAP)) {
+        vec3 dbg;
+        if(!dbgCube)                       dbg = vec3(0.25);
+        else if(dbgGap <= 0.0)             dbg = vec3(0.0, 1.0, 0.0);
+        else if(dbgGap <= dbgBias)         dbg = vec3(1.0, 0.0, 0.0);
+        else if(dbgGap < dbgBias + dbgSoft) dbg = vec3(1.0, 1.0, 0.0);
+        else                               dbg = vec3(0.0, 0.0, 0.4);
+        outColor = vec4(dbg, 1.0);
         return;
     }
 

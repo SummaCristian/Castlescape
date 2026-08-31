@@ -678,6 +678,14 @@ class Skeleton26ReplaceName : public BaseProject {
 		// from "this artifact is in the geometry", which is otherwise hard to
 		// tell apart by eye since both show up as flicker on a wall.
 		bool shadowsEnabled = true;
+		// False-colour view of WHY a fragment lit by a torch is lit: green
+		// where no cube shadow map reports an occluder in front of it at all,
+		// red/yellow where one does but the depth bias or the softening band
+		// forgave it. Splits a shadow eaten by sampling slack from one that
+		// was never cast -- which shadowsEnabled above cannot do, since it
+		// answers only whether shadow sampling is involved, not which of its
+		// terms is responsible. See LIGHT_DEBUG_SHADOW_GAP.
+		bool showShadowGap = false;
 
 		// Per-flame-TYPE shadow casting, read by updateDynamicShadowSlots()
 		// and the light-append loop in updateUniformBuffer(). Distinct from
@@ -2631,6 +2639,35 @@ class Skeleton26ReplaceName : public BaseProject {
 		PShadowCube.init(this, &VD, "shaders/ShadowCube.vert.spv",
 								"shaders/ShadowCube.frag.spv",
 								{&DSLlocal, &DSLshadowCubeCapture}, {shadowCubeFacePushConstant});
+		// FRONT faces culled, so each occluder records the side turned AWAY
+		// from the torch. This is what lets the depth slack in
+		// shadowFromCube() be nothing but floating-point noise.
+		//
+		// Shadow acne is a surface comparing against its own record: within a
+		// texel that record varies by texelWorld * tan(incidence), so a lit
+		// fragment can read as further from the light than the sample meant
+		// to represent it. Every defence against it is slack of some kind --
+		// a depth bias, a normal offset, a softening band -- and slack is
+		// exactly what detaches a shadow from its caster: wherever an
+		// occluder overhangs its own base the gap between it and the floor
+		// grows slowly, so even a few millimetres of forgiveness spread into
+		// centimetres of lit floor. Three rounds of tuning that number, in
+		// two different files, moved the strip around without closing it.
+		//
+		// Culling front faces removes the premise instead. A surface facing
+		// the light is not in the map at all, so it cannot fail a comparison
+		// against itself, and there is no acne to buy off. The silhouette --
+		// the set of directions the occluder covers, which is the only thing
+		// that decides where the shadow falls -- is identical either way.
+		//
+		// The cost, and it is a real one: an occluder now leaks light by its
+		// own THICKNESS, since what is recorded is its far side. That is
+		// bounded by the geometry rather than by a constant, and every wall
+		// and door leaf in this dungeon is far thicker than the slack this
+		// replaces. The case to watch is the opposite one -- anything built
+		// as a single flat face, which has no far side to record and so stops
+		// casting from the side the light sees. See shadowFromCube().
+		PShadowCube.setCullMode(VK_CULL_MODE_FRONT_BIT);
 		// Created against RPShadowCubeCompat -- see that member's comment for
 		// why it exists purely to be render-pass-compatible with the 36
 		// manually built per-face framebuffers this pipeline actually draws
@@ -3518,6 +3555,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		hud.addToggle("Tone Mapping", &cheats.toneMapEnabled);
 		hud.addToggle("Fullbright", &cheats.unlit);
 		hud.addToggle("Show Normals", &cheats.showNormals);
+		hud.addToggle("Shadow Gap Debug", &cheats.showShadowGap);
 		hud.addToggle("Light Gizmos", &cheats.showLightGizmos);
 		hud.addToggle("Shadow Frustums", &cheats.showShadowFrustums);
 		hud.addToggle("Show Colliders", &cheats.showColliders);
@@ -4678,6 +4716,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		if(!cheats.toneMapEnabled)  gubo.debugFlags |= LIGHT_DEBUG_NO_TONEMAP;
 		if(!cheats.shadowsEnabled)  gubo.debugFlags |= LIGHT_DEBUG_NO_SHADOWS;
 		if(cheats.showLightHeatmap) gubo.debugFlags |= LIGHT_DEBUG_HEATMAP;
+		if(cheats.showShadowGap)    gubo.debugFlags |= LIGHT_DEBUG_SHADOW_GAP;
 
 		// Both computed further up, before the torch fire state that needs them.
 		gubo.eyePos = eyePos;

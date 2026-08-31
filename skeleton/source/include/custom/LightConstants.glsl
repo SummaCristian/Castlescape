@@ -45,7 +45,7 @@
 // lights any more, see its comment there.
 //
 // Adding a slot means: this number, one more samplerCube binding plus a
-// sampleShadowCube() case in CookTorrance.frag, and one more CubeShadowMap
+// sampleShadowCube4() case in CookTorrance.frag, and one more CubeShadowMap
 // instance in main.cpp -- the dynamic pool just gets wider, nothing else
 // needs touching.
 //
@@ -88,5 +88,20 @@
 #define LIGHT_DEBUG_NO_TONEMAP  8	// skip the tone map, so overexposure clips
 #define LIGHT_DEBUG_NO_SHADOWS  16	// every shadowFactor() forced to 1 (fully lit)
 #define LIGHT_DEBUG_HEATMAP     32	// recolor by incoming light intensity, ignoring albedo
+// Why a fragment is lit, according to the ONE cube-shadowed light that
+// contributes the most radiance to it -- see the dbg* globals in
+// CookTorrance.frag for why it has to be one specific light, and why picking
+// it any other way gives an answer about the wrong one. It reports that
+// light's most permissive PCF tap, the one nearest to calling the fragment
+// lit. Green: that tap's map reports nothing in front of the fragment,
+// geometrically unoccluded, so the shadow was never cast there. Red:
+// occluded, but inside the depth bias. Yellow: occluded, inside the per-tap
+// band. Blue: every tap fully shadowed. Grey: no cube-shadowed light reaches
+// it at all.
+//
+// Green versus red/yellow is the whole point of the view: it separates a
+// shadow eaten by sampling slack, which is a shading problem, from one the
+// capture never recorded, which is not.
+#define LIGHT_DEBUG_SHADOW_GAP  64
 
 #endif
