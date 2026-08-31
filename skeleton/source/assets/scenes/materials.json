@@ -110,6 +110,22 @@
 		// overlapping coplanar faces to z-fight.
 		"dungeonCeiling": { "roughness": 0.80, "F0": 0.04, "k": 0.93, "interior": true },
 		"dungeonCorner":  { "roughness": 0.80, "F0": 0.04, "k": 0.93 },
+		// The hearth built into the hall's north-wall arch (scene.json's
+		// dhFireplace / flames.json's dungeonFireplace). Same dungeon stone as
+		// the walls, "interior" because the firebox is as enclosed as a space
+		// gets. castsShadow off for the SAME reason as "dungeonTorch" below:
+		// its own hood, jambs and back sit centimetres from the flame's point
+		// light, so as an occluder they block most of that light's sphere and
+		// the firebox interior -- the surfaces the fire should be lighting --
+		// renders in its own shadow, lit only by whatever outside torches leak
+		// past the hood. Off, the flame lights the whole inside of the mouth
+		// as it should, and the fireplace still reads fine without casting a
+		// shadow of its own (it is flat against a wall, like the torches).
+		"dungeonFireplace": { "roughness": 0.80, "F0": 0.04, "k": 0.93, "interior": true, "castsShadow": false },
+		// The logs in that hearth: wood, and castsShadow off too -- they sit
+		// right on top of the flame anchor, so as an occluder they would drop a
+		// hard shadow across the whole back of the firebox.
+		"dungeonFireLogs": { "roughness": 0.65, "F0": 0.05, "k": 0.92, "interior": true, "castsShadow": false },
 		// Split door (see scene.json): stone wall half keeps the same values
 		// as the other dungeon stone; the wood-and-iron leaf gets the same
 		// touch of sheen as the other wood pieces above.
