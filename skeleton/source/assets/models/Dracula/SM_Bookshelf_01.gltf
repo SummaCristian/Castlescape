@@ -36,32 +36,32 @@
  "buffers": [
   {
    "uri": "SM_Bookshelf_01.bin",
-   "byteLength": 120624
+   "byteLength": 123360
   }
  ],
  "bufferViews": [
   {
    "buffer": 0,
    "byteOffset": 0,
-   "byteLength": 38016,
+   "byteLength": 38880,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 38016,
-   "byteLength": 38016,
+   "byteOffset": 38880,
+   "byteLength": 38880,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 76032,
-   "byteLength": 25344,
+   "byteOffset": 77760,
+   "byteLength": 25920,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 101376,
-   "byteLength": 19248,
+   "byteOffset": 103680,
+   "byteLength": 19680,
    "target": 34963
   }
  ],
@@ -70,7 +70,7 @@
    "bufferView": 0,
    "byteOffset": 0,
    "componentType": 5126,
-   "count": 3168,
+   "count": 3240,
    "type": "VEC3",
    "min": [
     -0.03700000047683716,
@@ -87,21 +87,21 @@
    "bufferView": 1,
    "byteOffset": 0,
    "componentType": 5126,
-   "count": 3168,
+   "count": 3240,
    "type": "VEC3"
   },
   {
    "bufferView": 2,
    "byteOffset": 0,
    "componentType": 5126,
-   "count": 3168,
+   "count": 3240,
    "type": "VEC2"
   },
   {
    "bufferView": 3,
    "byteOffset": 0,
    "componentType": 5125,
-   "count": 4812,
+   "count": 4920,
    "type": "SCALAR"
   }
  ]

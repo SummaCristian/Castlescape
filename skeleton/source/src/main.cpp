@@ -3061,8 +3061,17 @@ class Skeleton26ReplaceName : public BaseProject {
 		//            with its neighbours instead of standing proud of them
 		//   y 1.730  the shelf's face (1.56) plus half the book's height, since
 		//            the mesh is centred on Z and Z is what becomes "up" here
-		//   z -1.280 the 0.110-wide gap (-1.300..-1.190) minus the book's 0.070
-		//            of thickness, halved: centred in the hole it was left
+		//   z -1.266 the 0.440-wide gap (-1.451..-1.011) minus the book's 0.070
+		//            of thickness, halved: centred in the hole it was left.
+		//            The gap is five or six volumes wide and sits on the case's
+		//            own centre line, so this number does not move if it is
+		//            widened again -- it is the centre line either way. Anything
+		//            narrower read as just another seam between spines from
+		//            across the room; see the note on BOOK_SLOT_W in
+		//            make_bookshelf.py. The book does not fill the gap it goes
+		//            into, and that is the intended trade: the case swings open
+		//            the moment it lands, so the only frame anyone reads is the
+		//            one before.
 		//
 		// The rotation is the one that stands a flat-lying book on a shelf with
 		// its spine out: book x -> leaf -x (spine at the front, fore-edge going
@@ -3090,7 +3099,7 @@ class Skeleton26ReplaceName : public BaseProject {
 									true});
 		};
 		addSlotProp("dsShelfPanel", "dhBook",
-					glm::translate(glm::mat4(1.0f), glm::vec3(0.454f, 1.730f, -1.280f))
+					glm::translate(glm::mat4(1.0f), glm::vec3(0.454f, 1.730f, -1.266f))
 				  * glm::rotate(glm::mat4(1.0f), glm::radians(180.0f), glm::vec3(0.0f, 1.0f, 0.0f))
 				  * glm::rotate(glm::mat4(1.0f), glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f)));
 

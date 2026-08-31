@@ -211,11 +211,15 @@
 		// the key lives and is carried in the dungeon, same as the padlock.
 		"key":          { "specularColor": [1.00, 0.78, 0.46], "roughness": 0.40, "F0": 0.92, "metallic": true, "interior": true },
 		// The bookcase that hides the secret passage (tools/make_bookshelf.py).
-		// Same values as "dungeonDoorPanel" and for the same reason: it samples
-		// that leaf's own texture and it has to pass for a piece of the same
-		// carpentry. A mobile that shaded differently from the doors would be
-		// the one object in the room announcing that it isn't furniture --
-		// which is exactly what a secret door must not do.
+		// Same values as "dungeonDoorPanel" and for the same reason: its atlas
+		// (SM_Bookshelf_01.png) is a copy of that leaf's own, with only the
+		// book spines painted into a corner that was empty, so the carcass is
+		// literally the same wood and has to shade like it. A mobile that
+		// shaded differently from the doors would be the one object in the room
+		// announcing that it isn't furniture -- which is exactly what a secret
+		// door must not do. The spines ride the same values: leather and cloth
+		// are near enough to matt wood at this roughness, and one material per
+		// model is all the loader gives us anyway.
 		//
 		// "interior": it stands inside a doorway with a wall on either side and
 		// sees no sky, same as the chains and the ceiling beams.
