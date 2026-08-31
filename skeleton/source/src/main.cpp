@@ -666,6 +666,13 @@ class Skeleton26ReplaceName : public BaseProject {
 		// The shading normal as a color. The one view that shows normals
 		// directly, which is what the flatNormals material flag exists for.
 		bool showNormals = false;
+		// Off suppresses the gold/blue aura on whatever the crosshair is aimed
+		// at (see gazedInstance and ubo.glow in updateUniformBuffer()). Only
+		// the visual cue goes: [E] still interacts with the same target and the
+		// prompt still appears, so this is for looking at the scene's own
+		// lighting on a door or a pickup without an aura sitting on top of it.
+		// Defaults on, matching the authored gameplay.
+		bool focusGlowEnabled = true;
 		// Off kills the specular term (BRDF's k forced to 1), leaving pure
 		// diffuse: tells a highlight apart from a genuinely bright surface.
 		bool specularEnabled = true;
@@ -678,14 +685,6 @@ class Skeleton26ReplaceName : public BaseProject {
 		// from "this artifact is in the geometry", which is otherwise hard to
 		// tell apart by eye since both show up as flicker on a wall.
 		bool shadowsEnabled = true;
-		// False-colour view of WHY a fragment lit by a torch is lit: green
-		// where no cube shadow map reports an occluder in front of it at all,
-		// red/yellow where one does but the depth bias or the softening band
-		// forgave it. Splits a shadow eaten by sampling slack from one that
-		// was never cast -- which shadowsEnabled above cannot do, since it
-		// answers only whether shadow sampling is involved, not which of its
-		// terms is responsible. See LIGHT_DEBUG_SHADOW_GAP.
-		bool showShadowGap = false;
 
 		// Per-flame-TYPE shadow casting, read by updateDynamicShadowSlots()
 		// and the light-append loop in updateUniformBuffer(). Distinct from
@@ -3555,7 +3554,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		hud.addToggle("Tone Mapping", &cheats.toneMapEnabled);
 		hud.addToggle("Fullbright", &cheats.unlit);
 		hud.addToggle("Show Normals", &cheats.showNormals);
-		hud.addToggle("Shadow Gap Debug", &cheats.showShadowGap);
+		hud.addToggle("Focus Glow", &cheats.focusGlowEnabled);
 		hud.addToggle("Light Gizmos", &cheats.showLightGizmos);
 		hud.addToggle("Shadow Frustums", &cheats.showShadowFrustums);
 		hud.addToggle("Show Colliders", &cheats.showColliders);
@@ -4716,7 +4715,6 @@ class Skeleton26ReplaceName : public BaseProject {
 		if(!cheats.toneMapEnabled)  gubo.debugFlags |= LIGHT_DEBUG_NO_TONEMAP;
 		if(!cheats.shadowsEnabled)  gubo.debugFlags |= LIGHT_DEBUG_NO_SHADOWS;
 		if(cheats.showLightHeatmap) gubo.debugFlags |= LIGHT_DEBUG_HEATMAP;
-		if(cheats.showShadowGap)    gubo.debugFlags |= LIGHT_DEBUG_SHADOW_GAP;
 
 		// Both computed further up, before the torch fire state that needs them.
 		gubo.eyePos = eyePos;
@@ -5086,8 +5084,11 @@ class Skeleton26ReplaceName : public BaseProject {
 		// read as part of the door, not a prop sitting in front of it.
 		// Built once here rather than re-searching `doors` per instance
 		// below.
+		// Left empty with the Focus Glow cheat off, which drops ubo.glow to 0
+		// for every instance below -- the gaze itself is untouched, so [E] and
+		// the prompt keep working, only the aura goes.
 		std::vector<Instance *> glowingInstances;
-		if(gazedInstance != nullptr) {
+		if(cheats.focusGlowEnabled && gazedInstance != nullptr) {
 			glowingInstances.push_back(gazedInstance);
 			for(const Door &d : doors) {
 				if(d.inst == gazedInstance) {
@@ -5805,14 +5806,17 @@ class Skeleton26ReplaceName : public BaseProject {
 				moveSpeed *= movement.sprintMultiplier;
 			}
 
-			// Update position from WASD/R/F: m.x = strafe, m.z = -forward, m.y = world up/down
+			// Update position from WASD: m.x = strafe, m.z = -forward. The m.y the
+			// Starter fills in from R/F is deliberately dropped: that's the template's
+			// free-camera fly control, and feeding it to a body that has gravity just
+			// makes you hop while the ground snap yanks you back down. Vertical
+			// movement only ever comes from jumping and gravity.
 			// Forward/strafe movement is flattened to the horizontal plane (yaw only), not
 			// the full pitch-tilted `front` used for looking around: otherwise looking up
 			// and pressing W pushes you upward (feels like a jump), and looking up while
-			// walking backward pushes you down through the floor. Vertical movement only
-			// ever comes from R/F (m.y), jumping, and gravity.
+			// walking backward pushes you down through the floor.
 			glm::vec3 frontFlat = glm::normalize(glm::vec3(front.x, 0.0f, front.z));
-			camPos += (right * m.x - frontFlat * m.z + worldUp * m.y) * moveSpeed * deltaT;
+			camPos += (right * m.x - frontFlat * m.z) * moveSpeed * deltaT;
 
 			// (Wall) Collision resolution: push the camera back out of any collider that
 			// counts as a wall, so walking into a wall/pillar/gate pier stops you
