@@ -39,11 +39,32 @@
 	// override is 0.20, and 0.20 x [0.50, 0.65, 1.00] is exactly the
 	// [0.10, 0.13, 0.20] this file carried back when the ambient was summed --
 	// so the castle exterior still looks as it always did.
+	// "bounce" is the OTHER half of the indirect term, and the half that
+	// belongs to this scene rather than to the sky. The hemisphere above
+	// describes light arriving from above and below; in a sealed corridor
+	// there is nothing above, and the only indirect light is torchlight that
+	// has hit a wall. So every point and spot light also feeds the indirect
+	// bucket at this fraction of its radiance -- same decay, same colour,
+	// same flicker, but unshadowed and wrapped rather than clamped, since
+	// bounced light reaches round corners and has no terminator.
+	//
+	// 0.35 is an authored stand-in for "how much of what hits a stone wall
+	// comes back", in the same spirit as upper/lower being authored colours.
+	// It is a share of "weight", not an addition to it: the two sources are
+	// summed inside the ambient bucket, which still cannot exceed weight of
+	// the frame, so turning the Ambient Light cheat off removes both.
+	//
+	// What it fixes: with the hemisphere alone, Material::interiorAmbient pins
+	// the blend at 0.5 and every dungeon surface got a flat
+	// (0.425, 0.4625, 0.60) -- a cold grey-blue wash laid over warm firelight,
+	// identical in a lit room and in a dead-end corridor, because a constant
+	// cannot tell them apart. Now the corridor with no torch in it goes dark.
 	"ambient": {
 		"upper": [0.50, 0.65, 1.00],
 		"lower": [0.35, 0.275, 0.20],
 		"direction": [0.0, 1.0, 0.0],
-		"weight": 0.05
+		"weight": 0.05,
+		"bounce": 0.35
 	},
 
 	"lights": [

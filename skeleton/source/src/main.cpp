@@ -125,6 +125,15 @@ struct GlobalUniformBufferObject {
 	// Rides in the same padding before lights[] that time and debugFlags do,
 	// so the array's offset is unchanged.
 	float ambientWeight;
+	// How much of a point/spot light's radiance comes back as indirect light.
+	// See AmbientLight::bounce in SceneLights.hpp.
+	//
+	// The last scalar that fits for free: ambientDir ends at 60, debugFlags
+	// fills that slot, and time/ambientWeight/this take 64, 68 and 72. The
+	// array's own alignas(16) starts it at 80 either way, so this costs
+	// nothing. A second one would still fit at 76; a third moves lights[] and
+	// every offset in four shaders with it.
+	float ambientBounce;
 	LightData lights[MAX_LIGHTS];
 };
 
@@ -4645,6 +4654,10 @@ class Skeleton26ReplaceName : public BaseProject {
 		// the indirect light out of it. Zeroing the weight gives the direct
 		// lights the whole frame back, which is what the cheat means.
 		gubo.ambientWeight = sceneLights.ambientEnabled ? amb.weight : 0.0f;
+		// No cheat gate of its own: the bounce is spent out of the same
+		// indirect share ambientWeight sizes, so zeroing that above already
+		// takes this with it. See CookTorrance.frag's blend.
+		gubo.ambientBounce = amb.bounce;
 
 		// The lighting debug cheats, packed into the one int the shader reads.
 		// Note the two inversions: the cheat says what the frame should still

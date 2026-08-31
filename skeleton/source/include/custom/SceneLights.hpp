@@ -91,6 +91,36 @@ struct AmbientLight {
 	// be in a sealed room than under the sky, and should not be lit as if a
 	// ceiling above it did nothing.
 	float weight = 0.05f;
+
+	// How much of each POINT/SPOT light's radiance comes back as indirect
+	// light, 0..1. The second half of the indirect term, and the half that
+	// actually belongs to this scene.
+	//
+	// The hemispheric model above answers "what colour is the light arriving
+	// from the sky and from the ground", which is the right question outdoors
+	// and a meaningless one in a sealed corridor: there is no sky down there,
+	// and what little indirect light exists is torchlight that has bounced off
+	// a wall. Authoring that as a constant is what left every dungeon surface
+	// under a fixed cool wash no torch could warm and no distance could dim --
+	// upper/lower blended at 0.5 by Material::interiorAmbient come out
+	// (0.425, 0.4625, 0.60), a cold grey-blue laid over warm firelight.
+	//
+	// So the point lights now feed the indirect term too. Same decay and same
+	// colour as their direct contribution -- including the flicker -- but with
+	// no shadow test and a soft wrap instead of a clamped cosine, because that
+	// is what one bounce off a rough stone wall does to light: it reaches
+	// round corners, it has no terminator, and it dies with distance from the
+	// flame that ultimately produced it.
+	//
+	// Not physically derived. It is one number standing in for the albedo of
+	// an average wall times the solid angle it subtends, in the same spirit as
+	// the hemisphere above being two authored colours: what the assets allow
+	// short of the baked AO (or a real GI pass) neither of them can have.
+	//
+	// This is a SHARE of the same indirect bucket `weight` sizes, not an
+	// addition on top of it, so turning the Ambient Light cheat off still
+	// removes all of it -- see CookTorrance.frag's blend.
+	float bounce = 0.35f;
 };
 
 class SceneLights {
@@ -217,6 +247,10 @@ void SceneLights::init(Scene *SC, const std::string &file) {
 		// Clamped, not just read: above 1 the blend would take more than the
 		// whole frame and leave the direct term negative.
 		if(a.contains("weight")) ambientLight.weight = glm::clamp(a["weight"].get<float>(), 0.0f, 1.0f);
+		// Clamped for a different reason than "weight" above: nothing breaks
+		// past 1, it just claims a wall returns more light than hit it, which
+		// is the one thing a bounce factor must not do.
+		if(a.contains("bounce")) ambientLight.bounce = glm::clamp(a["bounce"].get<float>(), 0.0f, 1.0f);
 	}
 
 	if(!js.contains("lights")) {
