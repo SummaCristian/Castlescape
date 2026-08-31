@@ -65,27 +65,27 @@
 			"burning": false
 		},
 
-		// The dining-hall hearth: the actual dungeon archway mesh
-		// (SM_WallDoor_Hole_01 -- voussoir arch stones, pillars with bases and
-		// capitals, the exact "stones used for the archways and the door")
-		// reused as the surround at scale 0.46, with a closed stone back, a
-		// chunky hearth slab + kerb and a mantel shelf added on. Stood against
-		// the flat middle of the hall's north wall (dhWallN, world
-		// x -30.4..-23.2), scale 1 / no rotation so the recess sits back into
-		// the wall's own thickness. Logs (dhFireplaceLogs) on the hearth.
+		// The dining-hall hearth. The hall's north wall panel (dhWallN) is now
+		// the dungeon arch-wall mesh (dungeonDoorWall), and this model
+		// (SM_Fireplace_01) is the stone INFILL that fills that arch where the
+		// door used to be -- a closed back, side infills, a hood beam and a
+		// hearth -- leaving a fireplace mouth. scale 1 / no rotation; placed
+		// so the infill's back sits at the rear of the arch tunnel and the
+		// hood face is flush with the wall's inner face. Logs (dhFireplaceLogs)
+		// on the hearth.
 		//
-		// model local space: opening faces +Z, arch back / stone backing at
-		// z=-0.6, hearth top at y~0.17. anchor [0, 0.33, -0.30] centres the
-		// flame in the firebox with its fading base sitting on the logs.
+		// model local space: mouth faces +Z, infill back at z=-0.84, hearth
+		// top at y~0.24. anchor [0, 0.40, -0.32] centres the flame in the
+		// mouth with its fading base on the logs.
 		//
 		// instScale is 1 (no "scale" on the instance), so sizeScale is a true
-		// multiple of a torch flame -- 1.7x to fill the taller arched opening
-		// (top ~y 2.2) without licking past the crown.
+		// multiple of a torch flame -- 1.3x to fill the ~1.8-tall mouth
+		// without licking past the hood beam.
 		"dungeonFireplace": {
-			"anchor": [0.0, 0.33, -0.30],
+			"anchor": [0.0, 0.40, -0.32],
 			"color": [1.0, 0.42, 0.13],
-			"sizeScale": 1.7,
-			"lightScale": 1.8
+			"sizeScale": 1.3,
+			"lightScale": 1.6
 		}
 	},
 
