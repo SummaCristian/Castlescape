@@ -1518,7 +1518,11 @@ class Skeleton26ReplaceName : public BaseProject {
 		float bestCos = -1.0f;
 		for(int i = 0; i < (int)torchFlames.size(); i++) {
 			const TorchFlame &tf = torchFlames[i];
-			if(!tf.isCandle || tf.burning || tf.heldByCamera) continue;
+			// Anything authored unlit and still unlit is a light-me target:
+			// the candles, and the dining-hall fireplace (flames.json's
+			// "burning": false). A normal wall torch is spawnBurning, so it
+			// never shows the prompt even with the room-torch cheat off.
+			if(tf.spawnBurning || tf.burning || tf.heldByCamera) continue;
 			float cosAngle;
 			if(isGazedAt(front, tf.anchorWorld, CANDLE_LOOK_DISTANCE,
 						 CANDLE_AIM_RADIUS, cosAngle)) {
@@ -1541,7 +1545,9 @@ class Skeleton26ReplaceName : public BaseProject {
 	// the candle block in GameLogic) rather than a debug switch.
 	bool flameBurning(const TorchFlame &tf) const {
 		if(tf.heldByCamera) return cheats.handTorchEnabled;
-		if(tf.isCandle)     return tf.burning;
+		// Authored unlit -> the player owns it (candles and the fireplace):
+		// answer with the runtime flag, no cheat row claims them.
+		if(!tf.spawnBurning) return tf.burning;
 		return cheats.roomTorchesEnabled;
 	}
 
@@ -5219,9 +5225,13 @@ class Skeleton26ReplaceName : public BaseProject {
 			// Two ways, matching the aura the candle is wearing right now:
 			// with fire in hand it's an invitation, without it's the reason
 			// the candle won't take.
-			wantedPromptText = hasBurningTorch()
-							 ? "[E] Light the candle"
-							 : "You need a lit torch to light this";
+			{
+				const char *what = torchFlames[nearbyCandle].isCandle
+								 ? "the candle" : "the fireplace";
+				wantedPromptText = hasBurningTorch()
+								 ? std::string("[E] Light ") + what
+								 : "You need a lit torch to light this";
+			}
 		} else if(nearbyDoor >= 0 && doors[nearbyDoor].locked) {
 			// Each of the three has a per-door override (Door::promptReady and
 			// friends) that wins when it isn't empty. Only the bookcase sets
@@ -5987,7 +5997,7 @@ class Skeleton26ReplaceName : public BaseProject {
 					// long as the player has been aiming at it.
 					if(hasBurningTorch()) {
 						torchFlames[nearbyCandle].burning = true;
-						std::cout << "[candle] lit '"
+						std::cout << (torchFlames[nearbyCandle].isCandle ? "[candle] lit '" : "[fireplace] lit '")
 								  << *torchFlames[nearbyCandle].inst->id << "'\n";
 						// The candle is lit from here on, so it stops being a
 						// target this frame rather than staying aimed at with

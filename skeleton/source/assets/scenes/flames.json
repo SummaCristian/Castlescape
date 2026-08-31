@@ -84,11 +84,18 @@
 		// instScale is 1 (no "scale" on the instance), so sizeScale is a true
 		// multiple of a torch flame -- 1.3x to fill the ~1.8-tall mouth
 		// without licking past the hood beam.
+		//
+		// burning: false -- starts cold, exactly like the candles. The player
+		// lights it by looking at it with the torch in hand and pressing [E]
+		// (main.cpp's findGazedCandle / flameBurning both key off "authored
+		// unlit" = !spawnBurning now, not isCandle, so it needs no isCandle
+		// flag -- it keeps a full torch-strength light, not a candle's pool).
 		"dungeonFireplace": {
 			"anchor": [0.0, 0.40, -0.32],
 			"color": [1.0, 0.42, 0.13],
 			"sizeScale": 1.3,
-			"lightScale": 1.6
+			"lightScale": 1.6,
+			"burning": false
 		}
 	},
 
