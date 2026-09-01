@@ -3537,12 +3537,16 @@ class Skeleton26ReplaceName : public BaseProject {
 
 		// Lighting rows. Listed after the movement ones and in the order you'd
 		// use them: first which sources are on, then how they're being shaded.
-		// "Sun"/"Spotlight"/"Ambient Light" point straight into sceneLights,
-		// which owns those lights (see SceneLights.hpp); "Torches"/"Holding
+		// "Spotlight"/"Ambient Light" point straight into sceneLights, which
+		// owns those lights (see SceneLights.hpp); "Torches"/"Holding
 		// Torch" into cheats, because the flames' point lights never go
 		// through SceneLights at all (see CheatFlags and flameBurning()); the rest
 		// into cheats too, where they become gubo.debugFlags.
-		hud.addToggle("Sun", &sceneLights.directEnabled);
+		//
+		// No "Sun" row: the scene has no direct light any more (lights.json), so
+		// the toggle had nothing to switch. sceneLights.directEnabled is still
+		// there and still filters LIGHT_DIRECT in update(), so pasting the sun
+		// back into lights.json only needs this line back with it.
 		hud.addToggle("Torches", &cheats.roomTorchesEnabled);
 		hud.addToggle("Holding Torch", &cheats.handTorchEnabled);
 		hud.addToggle("Spotlight", &sceneLights.spotEnabled);
@@ -4692,17 +4696,20 @@ class Skeleton26ReplaceName : public BaseProject {
 		gubo.ambientUpper = amb.upper;
 		gubo.ambientLower = amb.lower;
 		gubo.ambientDir = amb.dir;
-		// With the Ambient Light cheat off, ambient() hands back black colors.
-		// Under the old sum that was enough to remove the term; under E17's
-		// blend it is not, because the direct half is scaled by (1 - weight)
-		// and would still lose its share to an ambient that contributes
-		// nothing -- the cheat would DARKEN the scene instead of just taking
-		// the indirect light out of it. Zeroing the weight gives the direct
-		// lights the whole frame back, which is what the cheat means.
-		gubo.ambientWeight = sceneLights.ambientEnabled ? amb.weight : 0.0f;
-		// No cheat gate of its own: the bounce is spent out of the same
-		// indirect share ambientWeight sizes, so zeroing that above already
-		// takes this with it. See CookTorrance.frag's blend.
+		// Uploaded unswitched. The cheat is applied in the shader's
+		// ambientShare() via LIGHT_DEBUG_NO_AMBIENT below, NOT by zeroing this:
+		// a model that sets its own ambientWeight in materials.json (the floor,
+		// 0.20) never reads this field, so zeroing it here left that model at
+		// full indirect light with the cheat off -- the switch has to sit after
+		// the per-model override, and only the shader is.
+		//
+		// Zeroing the SHARE, wherever it happens, is still what the cheat has to
+		// do rather than just blacking the colors: under E17's blend the direct
+		// half is scaled by (1 - weight), so it would keep giving up its share
+		// to an ambient contributing nothing and the cheat would DARKEN the
+		// scene instead of taking the indirect light out of it.
+		gubo.ambientWeight = amb.weight;
+		// Same bucket, so the same gate covers it. See CookTorrance.frag's blend.
 		gubo.ambientBounce = amb.bounce;
 
 		// The lighting debug cheats, packed into the one int the shader reads.
@@ -4715,6 +4722,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		if(!cheats.toneMapEnabled)  gubo.debugFlags |= LIGHT_DEBUG_NO_TONEMAP;
 		if(!cheats.shadowsEnabled)  gubo.debugFlags |= LIGHT_DEBUG_NO_SHADOWS;
 		if(cheats.showLightHeatmap) gubo.debugFlags |= LIGHT_DEBUG_HEATMAP;
+		if(!sceneLights.ambientEnabled) gubo.debugFlags |= LIGHT_DEBUG_NO_AMBIENT;
 
 		// Both computed further up, before the torch fire state that needs them.
 		gubo.eyePos = eyePos;

@@ -16,16 +16,72 @@
 	// receives, "lower" what one pointing at the ground receives, "direction" is
 	// the axis they blend along, i.e. world up.
 	//
-	// Cool above, warm below: skylight is blue, bounce off a dirt courtyard is
-	// brown. Getting these two the same color would throw away the entire point
-	// of the model and leave a constant ambient term.
+	// WARM, because the torches are the only thing burning in here.
 	//
-	// These are COLORS ONLY, near 1, not the radiance itself. "weight" carries
-	// the brightness, because CookTorrance.frag blends the ambient against the
-	// direct light (E17's LambertBlinnTexture.frag) instead of adding it on
-	// top: direct keeps (1 - weight), ambient takes weight. Adding it was what
-	// made the ambient a floor under every pixel -- see the shader's comment at
-	// the blend for why a ceiling could not stop it.
+	// These used to be sky-blue above and courtyard-brown below, which was
+	// correct while the scene had a sun: the hemisphere is a directional light's
+	// indirect half, which is exactly why CookTorrance.frag excludes direct
+	// lights from the per-light "bounce" term -- feeding the sun in there would
+	// have doubled what these two colors already said. The sun is gone (see the
+	// empty "lights" array below) and the dungeon is sealed: scene.json has
+	// floor, ceiling, straight walls and corners, and its only "Hole" is
+	// SM_WallDoor_Hole_01, the doorway. No window, no grate, no sky. So there is
+	// no source in this level that could put blue light on anything, and the
+	// blue survived here purely because nobody re-derived it after the sun left.
+	//
+	// What there IS is TORCH_LIGHT_COLOR (1.0, 0.5, 0.16, main.cpp) bouncing off
+	// grey-brown stone. A bounce keeps the hue, loses a little saturation and a
+	// lot of energy, which is what these two now describe.
+	//
+	// The separation between a lit room and a dead corridor therefore has to
+	// come from LUMINANCE, not from hue -- everything down here is the same
+	// color of fire, and only the amount of it changes. That is the honest
+	// version of the warm/cool contrast the blue was faking, and it is why
+	// these are darker than the values they replace (midpoint luminance ~0.38
+	// against ~0.46) rather than just re-tinted: a warm ambient at the old
+	// brightness reads as a second light source instead of as spill.
+	//
+	// Which is which: hemisphereColor() blends with w = (dot(N, direction) + 1)
+	// / 2 and returns mix(lower, upper, w), so "upper" is what a surface facing
+	// UP receives -- the floor, the carpet, the tabletop, the top of a barrel --
+	// and "lower" what a surface facing DOWN receives, the ceiling and the
+	// underside of things. Named for the direction the surface looks at, not for
+	// where the surface sits, which is easy to get backwards.
+	//
+	// upper is the brighter of the two because an upward-facing surface in this
+	// dungeon is looking at the flames: the torches are bracketed high on the
+	// walls and burn upward, so the top half of the room is where the light is.
+	// lower is darker because a downward-facing surface is looking at the floor,
+	// which is the far end of every bounce in here.
+	//
+	// The split only reaches the models that actually blend. Material::
+	// interiorAmbient pins the enclosed ones at w = 0.5 and hands them the
+	// midpoint instead -- today that is 6 models (dungeonCeiling, the bookshelf
+	// and book, and the three metals), against 13 that take the real blend,
+	// dungeonFloor and dungeonWall among them. So these two values are not a
+	// detail: getting them the wrong way round darkens every floor in the level.
+	//
+	// Read the pair as this renderer's stand-in ENVIRONMENT rather than as a
+	// light with a name: besides being the diffuse indirect term, they are what
+	// metalAmbient() reflects, the cheapest form of a split-sum IBL with two
+	// colors where a real one has a prefiltered cube map. Which is also why
+	// blacking them was the worst thing to try: it told every metal in the
+	// scene it was standing in a void, and it made the ambient cheat INVERTED on
+	// them -- switching it on cost them their share of the frame and returned
+	// nothing. Warm is also the right answer for them: a steel chain in this
+	// room reflects firelight, not daylight.
+	//
+	// These are COLORS ONLY, not the radiance itself, so they carry hue and
+	// relative brightness while "weight" below sets how much of the frame they
+	// get. They no longer run near 1 the way the sky ones did: with the whole
+	// room one color of fire, how DARK the indirect term is at the bottom of
+	// its range is the thing doing the work, so some of that is authored here
+	// rather than all of it in a single scene-wide weight.
+	// "weight" carries the brightness, because CookTorrance.frag blends the
+	// ambient against the direct light (E17's LambertBlinnTexture.frag) instead
+	// of adding it on top: direct keeps (1 - weight), ambient takes weight.
+	// Adding it was what made the ambient a floor under every pixel -- see the
+	// shader's comment at the blend for why a ceiling could not stop it.
 	//
 	// "weight" is the scene DEFAULT, and it is the INDOOR value, because the
 	// game is played indoors: the player is inside the dungeon from the start
@@ -35,18 +91,29 @@
 	// this file briefly had -- leaves anything not listed there, i.e. the small
 	// dungeon props, silently lit as if the ceiling weren't there.
 	//
-	// 0.05 is E17's value for its enclosed maze. For reference, the outdoor
-	// override is 0.20, and 0.20 x [0.50, 0.65, 1.00] is exactly the
-	// [0.10, 0.13, 0.20] this file carried back when the ambient was summed --
-	// so the castle exterior still looks as it always did.
-	// "bounce" is the OTHER half of the indirect term, and the half that
-	// belongs to this scene rather than to the sky. The hemisphere above
-	// describes light arriving from above and below; in a sealed corridor
-	// there is nothing above, and the only indirect light is torchlight that
-	// has hit a wall. So every point and spot light also feeds the indirect
-	// bucket at this fraction of its radiance -- same decay, same colour,
-	// same flicker, but unshadowed and wrapped rather than clamped, since
-	// bounced light reaches round corners and has no terminator.
+	// 0.05 is E17's value for its enclosed maze, and it is the one of the two
+	// that gets looked at: the game is played indoors from spawn to win. The
+	// outdoor override in materials.json (0.20) is untouched and untuned since
+	// the sun was removed -- the exterior now has no direct light at all, so if
+	// anyone ever does go and look at it, that number and the missing sun are
+	// the same conversation, not this one.
+	//
+	// "bounce" is the OTHER half of the indirect term. Both halves are now the
+	// same firelight off the same stone; what separates them is whether they
+	// know WHERE the fire is. The hemisphere above is the part that does not --
+	// a floor under the whole level, the light that has bounced enough times to
+	// have forgotten its source. This is the part that does: every point and
+	// spot light feeds the indirect bucket at this fraction of its radiance,
+	// with its own decay, colour and flicker, so the room with a torch in it
+	// gets more indirect light than the dead end down the corridor, and gets it
+	// from the right direction.
+	//
+	// Wrapped rather than clamped -- (dot + 1) / 2, no terminator -- because
+	// bounced light arrives from most of the hemisphere rather than from the
+	// flame itself. Shadowed, though, like the direct term and by the same
+	// visibility: a fragment that cannot see the flame should not collect a
+	// fill sized by its distance to it, which is what put a glow at the near
+	// end of every shadow before.
 	//
 	// 0.35 is an authored stand-in for "how much of what hits a stone wall
 	// comes back", in the same spirit as upper/lower being authored colours.
@@ -55,46 +122,47 @@
 	// the frame, so turning the Ambient Light cheat off removes both.
 	//
 	// What it fixes: with the hemisphere alone, Material::interiorAmbient pins
-	// the blend at 0.5 and every dungeon surface got a flat
-	// (0.425, 0.4625, 0.60) -- a cold grey-blue wash laid over warm firelight,
+	// the blend at 0.5 and every dungeon surface gets the same flat midpoint,
 	// identical in a lit room and in a dead-end corridor, because a constant
-	// cannot tell them apart. Now the corridor with no torch in it goes dark.
+	// cannot tell them apart. Now the corridor with no torch collects the
+	// midpoint and nothing else, while the lit room gets that plus the bounce
+	// of the torch actually in it.
+	//
+	// With both halves warm, this is also the whole of the scene's contrast: the
+	// two rooms differ in how MUCH firelight they hold, not in its colour. Which
+	// is what a dungeon lit only by torches actually looks like, and is why the
+	// midpoint here (0.60, 0.34, 0.15) is deliberately dark -- it is the bottom
+	// of the range, the value a room reaches when no flame reaches it at all.
 	"ambient": {
-		"upper": [0.50, 0.65, 1.00],
-		"lower": [0.35, 0.275, 0.20],
+		"upper": [0.75, 0.42, 0.18],
+		"lower": [0.45, 0.26, 0.12],
 		"direction": [0.0, 1.0, 0.0],
 		"weight": 0.05,
 		"bounce": 0.35
 	},
 
 	"lights": [
-		// The sun. "direction" is the way the light TRAVELS, so this one comes
-		// from above and from the +Z side, which is what puts light on the face
-		// of the keep you see when you spawn.
+		// The sun is GONE. It used to sit here as the scene's one "direct"
+		// light, parked ~55 degrees above the horizon, tinted warm, casting
+		// through the single 2D shadow map:
 		//
-		// Parked high and still. It used to orbit (orbitSpeed -0.5, a full day
-		// every 12 minutes), but with no shadow mapping the sun keeps shining
-		// once it passes below the horizon, lighting everything from underneath.
-		// Setting orbitSpeed to 0 sidesteps that until either shadows exist or
-		// the scene is re-lit for evening.
+		//   { "id": "sun", "type": "direct",
+		//     "direction": [0.25, -0.82, -0.52], "color": [1.0, 0.98, 0.92],
+		//     "orbitSpeed": 0.0, "castsShadow": true }
 		//
-		// Roughly 55 degrees above the horizon rather than straight down: a sun
-		// at [0,-1,0] would leave every vertical wall in the castle with no
-		// direct light at all, since dot(N, L) would be 0 on all of them.
-		// The small X tilts it slightly off the scene's axis of symmetry, so the
-		// east and west towers aren't lit identically.
-		{
-			"id": "sun",
-			"type": "direct",
-			"direction": [0.25, -0.82, -0.52],
-			"color": [1.0, 0.98, 0.92],
-			"orbitSpeed": 0.0,
-			"castsShadow": true
-		}
-
+		// Kept here as a comment because putting it back is one paste: nothing
+		// in the engine was removed with it. SceneLights still loads "direct"
+		// lights, main.cpp still builds the sun's orthographic light-space
+		// matrix for any light that asks for a shadow (SUN_TARGET /
+		// SUN_ORTHO_HALF_EXTENT there), and the 2D shadow slots are still
+		// allocated -- they just go unused now, since no light in this file
+		// claims one.
+		//
+		// Its indirect half went with it: see "upper"/"lower" above, both black.
+		//
 		// The dungeon wall torches (torchW1/W2, torchE1/E2, torchDC, and the
-		// dv alcove's torchDV) used to be authored here too, anchored to their
-		// instances the same way as above. They were removed: every one of
+		// dv alcove's torchDV) used to be authored here too, hung off their
+		// instances with "instance" + "offset". They were removed: every one of
 		// them also carries the "dungeonTorch" model, so flames.json spawns a
 		// TorchFlame for each of them independently (main.cpp's "Torch
 		// flames' point lights" block), which appends its own per-frame point

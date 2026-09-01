@@ -70,17 +70,32 @@ struct LightData {
 
 // Hemispheric ambient, E07 s.47-54: the scene's indirect lighting, two colors
 // blended by which way a surface faces.
+//
+// Really the scene's stand-in ENVIRONMENT, which is the more useful way to read
+// it: besides being the diffuse indirect term, these two colors are what
+// metalAmbient() reflects in place of the prefiltered cube map a real split-sum
+// IBL would sample. A metal has no diffuse lobe, so they are most of what one
+// looks like away from a direct highlight.
+//
+// Both default to BLACK, i.e. every level authors its own: the right answer is
+// "what is around this room", and there is no default that is right for both a
+// sealed dungeon and an open courtyard. Getting it wrong by omission is how a
+// corridor ends up lit by a sky. lights.json authors the interior values this
+// scene uses, and documents what an exterior one would put here instead.
 struct AmbientLight {
-	glm::vec3 upper = glm::vec3(0.1f);				// sky color
-	glm::vec3 lower = glm::vec3(0.05f);				// ground color
+	glm::vec3 upper = glm::vec3(0.0f);				// sky color
+	glm::vec3 lower = glm::vec3(0.0f);				// ground color
 	glm::vec3 dir = glm::vec3(0.0f, 1.0f, 0.0f);	// which way "up" blends
 
 	// The scene's default share of indirect light, 0..1 -- E17's
 	// gubo.ambientLight, which the maze lab sets to 0.05. CookTorrance.frag
 	// blends rather than sums: direct light keeps (1 - weight), ambient takes
 	// weight. So this is the brightness of the indirect term and upper/lower
-	// above are only its two COLORS, which is why they read near 1 in
-	// lights.json rather than near 0.1 as they did when they were summed.
+	// above are only its two COLORS, which is why an outdoor level authors them
+	// near 1 rather than near 0.1 as it would have when they were summed.
+	//
+	// Still meaningful with the hemisphere black: `bounce` below spends the
+	// same share, so this now sizes the torches' indirect contribution.
 	//
 	// A material can override it per model (Material::ambientWeight), and that
 	// is the whole point: an enclosed room and an open courtyard need
@@ -147,9 +162,8 @@ class SceneLights {
 	// per-frame activeLights path just to read them.
 	const std::vector<LightData> &all() const { return lights; }
 
-	// Not animated, so it skips update(). By value rather than by reference
-	// because with ambientEnabled off there is no stored object to point at:
-	// the black one is built here on the spot.
+	// Not animated, so it skips update(). Returned as authored: the
+	// ambientEnabled switch below is applied in the shader, not here.
 	AmbientLight ambient() const;
 
 	// Debug switches, wired to the cheat menu in main.cpp, which flips these
@@ -162,9 +176,11 @@ class SceneLights {
 	bool directEnabled = true;	// the sun
 	bool pointEnabled = true;	// the gate lanterns
 	bool spotEnabled = true;	// the courtyard spot
-	// The hemispheric ambient. Off means the only light in the scene is what
-	// the sources above put there, which is how you tell an unlit surface from
-	// one that is merely dim.
+	// The whole indirect term: the hemisphere AND the per-light bounce, since
+	// the two share one bucket. Off means the only light in the scene is what
+	// the sources above put there directly, which is how you tell an unlit
+	// surface from one that is merely dim. Read by main.cpp, which turns it
+	// into the shader's LIGHT_DEBUG_NO_AMBIENT.
 	bool ambientEnabled = true;
 
 	// Forces an orbit onto the directional lights that were authored static
@@ -369,13 +385,12 @@ void SceneLights::init(Scene *SC, const std::string &file) {
 }
 
 AmbientLight SceneLights::ambient() const {
-	if(!ambientEnabled) {
-		// Both colors black leaves the blend between them black too, whatever
-		// way a surface faces, so the shader needs no switch of its own. dir is
-		// carried over anyway rather than zeroed: a null blend axis would be a
-		// degenerate value to hand a shader that normalizes nothing.
-		return AmbientLight{glm::vec3(0.0f), glm::vec3(0.0f), ambientLight.dir};
-	}
+	// Handed over as authored, cheat or no cheat. ambientEnabled used to black
+	// the two colors here, which was only ever half the job -- it could not
+	// touch the per-light bounce, and it could not touch a model overriding the
+	// share in materials.json. The switch now lives in one place downstream of
+	// both, the shader's ambientShare() (LIGHT_DEBUG_NO_AMBIENT), and blacking
+	// the colors here as well would just be a second, weaker copy of it.
 	return ambientLight;
 }
 

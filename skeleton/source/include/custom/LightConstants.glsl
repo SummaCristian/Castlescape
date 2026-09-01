@@ -104,4 +104,15 @@
 // capture never recorded, which is not.
 #define LIGHT_DEBUG_SHADOW_GAP  64
 
+// Drop the whole indirect term: ambientShare() returns 0, so the direct lights
+// get the entire frame back. The "Ambient Light" cheat.
+//
+// A flag rather than just zeroing gubo.ambientWeight, which is how this used to
+// work and why the cheat silently did nothing on some models: ambientShare()
+// prefers the MATERIAL's ambientWeight whenever materials.json sets one (the
+// floor does, at 0.20), so zeroing the global left every overriding model at
+// full indirect light. The share can be authored in two places; the switch that
+// turns it off has to sit downstream of both, and that is here.
+#define LIGHT_DEBUG_NO_AMBIENT  128
+
 #endif

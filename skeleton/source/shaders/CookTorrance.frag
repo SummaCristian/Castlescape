@@ -636,7 +636,16 @@ vec3 metalAmbient(vec3 N, vec3 V, vec3 mS, float roughness, float F0) {
 // one knob for an enclosed space, made per-model so a dungeon corridor and an
 // open courtyard can hold different values in the same frame. The maze runs at
 // 0.05; lights.json documents what the two ends of this scene use and why.
+//
+// The cheat gate sits HERE, downstream of both places a share can be authored,
+// rather than on gubo.ambientWeight alone: a model carrying its own override
+// never reads the global, so zeroing the global left the floor (0.20 in
+// materials.json) fully lit indirectly with the cheat off. See
+// LIGHT_DEBUG_NO_AMBIENT.
 float ambientShare() {
+    if(debugOn(LIGHT_DEBUG_NO_AMBIENT)) {
+        return 0.0;
+    }
     return ubo.ambientWeight >= 0.0 ? ubo.ambientWeight : gubo.ambientWeight;
 }
 
