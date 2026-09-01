@@ -2,7 +2,7 @@
 	"models": [
 		{"id": "floor", "VD": "VDposNormUV", "model": "assets/models/Plane.gltf",  "format":"GLTF", "collider": "AABB"},
 
-		{"id": "dungeonFloor", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_StoneFloor_01.gltf", "format": "GLTF"},
+		{"id": "dungeonFloor", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_StoneFloor_02.gltf", "format": "GLTF"},
 		{"id": "dungeonCeiling", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_StoneCeiling_01.gltf", "format": "GLTF"},
 		{"id": "dungeonWall", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_WallStraight_01.gltf", "format": "GLTF", "collider": "AABB"},
 		{"id": "dungeonCorner", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_WallCorner_01.gltf", "format": "GLTF"},
@@ -30,7 +30,7 @@
 	"textures": [
 		{"id": "tex",          "texture": "assets/textures/toChange.jpg",         "format": "C"},
 
-		{"id": "dungeonFloorTex", "texture": "assets/textures/Dracula/SM_StoneFloor_01.png", "format": "C"},
+		{"id": "dungeonFloorTex", "texture": "assets/textures/Dracula/SM_StoneFloor_02.png", "format": "C"},
 		{"id": "dungeonCeilingTex", "texture": "assets/textures/Dracula/SM_StoneCeiling_01.png", "format": "C"},
 		{"id": "dungeonWallTex", "texture": "assets/textures/Dracula/SM_WallStraight_01.png", "format": "C"},
 		{"id": "dungeonCornerTex", "texture": "assets/textures/Dracula/SM_WallCorner_01.png", "format": "C"},
