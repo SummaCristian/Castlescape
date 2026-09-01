@@ -28,14 +28,16 @@
 // Plus one parameter that isn't a BRDF term at all:
 //
 //   ambientWeight       this model's share of INDIRECT light, overriding the
-//                       scene's "weight" in lights.json. Set to 0.20 on the
-//                       models under the open sky -- since the castle exterior
-//                       came out, that is the ground plane and nothing else;
-//                       left off everywhere else, so anything enclosed
-//                       inherits the scene's indoor 0.05.
+//                       scene's "weight" in lights.json. NO model sets one
+//                       today: the whole level is enclosed and torch-lit, so
+//                       every one of them inherits the scene's 0.05. The
+//                       ground plane was the last holdout at 0.20 and gave it
+//                       up when the sun did -- see its entry below.
 //                       It exists because hemispheric ambient has no visibility
 //                       term: nothing in it can tell a corridor from a
-//                       courtyard, so the number has to be authored.
+//                       courtyard, so the number has to be authored. Add one
+//                       here the moment a level has two lighting conditions in
+//                       the same frame again.
 //
 //                       The default is the INDOOR one because the game is
 //                       played indoors -- a model added here and left alone
@@ -50,18 +52,22 @@
 		// The ground plane (Plane.gltf, scaled 100x in scene.json). Dry dirt and
 		// cobbles: about as rough as a surface gets, and almost purely diffuse.
 		//
-		// The only model in the scene genuinely under the open sky, and so the
-		// only one carrying "ambientWeight": 0.20 -- four times the scene's
-		// indoor default. See the header above for why the default is the
-		// indoor value and this is the exception.
+		// It used to carry "ambientWeight": 0.20, four times the scene's indoor
+		// default, on the grounds that it was the one model genuinely under the
+		// open sky. That is dead twice over now. The castle exterior that stood
+		// on it -- walls, towers, gate, keep, steps, the road, the crates, the
+		// flag and the brass gate lanterns -- came out of scene.json a while
+		// back, leaving the plane bare; and lights.json has no sun any more, so
+		// there is no sky above it either. A share four times everyone else's,
+		// of an indirect term that is now firelight bounced off dungeon stone,
+		// would just make an empty plane the brightest surface in the level, lit
+		// by torches it is nowhere near.
 		//
-		// The castle exterior that used to stand on it -- walls, towers, gate,
-		// keep, steps, the road, the crates, the flag and the brass gate
-		// lanterns -- is gone from scene.json, and its entries went with it. A
-		// material keyed on a model id that no longer exists is dead weight
-		// nothing warns about, and these still carried the outdoor 0.20, which
-		// left the file reading as if there were an exterior to light.
-		"floor": { "roughness": 0.92, "F0": 0.04, "k": 0.96, "ambientWeight": 0.20 },
+		// So it inherits the scene's 0.05 like everything else, which is the
+		// honest answer while nothing out there emits: the plane is lit by the
+		// same nothing the rest of the level is. Putting the sun back means
+		// putting this override back with it -- they were always one decision.
+		"floor": { "roughness": 0.92, "F0": 0.04, "k": 0.96 },
 
 		// Dungeon set (Dracula's Castle Assetpack, see README credits), which
 		// since the exterior came out is the whole scene. Three categories:
