@@ -458,6 +458,58 @@ class Skeleton26ReplaceName : public BaseProject {
 	// fresh vector every frame when it's (almost always) empty.
 	std::vector<int> pendingCubeSlotRenders;
 
+	// The occupant diff above answers "did this slot's LIGHT change hands",
+	// which is the only reason a slot's capture can go stale as long as every
+	// occluder in the scene is nailed down. The ghosts are not, and neither is
+	// a door mid-swing. While lights.json still had a sun that didn't show: a
+	// mover's visible shadow was the SUN's 2D map, which is re-rendered inside
+	// the "main" command buffer every frame and so followed it (see
+	// Shadow.vert's header). With the sun gone the only shadow a ghost casts is
+	// the torches' cube one -- and that one stayed frozen in whatever pose the
+	// slot happened to be captured in.
+	//
+	// So movers get their own invalidation: queueMoverCubeSlotRenders(). The
+	// list is the ghosts and the door leaves, NOT every instance whose Wm
+	// changes -- a floating pickup key spins on the spot forever and would keep
+	// every slot near it re-rendering for a shadow nobody can pick out, which
+	// is exactly the per-frame cost this cache exists to avoid. Built once (the
+	// instances outlive the level) on first use.
+	std::vector<Instance *> movingOccluders;
+	// Wm each of those had when a slot was last re-captured for it, so a mover
+	// standing still costs one mat4 compare and no draws.
+	std::vector<glm::mat4> movingOccluderWm;
+	bool moverListBuilt = false;
+	// Whether slot t had a mover within SHADOW_MOVER_RADIUS at its last
+	// capture. Needed for the frame a mover leaves that radius: nothing is
+	// "near AND moving" any more, so without this the slot would keep the
+	// capture that still has the ghost in it and leave its shadow stuck at the
+	// edge of the torch's range.
+	std::array<bool, NUM_SHADOW_CUBES> slotHadMover{};
+	// Slots a mover has invalidated and that haven't been re-rendered yet.
+	// Persistent, unlike the per-frame nearNow/staleNow inside
+	// queueMoverCubeSlotRenders(): see its comment for why the budget below
+	// needs the mark to survive the frame that couldn't afford it.
+	std::array<bool, NUM_SHADOW_CUBES> slotMoverStale{};
+	// How many mover-invalidated slots may be re-captured per frame. Two, so a
+	// ghost between torches still gets its nearest couple of shadows updated
+	// every frame and the rest at half or a third of that rate -- a slower
+	// shadow at the far end of a room reads as nothing at all, four full
+	// six-face captures per frame do not.
+	static constexpr int MOVER_SLOT_BUDGET = 2;
+	// How far from the PLAYER a mover is still worth tracking. Roughly the
+	// distance at which its own shadow stops being readable on screen, and it
+	// is what keeps the cost proportional to what's actually being looked at
+	// rather than to how many ghosts the level authors put in it.
+	static constexpr float MOVER_PLAYER_CULL_DIST = 30.0f;
+	// How close a mover has to be to a slot's light for that slot to be
+	// re-captured while it moves. NOT the cube's own far plane
+	// (TORCH_SHADOW_FAR_CONST, 60) -- that reaches across the whole ~60-unit
+	// level, so every slot would re-render on every frame a ghost walks, i.e.
+	// the unconditional loop the cache replaced. At 15 units the torch falloff
+	// (g/d)^beta with TORCH_LIGHT_G/BETA is down to ~6% of peak, so a shadow
+	// this map stops recording past here has nothing left to darken.
+	static constexpr float SHADOW_MOVER_RADIUS = 15.0f;
+
 	// How much (in-game) time between updateDynamicShadowSlots() calls: the
 	// candidates are static objects, only the player moves, so this doesn't
 	// need a per-frame answer. Startup value equal to the interval so the
@@ -3793,20 +3845,135 @@ class Skeleton26ReplaceName : public BaseProject {
 		}
 	}
 
+	// Local-space bounding sphere per MODEL index (xyz centre, w radius),
+	// filled in on first use -- the models never change, and fitAABB() walks
+	// every vertex of the mesh, so this can't be done per frame. w < 0 marks a
+	// slot that hasn't been fitted yet. Feeds the per-face cull in
+	// recordCubeSlotFaces(): a sphere is the only bound cheap enough to test
+	// six times per instance per slot, and it doesn't need to be tight -- a
+	// cull that's too generous costs a draw, one that's too tight loses a
+	// shadow, so this errs the safe way by construction (the sphere around the
+	// AABB, not inside it).
+	std::vector<glm::vec4> modelSphereCache;
+	// Scratch for the same cull: the shadow-casting instances of one slot with
+	// their world-space spheres, built once per slot render and then tested
+	// against each of the six faces. A member so it reuses its allocation.
+	struct ShadowCaster {
+		Instance *inst;
+		glm::vec3 centre;
+		float radius;
+	};
+	std::vector<ShadowCaster> shadowCasterScratch;
+
+	const glm::vec4 &modelSphere(int mid) {
+		if((int)modelSphereCache.size() <= mid) {
+			modelSphereCache.resize(mid + 1, glm::vec4(0.0f, 0.0f, 0.0f, -1.0f));
+		}
+		glm::vec4 &s = modelSphereCache[mid];
+		if(s.w < 0.0f) {
+			Collider fit;
+			fit.fitAABB(SC.M[mid]);
+			const AABBextents E = fit.getExtents();	// fit's Wm is identity, so local space
+			const glm::vec3 centre((E.xMin + E.xMax) * 0.5f,
+								   (E.yMin + E.yMax) * 0.5f,
+								   (E.zMin + E.zMax) * 0.5f);
+			const glm::vec3 half((E.xMax - E.xMin) * 0.5f,
+								 (E.yMax - E.yMin) * 0.5f,
+								 (E.zMax - E.zMin) * 0.5f);
+			s = glm::vec4(centre, glm::length(half));
+		}
+		return s;
+	}
+
+	// Is a world-space sphere inside one cube face's 90-degree frustum?
+	// `rel` is its centre RELATIVE to the light, which is where every one of
+	// these frustums has its apex.
+	//
+	// Done by hand rather than by extracting planes out of torchFaceMatrices:
+	// the faces are axis-aligned (CUBE_FACE_DIR) and square at exactly 90
+	// degrees, so the four side planes are just (d +- a) / sqrt(2) for the two
+	// world axes a that aren't the face's own -- i.e. the whole test is a
+	// handful of component compares with no matrix work at all. That matters,
+	// since it runs once per instance per face.
+	bool sphereInCubeFace(const glm::vec3 &rel, float radius, int face) const {
+		const glm::vec3 &d = CUBE_FACE_DIR[face];
+		const float along = glm::dot(rel, d);
+		// Behind the far plane. Measured along the axis rather than by true
+		// distance: cheaper, and never rejects something the true distance
+		// would have kept (|rel| >= along).
+		if(along - radius > TORCH_SHADOW_FAR_CONST) {
+			return false;
+		}
+		// The side planes are at 45 degrees, so a sphere of radius r sticks
+		// past one until its centre is r * sqrt(2) behind it.
+		const float slack = radius * 1.41421356f;
+		for(int ax = 0; ax < 3; ax++) {
+			if(std::abs(d[ax]) > 0.5f) {
+				continue;	// the face's own axis, handled above
+			}
+			if(along + rel[ax] < -slack || along - rel[ax] < -slack) {
+				return false;
+			}
+		}
+		return true;
+	}
+
 	// One cube slot's six-face render: shared by populateCommandBuffer()
 	// (every frame, HAND_TORCH_SHADOW_INDEX only) and renderCubeSlotsOnce()
-	// (a one-shot command buffer, every other slot, only when its occupant
-	// actually changes -- see lastRenderedOccupant's member comment). Exactly
-	// the body the old unconditional per-slot loop in populateCommandBuffer()
-	// used to run for every slot, every frame, factored out unchanged so
-	// splitting where it's called from couldn't also change what it draws.
+	// (a one-shot command buffer, every other slot, when its occupant changes
+	// or a mover invalidates it -- see lastRenderedOccupant's and
+	// movingOccluders' member comments).
 	//
 	// ownerInst: the instance this slot's own flame is anchored to (nullptr
 	// if none), excluded from its own shadow pass -- see the inline comment
 	// this carried before extraction, preserved at the call sites' comments
 	// instead of duplicated here.
+	//
+	// cullPerFace: drop instances that fall outside the face being drawn.
+	// Roughly a 6x cut in draws, since a face covers a sixth of the sphere,
+	// and it is what makes a per-frame re-render affordable at all. ONLY valid
+	// for a command buffer recorded and submitted on the same frame, i.e. the
+	// renderCubeSlotsOnce() path: populateCommandBuffer() bakes its draws once
+	// per swapchain image and replays them for the rest of the run, so a
+	// visible set decided from where the light stood at record time would be
+	// wrong the moment it moves -- and the one slot recorded there is the HELD
+	// torch, which moves with the camera every frame. Hence the flag rather
+	// than culling unconditionally.
 	void recordCubeSlotFaces(VkCommandBuffer commandBuffer, int currentImage, int t,
-							 bool slotOccupied, Instance *ownerInst) {
+							 bool slotOccupied, Instance *ownerInst, bool cullPerFace = false) {
+		// Built once for all six faces (the world spheres don't depend on which
+		// face is being drawn), and only when there's anything to draw.
+		if(slotOccupied) {
+			shadowCasterScratch.clear();
+			for(int j = 0; j < SC.TI[0].InstanceCount; j++) {
+				Instance &inst = SC.TI[0].I[j];
+				if(!materials.forModel(inst.Mid).castsShadow) {
+					continue;
+				}
+				if(&inst == ownerInst) {
+					continue;
+				}
+				ShadowCaster sc;
+				sc.inst = &inst;
+				if(cullPerFace) {
+					const glm::vec4 &local = modelSphere(inst.Mid);
+					sc.centre = glm::vec3(inst.Wm * glm::vec4(glm::vec3(local), 1.0f));
+					// The largest of the three column lengths: a non-uniformly
+					// scaled instance has to take the biggest one or its sphere
+					// stops enclosing the mesh on the stretched axis.
+					const float scale = std::max({glm::length(glm::vec3(inst.Wm[0])),
+												  glm::length(glm::vec3(inst.Wm[1])),
+												  glm::length(glm::vec3(inst.Wm[2]))});
+					sc.radius = local.w * scale;
+				} else {
+					sc.centre = glm::vec3(0.0f);
+					sc.radius = 0.0f;
+				}
+				shadowCasterScratch.push_back(sc);
+			}
+		}
+		const glm::vec3 lightPos = torchLightPos[t];
+
 		for(int face = 0; face < 6; face++) {
 			VkClearValue clearValues[2];
 			clearValues[0].color = {{TORCH_SHADOW_FAR_CONST, 0.0f, 0.0f, 0.0f}};
@@ -3845,14 +4012,11 @@ class Skeleton26ReplaceName : public BaseProject {
 								   VK_SHADER_STAGE_VERTEX_BIT, 0,
 								   sizeof(ShadowCubeFacePushConstant), &facePc);
 
-				for(int j = 0; j < SC.TI[0].InstanceCount; j++) {
-					Instance &inst = SC.TI[0].I[j];
-					if(!materials.forModel(inst.Mid).castsShadow) {
+				for(const ShadowCaster &sc : shadowCasterScratch) {
+					if(cullPerFace && !sphereInCubeFace(sc.centre - lightPos, sc.radius, face)) {
 						continue;
 					}
-					if(&inst == ownerInst) {
-						continue;
-					}
+					Instance &inst = *sc.inst;
 					inst.DS[0][1]->bind(commandBuffer, PShadowCube, 0, currentImage);
 					SC.M[inst.Mid]->bind(commandBuffer);
 					vkCmdDrawIndexed(commandBuffer,
@@ -3864,22 +4028,150 @@ class Skeleton26ReplaceName : public BaseProject {
 		}
 	}
 
-	// Renders exactly the cube slots the lastRenderedOccupant diff (run every
-	// frame in updateUniformBuffer(), right after the reassignment call) found
-	// stale this frame, via ONE beginSingleTimeCommands() buffer -- a direct
-	// submit-and-wait on the graphics queue, not the recurring "main"
-	// NamedCommandBuffer, precisely so this can run only on the frame a
-	// slot's occupant actually changes (startup, or a genuine reassignment)
-	// instead of being baked into the buffer that replays every frame
-	// forever. Called after DSshadowCube[t].map(currentImage, ...) has
-	// already written this frame's matrices/position for every slot in
-	// `slots`, so PShadowCube's set 1 reads correct data despite this being
-	// a separate command buffer from the one DSshadowCube was mapped for.
+	// Queues, into pendingCubeSlotRenders, every cube slot whose cached capture
+	// a MOVING occluder has just invalidated -- the other half of the staleness
+	// question the lastRenderedOccupant diff answers (see movingOccluders'
+	// member comment for why the cache alone is not enough now that the sun is
+	// gone from lights.json).
 	//
-	// Blocking (vkQueueWaitIdle inside endSingleTimeCommands()) is fine here:
-	// this only runs on the rare frame something actually changed, not on
-	// the steady-state path, so the one-time stall costs far less than
-	// re-running all of these slots' draws unconditionally every frame would.
+	// A slot is queued when either:
+	//   - a mover within SHADOW_MOVER_RADIUS of its light moved since that
+	//     mover's last capture, so the map still records the old pose; or
+	//   - the slot had a mover in range last frame and has none now, so the map
+	//     records a ghost that has since walked out of the torch's reach.
+	// Everything else -- a slot with no mover near it, or with a mover standing
+	// perfectly still -- keeps its cached capture and costs a distance test.
+	//
+	// A slot found stale this way is marked in slotMoverStale and stays marked
+	// until it is actually re-rendered, because at most MOVER_SLOT_BUDGET of
+	// them are re-rendered per frame -- nearest the player first. Each one
+	// costs a six-face capture plus its share of a blocking submit, and a ghost
+	// standing between four torches would otherwise pay all four every frame
+	// for three shadows the player can barely resolve. The persistent mark is
+	// what makes the budget safe: a slot the budget skips is not forgotten, it
+	// is simply refreshed a frame or two later, whereas dropping it here would
+	// leave it frozen for good the moment the ghost stopped moving.
+	//
+	// Called from updateUniformBuffer() right after the occupant diff, i.e.
+	// after GameLogic() has moved the ghosts and the doors for this frame and
+	// after updateDynamicShadowSlots() has settled torchLightPos[].
+	void queueMoverCubeSlotRenders(const glm::vec3 &eyePos) {
+		if(!moverListBuilt) {
+			for(const Ghost &g : ghosts) {
+				if(g.inst != nullptr) {
+					movingOccluders.push_back(g.inst);
+				}
+			}
+			for(const Door &d : doors) {
+				if(d.inst != nullptr) {
+					movingOccluders.push_back(d.inst);
+				}
+			}
+			// Not identity: a mover whose authored pose IS the identity would
+			// otherwise read as "hasn't moved" on the first frame and never get
+			// its first capture. A zero matrix is a pose nothing can have.
+			movingOccluderWm.assign(movingOccluders.size(), glm::mat4(0.0f));
+			moverListBuilt = true;
+		}
+
+		// Whether a mover is in range of slot t at all this frame, and whether
+		// one of those in range actually moved. Both per slot, since a mover is
+		// typically near one torch and irrelevant to every other.
+		std::array<bool, NUM_SHADOW_CUBES> nearNow{};
+		std::array<bool, NUM_SHADOW_CUBES> staleNow{};
+
+		for(size_t m = 0; m < movingOccluders.size(); m++) {
+			const glm::mat4 &wm = movingOccluders[m]->Wm;
+			const bool moved = (wm != movingOccluderWm[m]);
+			// Movers the player is nowhere near don't get their shadows
+			// tracked at all. Without this, three ghosts patrolling three
+			// corners of the level keep three sets of torch slots re-capturing
+			// forever, for shadows in rooms nobody is standing in -- which is
+			// the whole per-frame cost of this feature, paid for nothing. The
+			// frame a mover crosses out of range its slots go through the
+			// "had a mover, has none now" branch below, so it takes its stale
+			// shadow with it instead of leaving it painted on the floor.
+			if(glm::distance(glm::vec3(wm[3]), eyePos) > MOVER_PLAYER_CULL_DIST) {
+				movingOccluderWm[m] = wm;
+				continue;
+			}
+			// The translation column: for a ghost that's its feet-to-head axis
+			// origin, for a door leaf its hinge -- close enough either way at
+			// SHADOW_MOVER_RADIUS's scale, and it costs no matrix work.
+			const glm::vec3 p = glm::vec3(wm[3]);
+			for(int t = 0; t < HAND_TORCH_SHADOW_INDEX; t++) {
+				const bool occupied = (t < dynamicShadowSlotBase) || (dynamicSlotOccupant[t] != -1);
+				if(!occupied) {
+					continue;
+				}
+				if(glm::distance(p, torchLightPos[t]) > SHADOW_MOVER_RADIUS) {
+					continue;
+				}
+				nearNow[t] = true;
+				if(moved) {
+					staleNow[t] = true;
+				}
+			}
+			movingOccluderWm[m] = wm;
+		}
+
+		for(int t = 0; t < HAND_TORCH_SHADOW_INDEX; t++) {
+			if(staleNow[t] || (slotHadMover[t] && !nearNow[t])) {
+				slotMoverStale[t] = true;
+			}
+			slotHadMover[t] = nearNow[t];
+		}
+
+		// Spend the frame's budget on the stale slots nearest the player: a
+		// selection sort's worth of work over at most NUM_SHADOW_CUBES entries,
+		// which is not worth building a sorted list for.
+		for(int spent = 0; spent < MOVER_SLOT_BUDGET; spent++) {
+			int best = -1;
+			float bestDist = 0.0f;
+			for(int t = 0; t < HAND_TORCH_SHADOW_INDEX; t++) {
+				if(!slotMoverStale[t]) {
+					continue;
+				}
+				const float d = glm::distance(eyePos, torchLightPos[t]);
+				if(best == -1 || d < bestDist) {
+					best = t;
+					bestDist = d;
+				}
+			}
+			if(best == -1) {
+				break;
+			}
+			slotMoverStale[best] = false;
+			// The occupant diff may have queued this same slot already
+			// (startup, or a reassignment on this very frame); rendering it
+			// twice in one submit is only wasted work, never wrong, but the
+			// list is a handful of ints so the check is cheaper than the six
+			// render passes.
+			if(std::find(pendingCubeSlotRenders.begin(), pendingCubeSlotRenders.end(), best)
+			   == pendingCubeSlotRenders.end()) {
+				pendingCubeSlotRenders.push_back(best);
+			}
+		}
+	}
+
+	// Renders exactly the cube slots found stale this frame -- by the
+	// lastRenderedOccupant diff (a slot that changed hands) or by
+	// queueMoverCubeSlotRenders() (a slot with a ghost or a door moving in it)
+	// -- via ONE beginSingleTimeCommands() buffer: a direct submit-and-wait on
+	// the graphics queue, not the recurring "main" NamedCommandBuffer,
+	// precisely so WHICH slots it covers can be decided per frame instead of
+	// being baked into a buffer that replays unchanged forever. Called after
+	// DSshadowCube[t].map(currentImage, ...) has already written this frame's
+	// matrices/position for every slot in `slots`, so PShadowCube's set 1 reads
+	// correct data despite this being a separate command buffer from the one
+	// DSshadowCube was mapped for.
+	//
+	// Blocking (vkQueueWaitIdle inside endSingleTimeCommands()) is what this
+	// costs. It was free while the only trigger was a reassignment; a ghost
+	// patrolling past a torch now pays it every frame for as long as it's
+	// within SHADOW_MOVER_RADIUS. That's still a couple of slots' worth of
+	// draws rather than every slot's, which is what the caching was worth in
+	// the first place -- and a ghost whose shadow doesn't move isn't a shadow.
 	void renderCubeSlotsOnce(const std::vector<int> &slots, int currentImage) {
 		if(slots.empty()) {
 			return;
@@ -3891,7 +4183,10 @@ class Skeleton26ReplaceName : public BaseProject {
 			if(t >= dynamicShadowSlotBase && dynamicSlotOccupant[t] != -1) {
 				ownerInst = torchFlames[dynamicSlotOccupant[t]].inst;
 			}
-			recordCubeSlotFaces(commandBuffer, currentImage, t, slotOccupied, ownerInst);
+			// Culling on: this buffer is submitted on the frame it's recorded,
+			// so "what this face can see" is decided from where the light and
+			// the occluders actually are right now. See recordCubeSlotFaces().
+			recordCubeSlotFaces(commandBuffer, currentImage, t, slotOccupied, ownerInst, true);
 		}
 		endSingleTimeCommands(commandBuffer);
 	}
@@ -4377,6 +4672,13 @@ class Skeleton26ReplaceName : public BaseProject {
 				lastRenderedOccupant[t] = dynamicSlotOccupant[t];
 			}
 		}
+
+		// The diff above only sees a slot whose LIGHT changed. This adds the
+		// slots whose light stayed put while a ghost (or a swinging door) moved
+		// inside it -- without it those movers cast a shadow frozen at the pose
+		// the slot was captured in, which is what happened to the ghosts the
+		// moment lights.json lost its sun. See queueMoverCubeSlotRenders().
+		queueMoverCubeSlotRenders(eyePos);
 
 		// The cylindrical billboard basis every flame uses this frame, taken
 		// from the CAMERA's own right axis rather than from each flame's
