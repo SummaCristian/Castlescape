@@ -104,13 +104,23 @@ TEXTURES = os.path.join(HERE, "..", "skeleton", "source", "assets", "textures", 
 # I pezzi da trattare, con le direzioni in cui sta la stanza. SM_WallDoor_01 non
 # e' in scene.json (per il vano si usa SM_WallDoor_Hole_01) e non si tocca.
 PIECES = [
-    ("SM_WallStraight_01", "SM_WallStraight_02", "SM_WallStraight_01", [(0, -1)]),
-    ("SM_WallCorner_01", "SM_WallCorner_02", "SM_WallCorner_01", [(0, -1), (2, -1)]),
-    ("SM_WallDoor_Hole_01", "SM_WallDoor_Hole_02", "SM_WallDoor_Hole_01", [(0, -1)]),
+    ("SM_WallStraight_01", "SM_WallStraight_02", "SM_WallStraight_01", [(0, -1)], []),
+    ("SM_WallCorner_01", "SM_WallCorner_02", "SM_WallCorner_01", [(0, -1), (2, -1)], []),
+    ("SM_WallDoor_Hole_01", "SM_WallDoor_Hole_02", "SM_WallDoor_Hole_01", [(0, -1)], []),
+    # Il soffitto guarda in giu': la "stanza" sta sotto. Le travi del cassettone
+    # sono gia' geometria (le ha fatte make_ceiling.py), il fondo fra loro no.
+    # L'intradosso delle travi, a y=0, si lascia stare: la texture ci porta sopra
+    # gli stessi mattoni -- e' l'atlante, non una scelta -- ma una trave non e'
+    # muratura, e la fascia e' larga 65 cm contro conci da un metro, cosi' se ne
+    # alzavano quattro sparsi e le travi sembravano sbriciolate. Non c'e' un
+    # criterio automatico onesto per distinguerlo, quindi sta scritto qui.
+    ("SM_StoneCeiling_01", "SM_StoneCeiling_02", "SM_StoneCeiling_01", [(1, -1)],
+     [(1, -1, 0.0)]),
 ]
 
 MIN_AREA = 8.0       # sotto questa un piano non e' un campo di conci
 MIN_BLOCKS = 12      # ...e se non ci si misura una griglia, non lo era
+MIN_PIECE = 0.05     # sotto questo un frammento di concio non e' un concio
 
 DEPTH = 0.022        # quanto sta dietro il piano della malta
 CHAMFER = 0.019      # rientro dello smusso del concio
@@ -167,40 +177,56 @@ class NotAField(Exception):
 class Face(object):
     """Una faccia a vista, con il suo sistema locale e la sua griglia.
 
-    (X, Y) sono metri sulla faccia, X lungo il muro e Y verso l'alto; h e'
-    quanto si sta dietro il filo, sempre >= 0. Tutto il rilievo si costruisce
-    qui dentro e torna in coordinate di mondo solo alla fine, cosi' lo stesso
-    codice vale per il campo del muro dritto, per le due facce del pezzo
-    d'angolo -- che guardano in direzioni diverse e sono piu' corte -- e per il
-    fondo della nicchia, che sta su un altro piano e su un altro quadrante.
+    (X, Y) sono metri sulla faccia: X corre LUNGO i corsi, Y li ATTRAVERSA. Su
+    una parete questo vuol dire X orizzontale e Y in altezza, ed e' l'unica
+    lettura possibile perche' i corsi li ha livellati il muratore. Su una faccia
+    orizzontale -- il fondo del cassettone del soffitto -- non c'e' nessuna
+    gravita' nel piano a dirlo, e quale dei due assi porti i corsi lo decide la
+    misura sulla texture: vedi `flip` e find_faces.
+
+    h e' quanto si sta dietro il filo, sempre >= 0. Tutto il rilievo si
+    costruisce qui dentro e torna in coordinate di mondo solo alla fine, cosi'
+    lo stesso codice vale per il campo del muro dritto, per le due facce del
+    pezzo d'angolo -- che guardano in direzioni diverse e sono piu' corte -- per
+    il fondo della nicchia, che sta su un altro piano e su un altro quadrante, e
+    per il soffitto, che guarda in giu'.
     """
 
-    def __init__(self, axis, sign, plane, tris, pos, uv, image):
+    def __init__(self, axis, sign, plane, tris, pos, uv, image, flip=False):
         self.axis, self.sign, self.plane, self.tris = axis, sign, plane, tris
         self.normal = np.zeros(3)
         self.normal[axis] = sign
-        self.wax = [i for i in (0, 1, 2) if i not in (axis, 1)][0]   # asse lungo il muro
+        rest = [i for i in (0, 1, 2) if i != axis]
+        if axis == 1:                       # faccia orizzontale: nessun "alto"
+            self.xax, self.yax = (rest[1], rest[0]) if flip else (rest[0], rest[1])
+        else:                               # faccia verticale: i corsi sono livellati
+            self.xax = [i for i in rest if i != 1][0]
+            self.yax = 1
         p = pos[tris.reshape(-1)]
         q = uv[tris.reshape(-1)]
 
-        # uv = A @ (X, Y) + b, con X lungo il muro e Y in altezza. L'atlante e'
-        # allineato alla faccia, quindi A e' diagonale o antidiagonale: lo si
-        # verifica invece di darlo per buono, perche' tutto il resto ci conta.
-        M = np.column_stack([p[:, self.wax], p[:, 1], np.ones(len(p))])
+        # uv = A @ (X, Y) + b. L'atlante e' allineato alla faccia, quindi A e'
+        # diagonale o antidiagonale: lo si verifica invece di darlo per buono,
+        # perche' tutto il resto ci conta.
+        M = np.column_stack([p[:, self.xax], p[:, self.yax], np.ones(len(p))])
         A, *_ = np.linalg.lstsq(M, q, rcond=None)
         # Tolleranza di un texel e mezzo, non zero: sul pannello del vano della
         # porta c'e' un vertice spostato di 13 mm a cui non hanno aggiornato le
         # UV, e a tolleranza stretta l'intero pannello veniva scartato e restava
         # piatto. Sotto il texel non serve piu' precisione di cosi': la griglia
         # la misuriamo in texel comunque.
-        if not np.allclose(M @ A, q, atol=1.5 / G.ATLAS):
+        # Il lato dell'atlante si legge dall'immagine e non si scrive a mano: le
+        # texture dei muri sono 1024, quella del soffitto 512, e con un numero
+        # fisso la griglia misurata finirebbe al doppio della scala giusta.
+        self.atlas = np.array([image.shape[1], image.shape[0]], float)
+        if not np.allclose(M @ A, q, atol=1.5 / self.atlas.min()):
             raise NotAField("le UV non sono affini")
         # L'altezza deve muovere un asse dell'atlante e la larghezza l'altro:
         # se l'atlante fosse storto rispetto alla faccia, le fughe scavate non
         # cadrebbero su quelle dipinte. Il confronto e' RELATIVO -- lo storto si
         # misura in frazione della scala, non in unita' UV -- perche' con una
         # soglia assoluta bastava un vertice fuori posto per scartare la faccia.
-        self.h_uv = 0 if abs(A[1, 0]) > abs(A[1, 1]) else 1   # asse uv dell'altezza
+        self.h_uv = 0 if abs(A[1, 0]) > abs(A[1, 1]) else 1   # asse uv di Y
         self.w_uv = 1 - self.h_uv
         skew = max(abs(A[1, self.w_uv]) / abs(A[1, self.h_uv]),
                    abs(A[0, self.h_uv]) / max(abs(A[0, self.w_uv]), 1e-12))
@@ -211,26 +237,29 @@ class Face(object):
         # Il ritaglio del quadrante, e la maschera di cosa appartiene davvero
         # alla faccia: il rettangolo UV di un campo contiene anche il vano
         # dell'arcata, che e' nero e senza maschera si mangia la misura.
-        self.t0 = np.floor(q.min(0) * G.ATLAS).astype(int)
-        self.t1 = np.ceil(q.max(0) * G.ATLAS).astype(int)
+        self.t0 = np.floor(q.min(0) * self.atlas).astype(int)
+        self.t1 = np.ceil(q.max(0) * self.atlas).astype(int)
         crop = image[self.t0[1]:self.t1[1], self.t0[0]:self.t1[0]]
         mask = self._mask(q, crop.shape)
-        # righe = v, colonne = u: h_uv==0 vuol dire che l'altezza corre sulle colonne
+        # righe = v, colonne = u: h_uv==0 vuol dire che Y corre sulle colonne
         bed, heads = G.measure(crop, mask, 1 if self.h_uv == 0 else 0)
         self.cells = G.courses(bed, heads, self._crop_shape())
+        self.nbed = len(bed)
 
         # scala texel -> metri sui due assi, e il verso: la mappa e' allineata,
         # quindi ogni asse del ritaglio dipende da una coordinata sola e si
         # inverte da solo. Il verso puo' essere negativo -- sul campo esterno u
         # cresce verso il BASSO -- e non e' lo stesso su tutte le facce, quindi
         # non si assume: si legge dal segno del coefficiente.
-        self.mh = abs(1.0 / (A[1, self.h_uv] * G.ATLAS))
-        self.mw = abs(1.0 / (A[0, self.w_uv] * G.ATLAS))
+        self.mh = abs(1.0 / (A[1, self.h_uv] * self.atlas[self.h_uv]))
+        self.mw = abs(1.0 / (A[0, self.w_uv] * self.atlas[self.w_uv]))
         self.fh = 1.0 if A[1, self.h_uv] > 0 else -1.0
         self.fw = 1.0 if A[0, self.w_uv] > 0 else -1.0
         lo, hi = p.min(0), p.max(0)
-        self.W, self.H = hi[self.wax] - lo[self.wax], hi[1] - lo[1]
-        self.poly = np.stack([p[:, self.wax], p[:, 1]], 1).reshape(-1, 3, 2)
+        self.X0, self.Y0 = lo[self.xax], lo[self.yax]
+        self.W = hi[self.xax] - lo[self.xax]
+        self.H = hi[self.yax] - lo[self.yax]
+        self.poly = np.stack([p[:, self.xax], p[:, self.yax]], 1).reshape(-1, 3, 2)
 
     def _crop_shape(self):
         n = self.t1 - self.t0                       # (u, v)
@@ -239,7 +268,7 @@ class Face(object):
     def _mask(self, q, shape):
         """I texel coperti dai triangoli della faccia."""
         m = np.zeros(shape, bool)
-        t = q.reshape(-1, 3, 2) * G.ATLAS - self.t0
+        t = q.reshape(-1, 3, 2) * self.atlas - self.t0
         yy, xx = np.mgrid[0:shape[0], 0:shape[1]]
         px, py = xx + 0.5, yy + 0.5
         for a, b, c in t:
@@ -252,20 +281,20 @@ class Face(object):
         return m
 
     def Y(self, ch):
-        """Texel del ritaglio lungo l'altezza -> metri."""
-        return (((self.t0[self.h_uv] + ch) / float(G.ATLAS) - self.b[self.h_uv])
+        """Texel del ritaglio attraverso i corsi -> metri."""
+        return (((self.t0[self.h_uv] + ch) / self.atlas[self.h_uv] - self.b[self.h_uv])
                 / self.A[1, self.h_uv])
 
     def X(self, cw):
-        """Texel del ritaglio lungo il muro -> metri."""
-        return (((self.t0[self.w_uv] + cw) / float(G.ATLAS) - self.b[self.w_uv])
+        """Texel del ritaglio lungo i corsi -> metri."""
+        return (((self.t0[self.w_uv] + cw) / self.atlas[self.w_uv] - self.b[self.w_uv])
                 / self.A[0, self.w_uv])
 
     def world(self, X, Y, h):
         out = np.empty(3)
         out[self.axis] = self.plane - self.sign * h     # h e' quanto si sta DIETRO
-        out[self.wax] = X
-        out[1] = Y
+        out[self.xax] = X
+        out[self.yax] = Y
         return out
 
     def uv(self, X, Y):
@@ -285,9 +314,23 @@ class Face(object):
     def blocks(self):
         """I conci in metri: (k, i, x0, x1, y0, y1, semifughe, chiavi, ultimo)."""
         out = []
+        # Il ritaglio del quadrante e' arrotondato al texel, quindi la griglia
+        # sborda della frazione di texel che avanza: sul fondo del cassettone
+        # erano 3 mm, e bastavano a far cadere FUORI dal pannello tutti i conci
+        # del bordo, che percio' non si alzavano -- restava un telaio piatto
+        # intorno a una toppa di conci. Si aggancia all'ingombro della faccia:
+        # un campo non puo' andare oltre se stesso, e sotto il texel non c'e'
+        # niente di misurato da rispettare.
+        lox, hix = self.X0, self.X0 + self.W
+        loy, hiy = self.Y0, self.Y0 + self.H
+        clamp = lambda v, a, b: min(max(v, a), b)
         for k, i, h0, h1, w0, w1, half, key in self.cells:
             y0, y1 = sorted((self.Y(h0), self.Y(h1)))
             x0, x1 = sorted((self.X(w0), self.X(w1)))
+            x0, x1 = clamp(x0, lox, hix), clamp(x1, lox, hix)
+            y0, y1 = clamp(y0, loy, hiy), clamp(y1, loy, hiy)
+            if x1 - x0 < 1e-4 or y1 - y0 < 1e-4:
+                continue
             hw0, hw1, hh0, hh1 = half
             if self.fw < 0:
                 hw0, hw1 = hw1, hw0
@@ -302,6 +345,7 @@ class Face(object):
             out.append((k, i, x0, x1, y0, y1,
                         (hw0 * self.mw, hw1 * self.mw, hh0 * self.mh, hh1 * self.mh),
                         (kw0, kw1, kh0, kh1), last))
+
         return out
 
 
@@ -430,16 +474,29 @@ def relief(f):
     """La faccia a vista, scavata. Restituisce i poligoni (punti di mondo, uv)
     gia' orientati verso la stanza, piu' due contatori per il resoconto."""
     out, border = [], {}
-    thin, raised, total = f.W, 0, 0
+    thin, raised = f.W, 0
 
+    # Prima il contorno di tutti i conci, poi si alzano: serve la passata in
+    # piu' perche' un concio troppo stretto va scartato INSIEME alla sua altra
+    # meta', che sta dall'altro capo della piastrella e si incontra dopo.
+    plan = []
     for k, i, x0, x1, y0, y1, half, key, last in f.blocks():
-        total += 1
-        # le due meta' del concio tagliato dal bordo devono arretrare uguale, o
-        # al confine fra due muri si apre uno scalino: la chiave e' del concio
-        # intero, non della meta'
-        bkey = (k, 0 if i == last else i)
-        depth = recess(bkey, f, y0, y1)
         loop = outline(f, x0, x1, y0, y1, half, key)
+        w = max(p[0] for p in loop) - min(p[0] for p in loop)
+        h = max(p[1] for p in loop) - min(p[1] for p in loop)
+        plan.append((k, i, x0, x1, y0, y1, key, last, loop, min(w, h)))
+    # Le due meta' del concio tagliato dal bordo devono comportarsi uguale --
+    # arretrare uguale e, se sono schegge, sparire tutt'e due: buttarne via una
+    # sola lascerebbe uno scalino sul giunto fra due muri affiancati.
+    tiny = set((k, 0 if i == last else i)
+               for k, i, _, _, _, _, _, last, _, s in plan if s < MIN_PIECE)
+    total = len(plan)
+
+    for k, i, x0, x1, y0, y1, key, last, loop, _ in plan:
+        bkey = (k, 0 if i == last else i)
+        if bkey in tiny:
+            continue
+        depth = recess(bkey, f, y0, y1)
         # Un concio che sporge dal poligono della faccia non si alza: intorno
         # all'arcata resta la malta piana, che li' e' coperta dalla ghiera.
         if not all(f.inside(x, y) for x, y, _, _ in loop):
@@ -488,12 +545,74 @@ def relief(f):
     return out, thin, raised, total, front
 
 
-def poly(f, pts):
+def poly(f, pts, want=None):
     ws = [f.world(x, y, h) for x, y, h in pts]
     uvs = [f.uv(x, y) for x, y, _ in pts]
-    if float(np.dot(newell(ws), f.normal)) < 0:
+    if float(np.dot(newell(ws), f.normal if want is None else want)) < 0:
         ws, uvs = ws[::-1], uvs[::-1]
     return ws, uvs
+
+
+def rim(f, box):
+    """Il raccordo con cui la malta risale a filo sul bordo interno del campo.
+
+    Arretrando la malta di 22 mm il campo si stacca da quello che gli sta
+    intorno. Sul pezzo d'angolo questo apriva un buco vero, e vale la pena
+    scriverlo perche' non e' ovvio: le due facce a vista si toccano sullo
+    spigolo concavo, e arretrandole tutt'e due resta in piedi un pilastrino di
+    22x22 mm per tutta l'altezza. Le sue due facce laterali prima erano dentro
+    la muratura e nessuno le aveva modellate; adesso danno sull'incavo, che e'
+    aperto verso la stanza, e da dentro si vede fuori.
+
+    Tapparle sarebbe una pezza. La cosa giusta e' non scavare fino al bordo:
+    negli ultimi 22 mm la malta risale in rampa fino al filo, quindi l'incavo si
+    chiude da solo e le due facce tornano a incontrarsi sullo spigolo esattamente
+    dov'erano prima. Il pilastrino non esiste piu' perche' non c'e' piu' niente
+    da cui sporgere. E' anche giusto di suo: la malta contro la ghiera
+    dell'arcata o contro lo spigolo fa cordolo, non taglio netto.
+
+    Non su tutti i bordi pero': dove il campo arriva all'ingombro del pezzo, di
+    la' c'e' la piastrella accanto con la sua malta alla stessa quota, e una
+    rampa li' sarebbe un cordolo di 22 mm in mezzo alla parete, ripetuto ogni
+    7.2 m. Percio' si guarda l'ingombro: bordo sull'ingombro, niente rampa;
+    bordo interno -- lo spigolo concavo dell'angolo, il giro dell'arcata, il
+    perimetro del fondo della nicchia -- rampa.
+    """
+    count, apex = {}, {}
+    for tri in f.poly:                      # (X, Y) dei tre vertici, nel piano
+        pts = [(round(x, 6), round(y, 6)) for x, y in tri]
+        for i in range(3):
+            a, b = pts[i], pts[(i + 1) % 3]
+            e = (a, b) if a <= b else (b, a)
+            count[e] = count.get(e, 0) + 1
+            apex.setdefault(e, pts[(i + 2) % 3])
+
+    lo, hi = box
+    onbox = lambda v, i: abs(v - lo[i]) < 1e-4 or abs(v - hi[i]) < 1e-4
+    out = []
+    for ((ax, ay), (bx, by)), n in count.items():
+        if n != 1:
+            continue
+        if (ax == bx and onbox(ax, f.xax)) or (ay == by and onbox(ay, f.yax)):
+            continue                        # e' il bordo della piastrella
+        cx, cy = apex[((ax, ay), (bx, by))]
+        # normale del bordo che punta FUORI dal campo, nel piano: la rampa
+        # scende verso l'interno, quindi si va nel verso opposto
+        ox, oy = ay - by, bx - ax
+        if ox * (cx - ax) + oy * (cy - ay) > 0:
+            ox, oy = -ox, -oy
+        d = math.hypot(ox, oy) or 1.0
+        ox, oy = ox * DEPTH / d, oy * DEPTH / d
+        # a filo sul bordo, al fondo della malta 22 mm piu' dentro. Se i due
+        # punti di dentro non cadono nel campo la rampa si salta: succede sui
+        # triangoli a scheggia del contorno frastagliato del pezzo del vano,
+        # dove il terzo vertice e' quasi allineato al lato e non dice piu' da
+        # che parte sia il dentro. Meglio un bordo netto che una rampa a caso.
+        if not (f.inside(ax - ox, ay - oy) and f.inside(bx - ox, by - oy)):
+            continue
+        out.append(poly(f, [(ax, ay, 0.0), (bx, by, 0.0),
+                            (bx - ox, by - oy, DEPTH), (ax - ox, ay - oy, DEPTH)]))
+    return out
 
 
 def area(f, pts):
@@ -510,7 +629,7 @@ def newell(vs):
     return n
 
 
-def find_faces(pos, uv, idx, image, rooms):
+def find_faces(pos, uv, idx, image, rooms, skip=()):
     """I campi di conci: i triangoli complanari con la normale verso la stanza,
     abbastanza grandi, su cui wall_grid riesce a misurare una griglia.
 
@@ -535,15 +654,31 @@ def find_faces(pos, uv, idx, image, rooms):
 
     out = []
     for (ax, sg, plane), group in sorted(groups.items()):
+        if any(a == ax and s == sg and abs(v - plane) < 1e-4 for a, s, v in skip):
+            continue
         for ts in components(group, idx):
             if float(L[ts].sum()) / 2.0 < MIN_AREA:
                 continue
-            try:
-                f = Face(ax, sg, plane, idx[ts], pos, uv, image)
-            except NotAField:
+            # Su una faccia verticale i corsi sono livellati e non c'e' niente
+            # da scegliere. Su una orizzontale -- il fondo del cassettone del
+            # soffitto -- si prova nei due versi e vince quello che trova piu'
+            # fughe passanti: le fughe di letto attraversano la faccia da parte
+            # a parte e nel profilo mediato restano, quelle di testa sono
+            # sfalsate da un corso all'altro e mediandole si cancellano. Quale
+            # dei due assi porti i corsi lo dice il disegno, non noi.
+            best = None
+            for flip in ((False, True) if ax == 1 else (False,)):
+                try:
+                    f = Face(ax, sg, plane, idx[ts], pos, uv, image, flip)
+                except NotAField:
+                    continue
+                if len(f.cells) < MIN_BLOCKS:
+                    continue                # non e' un campo di conci: e' un taglio
+                if best is None or f.nbed > best.nbed:
+                    best = f
+            if best is None:
                 continue
-            if len(f.cells) < MIN_BLOCKS:
-                continue                    # non e' un campo di conci: e' un taglio
+            f = best
             f.members = set(ts)
             out.append(f)
     return out
@@ -579,7 +714,7 @@ def components(ts, idx):
     return list(out.values())
 
 
-def carve(src, dst, tex, rooms):
+def carve(src, dst, tex, rooms, skip):
     a = Asset(os.path.join(MODELS, src + ".gltf"))
     p = a.json["meshes"][0]["primitives"][0]
     pos = a.read_accessor(p["attributes"]["POSITION"]).astype(np.float64)
@@ -589,7 +724,7 @@ def carve(src, dst, tex, rooms):
 
     img = np.asarray(Image.open(os.path.join(TEXTURES, tex + ".png")).convert("RGB"))
     lum = img @ np.array([0.2126, 0.7152, 0.0722])
-    faces = find_faces(pos, uv, idx, lum, rooms)
+    faces = find_faces(pos, uv, idx, lum, rooms, skip)
     assert faces, "nessun campo di conci trovato in " + src
     print("%s: %d camp%s di conci" % (src, len(faces), "o" if len(faces) == 1 else "i"))
 
@@ -611,7 +746,9 @@ def carve(src, dst, tex, rooms):
     P = [pos[idx[t]] for t in keep]
     N = [nrm[idx[t]] for t in keep]
     T = [uv[idx[t]] for t in keep]
+    box = (pos.min(0), pos.max(0))
     for f in faces:
+        polys += rim(f, box)
         for t in f.tris:
             q = pos[t].copy()
             q[:, f.axis] -= f.sign * DEPTH
@@ -620,7 +757,14 @@ def carve(src, dst, tex, rooms):
         n = newell(ws)
         n = n / max(np.linalg.norm(n), 1e-12)
         for j in range(1, len(ws) - 1):        # ventaglio: i poligoni sono convessi
-            P.append(np.array([ws[0], ws[j], ws[j + 1]]))
+            tri = np.array([ws[0], ws[j], ws[j + 1]])
+            # I triangoli di area nulla non si scrivono. Non disegnano niente ma
+            # la loro normale e' spazzatura, e basta uno sullo spigolo per far
+            # credere -- a un ray-cast come a un algoritmo di occlusione -- che
+            # li' ci sia una superficie che invece non c'e'.
+            if np.linalg.norm(np.cross(tri[1] - tri[0], tri[2] - tri[0])) < 1e-9:
+                continue
+            P.append(tri)
             N.append(np.array([n, n, n]))
             T.append(np.array([uvs[0], uvs[j], uvs[j + 1]]))
 
@@ -651,9 +795,9 @@ def check(P, ind, src_pos, faces, thinnest):
 
 
 def main():
-    for src, dst, tex, rooms in PIECES:
-        carve(src, dst, tex, rooms)
-    print("\nora aggiorna scene.json: %s" % ", ".join(d for _, d, _, _ in PIECES))
+    for src, dst, tex, rooms, skip in PIECES:
+        carve(src, dst, tex, rooms, skip)
+    print("\nora aggiorna scene.json: %s" % ", ".join(p[1] for p in PIECES))
 
 
 if __name__ == "__main__":

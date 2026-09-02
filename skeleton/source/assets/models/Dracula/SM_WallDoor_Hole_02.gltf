@@ -36,32 +36,32 @@
  "buffers": [
   {
    "uri": "SM_WallDoor_Hole_02.bin",
-   "byteLength": 314704
+   "byteLength": 318956
   }
  ],
  "bufferViews": [
   {
    "buffer": 0,
    "byteOffset": 0,
-   "byteLength": 90276,
+   "byteLength": 91632,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 90276,
-   "byteLength": 90276,
+   "byteOffset": 91632,
+   "byteLength": 91632,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 180552,
-   "byteLength": 60184,
+   "byteOffset": 183264,
+   "byteLength": 61088,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 240736,
-   "byteLength": 73968,
+   "byteOffset": 244352,
+   "byteLength": 74604,
    "target": 34963
   }
  ],
@@ -70,7 +70,7 @@
    "bufferView": 0,
    "byteOffset": 0,
    "componentType": 5126,
-   "count": 7523,
+   "count": 7636,
    "type": "VEC3",
    "min": [
     -1.2421382665634155,
@@ -87,21 +87,21 @@
    "bufferView": 1,
    "byteOffset": 0,
    "componentType": 5126,
-   "count": 7523,
+   "count": 7636,
    "type": "VEC3"
   },
   {
    "bufferView": 2,
    "byteOffset": 0,
    "componentType": 5126,
-   "count": 7523,
+   "count": 7636,
    "type": "VEC2"
   },
   {
    "bufferView": 3,
    "byteOffset": 0,
    "componentType": 5125,
-   "count": 18492,
+   "count": 18651,
    "type": "SCALAR"
   }
  ]

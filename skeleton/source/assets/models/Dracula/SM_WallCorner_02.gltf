@@ -36,32 +36,32 @@
  "buffers": [
   {
    "uri": "SM_WallCorner_02.bin",
-   "byteLength": 409524
+   "byteLength": 454616
   }
  ],
  "bufferViews": [
   {
    "buffer": 0,
    "byteOffset": 0,
-   "byteLength": 121284,
+   "byteLength": 135696,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 121284,
-   "byteLength": 121284,
+   "byteOffset": 135696,
+   "byteLength": 135696,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 242568,
-   "byteLength": 80856,
+   "byteOffset": 271392,
+   "byteLength": 90464,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 323424,
-   "byteLength": 86100,
+   "byteOffset": 361856,
+   "byteLength": 92760,
    "target": 34963
   }
  ],
@@ -70,7 +70,7 @@
    "bufferView": 0,
    "byteOffset": 0,
    "componentType": 5126,
-   "count": 10107,
+   "count": 11308,
    "type": "VEC3",
    "min": [
     -7.200000286102295,
@@ -87,21 +87,21 @@
    "bufferView": 1,
    "byteOffset": 0,
    "componentType": 5126,
-   "count": 10107,
+   "count": 11308,
    "type": "VEC3"
   },
   {
    "bufferView": 2,
    "byteOffset": 0,
    "componentType": 5126,
-   "count": 10107,
+   "count": 11308,
    "type": "VEC2"
   },
   {
    "bufferView": 3,
    "byteOffset": 0,
    "componentType": 5125,
-   "count": 21525,
+   "count": 23190,
    "type": "SCALAR"
   }
  ]

@@ -13,13 +13,13 @@
  ],
  "nodes": [
   {
-   "name": "SM_WallStraight_02",
+   "name": "SM_StoneCeiling_02",
    "mesh": 0
   }
  ],
  "meshes": [
   {
-   "name": "SM_WallStraight_02",
+   "name": "SM_StoneCeiling_02",
    "primitives": [
     {
      "attributes": {
@@ -35,33 +35,33 @@
  ],
  "buffers": [
   {
-   "uri": "SM_WallStraight_02.bin",
-   "byteLength": 267920
+   "uri": "SM_StoneCeiling_02.bin",
+   "byteLength": 115872
   }
  ],
  "bufferViews": [
   {
    "buffer": 0,
    "byteOffset": 0,
-   "byteLength": 80328,
+   "byteLength": 37296,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 80328,
-   "byteLength": 80328,
+   "byteOffset": 37296,
+   "byteLength": 37296,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 160656,
-   "byteLength": 53552,
+   "byteOffset": 74592,
+   "byteLength": 24864,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 214208,
-   "byteLength": 53712,
+   "byteOffset": 99456,
+   "byteLength": 16416,
    "target": 34963
   }
  ],
@@ -70,38 +70,38 @@
    "bufferView": 0,
    "byteOffset": 0,
    "componentType": 5126,
-   "count": 6694,
+   "count": 3108,
    "type": "VEC3",
    "min": [
-    -1.2421382665634155,
-    -3.6887847443267674e-08,
+    -7.199999809265137,
+    0.0,
     0.0
    ],
    "max": [
-    6.882660841256438e-08,
-    6.1929521560668945,
-    7.200000286102295
+    0.0,
+    0.550000011920929,
+    7.199999809265137
    ]
   },
   {
    "bufferView": 1,
    "byteOffset": 0,
    "componentType": 5126,
-   "count": 6694,
+   "count": 3108,
    "type": "VEC3"
   },
   {
    "bufferView": 2,
    "byteOffset": 0,
    "componentType": 5126,
-   "count": 6694,
+   "count": 3108,
    "type": "VEC2"
   },
   {
    "bufferView": 3,
    "byteOffset": 0,
    "componentType": 5125,
-   "count": 13428,
+   "count": 4104,
    "type": "SCALAR"
   }
  ]
