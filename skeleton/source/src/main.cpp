@@ -13,6 +13,7 @@
 #include "modules/Scene.hpp"
 #include "custom/UiQuad.hpp"
 #include "custom/CheatHud.hpp"
+#include "custom/PauseMenu.hpp"
 #include "custom/SceneColliders.hpp"
 #include "custom/SceneMaterials.hpp"
 #include "custom/SceneLights.hpp"
@@ -564,6 +565,16 @@ class Skeleton26ReplaceName : public BaseProject {
 
 	// Toggle-based pause menu for the cheats below, opened/closed with L.
 	CheatHud hud;
+
+	// Flat-colored quads: dim overlay + button backgrounds behind the actual
+	// pause menu's (ESC-triggered) text. Separate UiQuad instance/named
+	// command buffer from uiQuad/crosshair above, same reasoning as
+	// crosshair: independent, unrelated content.
+	UiQuad pauseQuad;
+	// The actual pause menu: dims the screen and freezes GameLogic() while
+	// open (see GameLogic()'s overlayOpen() gating). ESC toggles it; see
+	// updateUniformBuffer().
+	PauseMenu pauseMenu;
 
 	// Other application parameters
 	float Ar;	// Aspect ratio
@@ -1962,6 +1973,15 @@ class Skeleton26ReplaceName : public BaseProject {
 	RunState runState = RunState::Running;
 	bool restartKeyWasPressed = false;
 
+	// Edge-detection for the ESC key, which now opens/closes the pause menu
+	// instead of closing the window outright (see updateUniformBuffer()).
+	bool escKeyWasPressed = false;
+
+	// True whenever any modal overlay (cheat HUD or pause menu) is open.
+	// GameLogic() freezes camera/movement/physics/the hunt clock behind
+	// this, same as it always did for hud.isOpen() alone.
+	bool overlayOpen() const { return hud.isOpen() || pauseMenu.isOpen(); }
+
 	// Where the exit is and whether it's locked, both from gameplay.json's
 	// "exit" block. The box is world-space and axis-aligned: the player wins by
 	// standing inside it.
@@ -2214,6 +2234,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		txt.resizeScreen(w, h);
 		uiQuad.resizeScreen(w, h);
 		crosshair.resizeScreen(w, h);
+		pauseQuad.resizeScreen(w, h);
 		setCrosshairQuad();
 		// The collider visualizer owns a swapchain-attached render pass too
 		// (Colliders.hpp), and it was never being told about resizes -- its own
@@ -3515,6 +3536,9 @@ class Skeleton26ReplaceName : public BaseProject {
 		// over the same named command buffer
 		crosshair.init(this, windowWidth, windowHeight, 9002, "crosshair");
 		setCrosshairQuad();
+		// initializes the flat-quad dim overlay/button layer for the pause menu;
+		// distinct submitOrder/buffer name for the same reason as crosshair above
+		pauseQuad.init(this, windowWidth, windowHeight, 9003, "pause_quad");
 
 		// submits the main command buffer
 		submitCommandBuffer("main", 0, populateCommandBufferAccess, this);
@@ -3525,6 +3549,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		// Wires the cheat HUD to the actual cheat flags, so toggling a row
 		// in the menu flips the exact same bools GameLogic() reads.
 		hud.init(&txt, &uiQuad);
+		pauseMenu.init(&txt, &pauseQuad);
 		hud.addToggle("Collision", &cheats.collisionEnabled);
 		hud.addToggle("Show Coordinates", &cheats.showCoordinates);
 
@@ -4084,6 +4109,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		txt.pipelinesAndDescriptorSetsInit();
 		uiQuad.pipelinesAndDescriptorSetsInit();
 		crosshair.pipelinesAndDescriptorSetsInit();
+		pauseQuad.pipelinesAndDescriptorSetsInit();
 		// Same RP as the scene: the flame draws inside it, right after the
 		// scene geometry, so it shares the depth buffer instead of needing its
 		// own render pass the way UiQuad's 2D overlay does -- and so its
@@ -4125,6 +4151,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		txt.pipelinesAndDescriptorSetsCleanup();
 		uiQuad.pipelinesAndDescriptorSetsCleanup();
 		crosshair.pipelinesAndDescriptorSetsCleanup();
+		pauseQuad.pipelinesAndDescriptorSetsCleanup();
 		flame.pipelinesAndDescriptorSetsCleanup();
 		exitGlow.pipelinesAndDescriptorSetsCleanup();
 		debugLines.pipelinesAndDescriptorSetsCleanup();
@@ -4185,6 +4212,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		txt.localCleanup();
 		uiQuad.localCleanup();
 		crosshair.localCleanup();
+		pauseQuad.localCleanup();
 		flame.localCleanup();
 		exitGlow.localCleanup();
 		debugLines.localCleanup();
@@ -4301,13 +4329,34 @@ class Skeleton26ReplaceName : public BaseProject {
 		static bool debounce = false;
 		static int curDebounce = 0;
 
-		// handle the ESC key to exit the app
-		if(glfwGetKey(window, GLFW_KEY_ESCAPE)) {
-			glfwSetWindowShouldClose(window, GL_TRUE);
+		// ESC now opens/closes the pause menu instead of closing the window
+		// outright -- Quit is reached through the menu instead (see
+		// PauseMenu.hpp). Edge-triggered so holding ESC down doesn't reopen
+		// the menu the instant Resume closes it. Ignored while the cheat HUD
+		// is open: only one modal overlay at a time, and L already owns
+		// closing that one.
+		bool escPressed = glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS;
+		if(escPressed && !escKeyWasPressed && !hud.isOpen()) {
+			pauseMenu.setOpen(!pauseMenu.isOpen(), windowWidth, windowHeight);
 		}
+		escKeyWasPressed = escPressed;
 
 		// moves the view
 		float deltaT = GameLogic();
+
+		// The pause menu means "stop time", full stop: not just player
+		// movement/physics/the hunt clock (which GameLogic() already gates
+		// on overlayOpen(), same as the cheat HUD always did), but every
+		// other deltaT-driven animation below too (torch flicker, flame UV
+		// scroll, shadow reassignment, ...) -- they all thread through this
+		// one deltaT, so zeroing it here freezes all of them at once instead
+		// of gating each site individually. The cheat HUD deliberately does
+		// NOT also zero this: watching torches keep flickering while
+		// flipping a debug flag is fine, only the actual pause needs to
+		// look like a freeze-frame.
+		if(pauseMenu.isOpen()) {
+			deltaT = 0.0f;
+		}
 
 		// Free-running clock for shader-side animation (currently just the
 		// flame's UV scroll). Unlike elapsedT below this never resets.
@@ -5368,6 +5417,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		txt.updateCommandBuffer();
 		uiQuad.updateCommandBuffer();
 		crosshair.updateCommandBuffer();
+		pauseQuad.updateCommandBuffer();
 	}
 	
 	// --- Ghost navigation ---------------------------------------------------
@@ -5697,12 +5747,30 @@ class Skeleton26ReplaceName : public BaseProject {
 		glm::vec3 m = glm::vec3(0.0f), r = glm::vec3(0.0f);
 		bool fire = false;
 
-		// Poll/render the cheat HUD BEFORE getSixAxis. getSixAxis turns on
-		// GLFW_STICKY_MOUSE_BUTTONS, which makes glfwGetMouseButton a
-		// one-shot read (it flips back to "released" once polled). Reading
-		// the HUD's own click hit-test first guarantees the HUD gets that
-		// one authoritative read of a click, not getSixAxis's drag-look check.
-		hud.update(window, windowWidth, windowHeight);
+		// Poll/render the cheat HUD and pause menu BEFORE getSixAxis.
+		// getSixAxis turns on GLFW_STICKY_MOUSE_BUTTONS, which makes
+		// glfwGetMouseButton a one-shot read (it flips back to "released"
+		// once polled). Reading their own click hit-tests first guarantees
+		// they get that one authoritative read of a click, not getSixAxis's
+		// drag-look check.
+		//
+		// The HUD only gets to react while the pause menu is closed --
+		// one modal overlay at a time, and ESC (updateUniformBuffer()) is
+		// the pause menu's own equivalent guard against L while paused.
+		if(!pauseMenu.isOpen()) {
+			hud.update(window, windowWidth, windowHeight);
+		}
+		pauseMenu.update(window, windowWidth, windowHeight);
+		if(pauseMenu.resumeClicked()) {
+			pauseMenu.setOpen(false, windowWidth, windowHeight);
+		}
+		if(pauseMenu.quitClicked()) {
+			// Not implemented yet: there is no main menu/start screen to
+			// return to. Wired up (hover/click both work) so the button
+			// isn't dead-looking, but it currently does nothing but log.
+			std::cout << "[pause] Quit clicked (not implemented yet)\n";
+			pauseMenu.clearRequests();
+		}
 
 		getSixAxis(deltaT, m, r, fire);
 
@@ -5723,10 +5791,10 @@ class Skeleton26ReplaceName : public BaseProject {
 			deltaT = MAX_DELTA_T;
 		}
 
-		if(hud.isOpen()) {
-			// HUD is open: discard camera-look/move/fire input this frame so
-			// a HUD click or drag can't also spin the camera underneath the
-			// menu.
+		if(overlayOpen()) {
+			// HUD or pause menu is open: discard camera-look/move/fire input
+			// this frame so a click or drag on either can't also spin the
+			// camera underneath it.
 			m = glm::vec3(0.0f);
 			r = glm::vec3(0.0f);
 			fire = false;
@@ -5763,7 +5831,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		// something else during play, and edge-triggered like every other key
 		// here so holding it doesn't restart every frame.
 		bool restartKey = glfwGetKey(window, GLFW_KEY_R);
-		if(runState != RunState::Running && restartKey && !restartKeyWasPressed && !hud.isOpen()) {
+		if(runState != RunState::Running && restartKey && !restartKeyWasPressed && !overlayOpen()) {
 			restartRun();
 		}
 		restartKeyWasPressed = restartKey;
@@ -5771,9 +5839,9 @@ class Skeleton26ReplaceName : public BaseProject {
 		// The whiteout, ramped here rather than in the frozen-movement block
 		// below precisely because this is the one thing that has to keep
 		// running after the run is over: RunState::Escaped is what starts it.
-		// Held still while the cheat HUD is open, like everything else, so
-		// pausing mid-flash doesn't skip past it.
-		if(!hud.isOpen()) {
+		// Held still while the cheat HUD or pause menu is open, like
+		// everything else, so pausing mid-flash doesn't skip past it.
+		if(!overlayOpen()) {
 			float flashTarget = (runState == RunState::Escaped) ? 1.0f : 0.0f;
 			if(flashTarget > escapeFlash) {
 				escapeFlash = std::min(escapeFlash + deltaT / ESCAPE_FLASH_SECONDS, 1.0f);
@@ -5784,21 +5852,22 @@ class Skeleton26ReplaceName : public BaseProject {
 
 		// The hunt clock, gated on the same two conditions as the movement
 		// block below. A cycle that kept counting down behind an open cheat
-		// menu, or over a game-over screen, would have the player come back to
-		// a phase they never saw start.
-		if(!hud.isOpen() && runState == RunState::Running) {
+		// menu or pause menu, or over a game-over screen, would have the
+		// player come back to a phase they never saw start.
+		if(!overlayOpen() && runState == RunState::Running) {
 			huntCycle.update(deltaT);
 			if(huntCycle.phaseJustChanged()) {
 				onHuntPhaseChanged();
 			}
 		}
 
-		// Freeze all movement/physics while the cheat HUD is open, so opening
-		// it pauses the game exactly where it was (camera included, since m/r
-		// were already zeroed above). A finished run freezes the same way, for
-		// the same reason: the last frame the player saw is the one they should
-		// keep looking at while deciding whether to restart.
-		if(!hud.isOpen() && runState == RunState::Running) {
+		// Freeze all movement/physics while the cheat HUD or pause menu is
+		// open, so opening either pauses the game exactly where it was
+		// (camera included, since m/r were already zeroed above). A
+		// finished run freezes the same way, for the same reason: the last
+		// frame the player saw is the one they should keep looking at while
+		// deciding whether to restart.
+		if(!overlayOpen() && runState == RunState::Running) {
 			// Sprint: Ctrl multiplies movement speed. Polled directly (not through
 			// getSixAxis/"fire") since Starter.hpp doesn't wire Ctrl to anything.
 			// Can only be started while grounded (no starting a sprint mid-jump), but
