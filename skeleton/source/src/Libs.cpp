@@ -24,6 +24,9 @@
 #define PAUSEMENU_IMPLEMENTATION
 #include "custom/PauseMenu.hpp"
 
+#define STARTSCREEN_IMPLEMENTATION
+#include "custom/StartScreen.hpp"
+
 #define SCENECOLLIDERS_IMPLEMENTATION
 #include "custom/SceneColliders.hpp"
 
