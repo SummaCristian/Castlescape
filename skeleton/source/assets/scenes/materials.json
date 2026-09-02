@@ -265,6 +265,33 @@
 		// it fell back to castsShadow: true and, once the held torch got its own
 		// cube shadow map, self-shadowed itself every frame as it moved with
 		// the camera -- flickering shadow noise with no obvious source.
-		"dungeonTorchHeld": { "castsShadow": false }
+		"dungeonTorchHeld": { "castsShadow": false },
+
+		// The ghosts, not occluders either -- the only entry here that is a
+		// PERFORMANCE decision rather than a lighting one, so it is worth saying
+		// why plainly.
+		//
+		// A ghost is the only thing in this level that moves continuously, and
+		// the cube shadow maps are cached precisely because nothing else does
+		// (see lastRenderedOccupant in main.cpp). Every frame a ghost walks
+		// within a torch's reach, that torch's affected cube faces have to be
+		// cleared and redrawn: at SHADOW_CUBE_RES that is megabytes of render
+		// target rewritten per face per frame, times however many torches it is
+		// standing among, and the machinery around it (per-face invalidation,
+		// per-face culling, an async submit) got the cost down without getting
+		// it down far enough on this hardware.
+		//
+		// What is being given up is small: a translucent apparition that casts a
+		// hard black silhouette was never the more convincing of the two
+		// readings. The ghosts stay lit, drawn and glowing exactly as before --
+		// they simply stop being occluders, the same way the torches already
+		// are.
+		//
+		// Turning this back on is this one flag: the mover tracking in main.cpp
+		// keys off castsShadow rather than off "is this a ghost", so flipping it
+		// to true re-enables the whole path with nothing else to change. The
+		// doors still use it -- they move rarely enough that a swing costs one
+		// re-capture and nothing after it.
+		"ghost": { "castsShadow": false }
 	}
 }
