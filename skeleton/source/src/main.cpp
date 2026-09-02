@@ -274,6 +274,20 @@ class Skeleton26ReplaceName : public BaseProject {
 	RenderPass RP;
 	Pipeline P;
 
+	// The ghosts' pipeline, drawn into the SAME pass as P right after it (see
+	// the "Spectral" technique in scene.json and PRs[1] below). Separate from P
+	// for two reasons that both come down to a ghost not being a surface:
+	// Spectral.frag computes no BRDF and reads no shadow map, so it needs
+	// neither DSLshadowSample nor the lighting half of the fragment cost, and
+	// the pipeline itself has to differ anyway -- alpha blending on, which is a
+	// pipeline-creation flag and cannot be switched per draw.
+	//
+	// It shares P's vertex shader (PosNormUV.vert) and P's DSLlocal, so the
+	// ghosts keep riding the same per-instance uniform buffer as every other
+	// prop and updateUniformBuffer() needs no branch for them beyond the chase
+	// blend (see ubo.F0 there).
+	Pipeline Pspectral;
+
 	// Shadow mapping, 2D branch: one depth-only render pass per 2D
 	// shadow-casting light (NUM_SHADOW_MAPS_2D, LightConstants.glsl -- just
 	// the sun today) and ONE pipeline shared across all of them. Reusing
@@ -1857,10 +1871,29 @@ class Skeleton26ReplaceName : public BaseProject {
 	// Patrols a closed loop of waypoints at constant speed, facing its
 	// direction of travel, with a sinusoidal bob layered on top of the Y
 	// coordinate -- same idea as the torch's flame envelope, just applied to
-	// world position instead of brightness. Uses the CookTorrance technique
-	// like every other prop, so it casts/receives shadows in both the sun's
-	// 2D map and the torches' cube maps for free, and needs no per-object
-	// shadow plumbing of its own.
+	// world position instead of brightness.
+	//
+	// Drawn with the "Spectral" technique (Pspectral / shaders/Spectral.frag),
+	// NOT with the CookTorrance one every other prop uses. It used to be the
+	// latter, which bought it shadows in the sun's 2D map and the torches' cube
+	// maps for free -- until the sun was removed (88e019e) and the cube
+	// re-captures a continuously moving occluder forces turned out to cost more
+	// than the shadow was worth (46777d5, and materials.json's "ghost" entry).
+	// What was left was an opaque grey prop with no shadow under it, and the
+	// missing shadow was the most visible thing about it.
+	//
+	// The Spectral technique answers that by making the ghost incorporeal
+	// instead: alpha-blended, unlit, emissive, lit along its own silhouette by
+	// a Fresnel rim -- which is why the model's ragged hem glows without the
+	// shader knowing the hem exists. Something you can see the wall through has
+	// no business casting a shadow, so the cheap path stops looking like a
+	// compromise. See Spectral.frag's header for the effect itself and
+	// Pspectral's declaration for the pipeline state it needs.
+	//
+	// Two consequences elsewhere, both wanted: the shadow passes in
+	// populateCommandBuffer() walk SC.TI[0] only, so the ghosts are now outside
+	// them structurally rather than by a castsShadow check, and the ghosts no
+	// longer receive shadows either -- an unlit emitter has nothing to darken.
 	//
 	// Each ghost runs a three-state machine, driven entirely by
 	// huntCycle.hunting():
@@ -1941,8 +1974,28 @@ class Skeleton26ReplaceName : public BaseProject {
 		// waiting out the rest of the hunt on the wrong side of a door.
 		glm::vec3 stuckCheckPos{0.0f};
 		float stuckTimer = 0.0f;
+
+		// 0..1, how far this ghost is into a chase, eased rather than switched.
+		// Purely presentational: Spectral.frag reads it (delivered as ubo.F0,
+		// see updateUniformBuffer) to shift the apparition from its calm tint
+		// towards the hunt red and to burn brighter. It is also the only thing
+		// on that shader that changes over time at all -- nothing there idles
+		// or pulses -- so this ease IS the animation. Eased because `mode`
+		// flips in one frame and a ghost that changes colour instantly reads as
+		// a texture swap rather than as something turning on you -- and because
+		// Chase is entered and left repeatedly within one hunt (see the stuck /
+		// give-up path), which as a hard switch would strobe.
+		float chaseBlend = 0.0f;
 	};
 	std::vector<Ghost> ghosts;
+
+	// Time constant of Ghost::chaseBlend's exponential ease, in seconds, one
+	// per direction. Lighting up is faster than calming down on purpose: the
+	// telegraph that a ghost has seen you has to arrive while it still buys you
+	// something, and the fade back out is what sells the chase having been let
+	// go of rather than merely toggled off.
+	static constexpr float GHOST_CHASE_FADE_IN_TAU = 0.25f;
+	static constexpr float GHOST_CHASE_FADE_OUT_TAU = 1.1f;
 
 	// Bob envelope: how far above/below the resting hover height (radians/sec, world units).
 	static constexpr float GHOST_BOB_SPEED = 1.6f;
@@ -2626,6 +2679,36 @@ class Skeleton26ReplaceName : public BaseProject {
 						  "shaders/CookTorrance.frag.spv",
 						  {&DSLglobal, &DSLlocal, &DSLshadowSample});
 
+		// The ghosts. Two sets, not three: Spectral.frag samples no shadow map
+		// (it is unlit -- see its header), so DSLshadowSample is left off the
+		// layout entirely rather than bound and ignored. updateUniformBuffer()
+		// already keys the shadow-set mapping off inst.NDs[0] >= 3, so the
+		// shorter layout needs no special case there.
+		Pspectral.init(this, &VD, "shaders/PosNormUV.vert.spv",
+							  "shaders/Spectral.frag.spv",
+							  {&DSLglobal, &DSLlocal});
+		// Alpha blending: srcAlpha * src + (1 - srcAlpha) * dst, which is what
+		// Starter.hpp's transparent path sets up. This is the flag the whole
+		// effect hangs off, and it is why the ghosts need a pipeline of their
+		// own -- blending is baked into a VkPipeline, not selectable per draw.
+		Pspectral.setTransparency(true);
+		// BACK-FACE CULLING KEPT ON, deliberately, where every other transparent
+		// thing in this project (Flame, ExitGlow) turns it off. Those are flat
+		// billboards with no back to cull; the ghost is a closed mesh, and with
+		// depthWriteEnable hardcoded to VK_TRUE in Starter.hpp (see Flame.hpp's
+		// createMesh() for the same constraint) drawing both faces would mean
+		// blending two layers whose order nothing sorts -- the near one would
+		// write depth and reject the far one per fragment, so the interior would
+		// appear or vanish depending on which way the ghost happened to face.
+		// One layer per pixel has no order to get wrong, and Spectral.frag's
+		// Fresnel rim is what supplies the volume that the second layer would
+		// otherwise have given.
+		//
+		// LESS_OR_EQUAL for the same reason ExitGlow does it: with depth writes
+		// forced on, the strict LESS would make a ghost's own fragments reject
+		// each other wherever two of its surfaces land on the same depth.
+		Pspectral.setCompareOp(VK_COMPARE_OP_LESS_OR_EQUAL);
+
 		// The post-processing passes. Two set layouts, differing only in how
 		// many textures they read: one for the passes that transform a single
 		// image, one for the composite, which has to mix two.
@@ -2788,7 +2871,14 @@ class Skeleton26ReplaceName : public BaseProject {
 				{cubeShadowSampler.getSampler(), torchCube[i].cubeView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}});
 		}
 
-		PRs.resize(1);
+		// ORDER MATTERS, and it is the only thing keeping the ghosts readable:
+		// Scene::populateCommandBuffer walks the techniques in the order they
+		// are registered here, so registering "Spectral" second is what puts
+		// every alpha-blended ghost after every opaque wall it can be seen
+		// through. Blending is not commutative -- a ghost drawn first would be
+		// composited against whatever was behind it at the time, which is the
+		// clear colour, and the dungeon would then paint over it.
+		PRs.resize(2);
 		PRs[0].init("CookTorrance", {
 							{&P, {//Pipeline and DSL for the main pass
 							 /*DSLglobal*/{},
@@ -2796,6 +2886,21 @@ class Skeleton26ReplaceName : public BaseProject {
 									/*t0*/{true,  0, {}}
 								  },
 							 /*DSLshadowSample*/ shadowMapDefs
+								 }
+								}
+						  }, /*TotalNtextures*/1, &VD);
+
+		// Same two entries as above minus the shadow maps, matching
+		// Pspectral's two-set layout: the global set carries no textures, and
+		// DSLlocal takes the instance's own albedo at texture slot 0 -- the
+		// ghost's map, which Spectral.frag reads as a density mask rather than
+		// as a colour.
+		PRs[1].init("Spectral", {
+							{&Pspectral, {
+							 /*DSLglobal*/{},
+							 /*DSLlocal*/{
+									/*t0*/{true,  0, {}}
+								  }
 								 }
 								}
 						  }, /*TotalNtextures*/1, &VD);
@@ -4159,10 +4264,12 @@ class Skeleton26ReplaceName : public BaseProject {
 		if(!moverListBuilt) {
 			// Something that isn't an occluder can't invalidate a capture, so
 			// it doesn't belong on this list: tracking it would mark faces,
-			// clear them and redraw them to exactly the same texels. This is
-			// what makes materials.json's castsShadow the single switch for the
-			// ghosts (they are off there, and turning them back on needs
-			// nothing here).
+			// clear them and redraw them to exactly the same texels. The ghosts
+			// are off in materials.json and so never reach this list -- and
+			// giving them their shadows back now takes more than that flag,
+			// since they also draw with the Spectral technique and the shadow
+			// passes walk SC.TI[0] alone. Nothing has to change HERE either
+			// way; see materials.json's "ghost" entry.
 			auto addMover = [&](Instance *inst) {
 				if(inst != nullptr && materials.forModel(inst->Mid).castsShadow) {
 					movingOccluders.push_back(inst);
@@ -4577,6 +4684,10 @@ class Skeleton26ReplaceName : public BaseProject {
 
 		// This creates a new pipeline (with the current surface), using its shaders for the provided render pass
 		P.create(&RP);
+		// Same render pass as P: the ghosts draw inside the scene pass, sharing
+		// its depth buffer (which is what lets a wall hide one) and writing into
+		// the same HDR attachment, where the bloom chain can find their rim.
+		Pspectral.create(&RP);
 		Pbright.create(&RPbright);
 		PblurH.create(&RPblurH);
 		PblurV.create(&RPblurV);
@@ -4640,6 +4751,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		destroyShadowCommandBuffers();
 
 		P.cleanup();
+		Pspectral.cleanup();
 		Pbright.cleanup();
 		PblurH.cleanup();
 		PblurV.cleanup();
@@ -4684,6 +4796,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		}
 
 		P.destroy();
+		Pspectral.destroy();
 		Pbright.destroy();
 		PblurH.destroy();
 		PblurV.destroy();
@@ -5694,6 +5807,24 @@ class Skeleton26ReplaceName : public BaseProject {
 				// if disabled.
 				float kindMag = static_cast<float>(gazedGlowKind);
 				ubo.glow = glow ? (gazedInteractionDisabled ? -kindMag : kindMag) : 0.0f;
+
+				// The ghosts' chase telegraph, riding F0 -- which the Spectral
+				// technique has no use for, computing no BRDF at all (see
+				// Spectral.frag's header for why this field rather than a new
+				// one). AFTER the material copy above, which has just written
+				// materials.json's F0 into it.
+				//
+				// A linear scan of a 3-element vector per instance, deliberately:
+				// the alternative is a flag on Instance, which lives in
+				// Scene.hpp and is off limits, or a per-frame map lookup keyed
+				// by pointer, which for three ghosts costs more than this does.
+				// Same shape as the glowingInstances scan just above.
+				for(const Ghost &g : ghosts) {
+					if(g.inst == &inst) {
+						ubo.F0 = g.chaseBlend;
+						break;
+					}
+				}
 				// DS[1] = Pchar pass (main render): set0=DSLglobal, set1=DSLlocal
 				inst.DS[0][0]->map(currentImage, &gubo, 0); // global (light/camera)
 				inst.DS[0][1]->map(currentImage, &ubo, 0); // camera MVPs
@@ -6920,6 +7051,16 @@ class Skeleton26ReplaceName : public BaseProject {
 					while(dYaw < -(float)M_PI) dYaw += 2.0f * (float)M_PI;
 					float maxStep = GHOST_TURN_SPEED * deltaT;
 					g.yaw += glm::clamp(dYaw, -maxStep, maxStep);
+				}
+
+				// --- The chase telegraph. Same exponential ease as walkBobBlend
+				// above, and here rather than in updateUniformBuffer() because
+				// this is the loop that owns `mode` and the one with a deltaT.
+				{
+					float target = (g.mode == GhostMode::Chase) ? 1.0f : 0.0f;
+					float tau = (target > g.chaseBlend) ? GHOST_CHASE_FADE_IN_TAU
+													    : GHOST_CHASE_FADE_OUT_TAU;
+					g.chaseBlend += (target - g.chaseBlend) * (1.0f - std::exp(-deltaT / tau));
 				}
 
 				g.bobPhase += GHOST_BOB_SPEED * deltaT;
