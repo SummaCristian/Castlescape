@@ -265,6 +265,50 @@
 		// it fell back to castsShadow: true and, once the held torch got its own
 		// cube shadow map, self-shadowed itself every frame as it moved with
 		// the camera -- flickering shadow noise with no obvious source.
-		"dungeonTorchHeld": { "castsShadow": false }
+		"dungeonTorchHeld": { "castsShadow": false },
+
+		// The ghosts, not occluders either -- the only entry here that is a
+		// PERFORMANCE decision rather than a lighting one, so it is worth saying
+		// why plainly.
+		//
+		// A ghost is the only thing in this level that moves continuously, and
+		// the cube shadow maps are cached precisely because nothing else does
+		// (see lastRenderedOccupant in main.cpp). Every frame a ghost walks
+		// within a torch's reach, that torch's affected cube faces have to be
+		// cleared and redrawn: at SHADOW_CUBE_RES that is megabytes of render
+		// target rewritten per face per frame, times however many torches it is
+		// standing among, and the machinery around it (per-face invalidation,
+		// per-face culling, an async submit) got the cost down without getting
+		// it down far enough on this hardware.
+		//
+		// What is being given up is small: a translucent apparition that casts a
+		// hard black silhouette was never the more convincing of the two
+		// readings.
+		//
+		// That last sentence used to be an excuse, because the ghosts were not
+		// translucent -- they were opaque grey props, and an opaque prop with no
+		// shadow is a bug you can see. They have since been moved to the
+		// "Spectral" technique (shaders/Spectral.frag), which draws them
+		// alpha-blended, unlit and emissive. Now the flag below and the way they
+		// look agree with each other: you can see the wall through a ghost, so
+		// there is nothing there to stop a torch.
+		//
+		// Turning it back on is still just this one flag as far as the shadow
+		// machinery goes -- the mover tracking in main.cpp keys off castsShadow
+		// rather than off "is this a ghost" -- but it would now also need the
+		// ghosts moved back to the CookTorrance technique in scene.json, since
+		// the shadow passes walk SC.TI[0] and nothing else. The doors still use
+		// it: they move rarely enough that a swing costs one re-capture and
+		// nothing after it.
+		//
+		// specularColor is repurposed by Spectral.frag, which computes no
+		// specular term (it computes no BRDF at all): there it is the colour the
+		// apparition EMITS when calm. A cold desaturated blue-green, the one
+		// colour in the palette neither the torches (orange), the hunt flames
+		// (violet) nor the focus glow (gold) occupy, so a ghost across a lit
+		// room never reads as another light source. The hunt tint it shifts to
+		// is in the shader, not here: it is one shared cue rather than a
+		// per-model surface property.
+		"ghost": { "castsShadow": false, "specularColor": [0.55, 0.86, 0.92] }
 	}
 }
