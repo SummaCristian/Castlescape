@@ -21,6 +21,9 @@
 #define CHEATHUD_IMPLEMENTATION
 #include "custom/CheatHud.hpp"
 
+#define PAUSEMENU_IMPLEMENTATION
+#include "custom/PauseMenu.hpp"
+
 #define SCENECOLLIDERS_IMPLEMENTATION
 #include "custom/SceneColliders.hpp"
 
