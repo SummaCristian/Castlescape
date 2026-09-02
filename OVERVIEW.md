@@ -257,7 +257,7 @@ in quest'ordine:
 
 1. **Shadow pass 2D** — un render pass depth-only per ogni luce con shadow map 2D (`NUM_SHADOW_MAPS_2D = 2`, oggi la usa solo il sole). Pipeline `PShadow` (`Shadow.vert` + `Shadow.frag`).
 2. **Shadow pass cubemap della torcia in mano** — 6 facce, pipeline `PShadowCube` (`ShadowCube.vert` + `ShadowCube.frag`). Solo questa torcia: tutte le altre cubemap sono renderizzate fuori dal command buffer, vedi §5.5.
-3. **Scene pass** (`RP`) — verso un attachment **HDR offscreen RGBA16F**, non verso lo schermo. Dentro, nell'ordine: geometria (`Scene::populateCommandBuffer`), fiamme + scintille, ExitGlow, LightDebug.
+3. **Scene pass** (`RP`) — verso un attachment **HDR offscreen RGBA16F**, non verso lo schermo. Dentro, nell'ordine: geometria opaca e depth prepass dei fantasmi (`Scene::populateCommandBuffer`), colore dei fantasmi (emesso a mano, §3.14), fiamme + scintille, ExitGlow, LightDebug.
 4. **Bright pass** (`RPbright`, a un quarto di risoluzione) — soglia + downsample, `BloomBright.frag`.
 5. **Blur H** (`RPblurH`) — gaussiana 1D orizzontale, `BloomBlur.frag`.
 6. **Blur V** (`RPblurV`) — la stessa shader, con `blurDir` = (0,1).
@@ -1033,14 +1033,108 @@ disegna un'ellisse molto brillante — ben oltre 1.55, la soglia del bright pass
 e la catena di bloom la trasforma in un abbaglio che sborda sul telaio della
 porta. Stessa identica logica delle fiamme.
 
-## 3.14 Shader minori
+## 3.14 `SpectralDepth.frag` — il depth prepass dei fantasmi
+
+I fantasmi sono alpha-blended (`Pspectral`, `setTransparency(true)`,
+main.cpp:2709), quindi tutto ciò che sta dietro a una loro superficie traspare
+attraverso — **compresi loro stessi**. I piedini stanno dentro la veste, e li si
+vedeva brillare attraverso il corpo: il rim di Fresnel è la cosa più luminosa
+che quella shader produce, quindi è anche quella che sopravvive meglio a una
+fusione al 46%.
+
+**Perché il depth test da solo non bastava.** Il mesh esce in ordine di indice,
+e il piedino capita prima della veste. Su un pixel dove il muro è a z 0.90, il
+piedino a 0.55 e la veste a 0.50:
+
+- piedino, `0.55 < 0.90` → passa, si fonde col muro, e **scrive 0.55**
+- veste, `0.50 < 0.55` → passa, si fonde **sopra** il piedino, scrive 0.50
+
+Il pixel finale è `0.46 × veste + 0.54 × piedino`. Il depth test non ha salvato
+niente perché la geometria è arrivata nell'ordine sbagliato, il pezzo lontano
+per primo. E non c'è modo di ordinarla: è un mesh rigido, non billboard
+sortabili come quelli di `Flame.hpp`. Il back-face culling toglie il guscio
+posteriore, non la geometria interna rivolta verso l'osservatore.
+
+**La soluzione: due draw dello stesso mesh.** Non c'è nessuna divisione della
+geometria tra i due shader — entrambe le passate disegnano il fantasma
+**intero**, stessi indici (`Scene.hpp:557` e main.cpp:4980). Ogni frammento
+passa due volte.
+
+Prima passata, `PspectralDepth` + `SpectralDepth.frag`, compare **`LESS`**:
+
+- piedino, `0.55 < 0.90` → passa, e scrive 0.55
+- veste, `0.50 < 0.55` → passa, e scrive **0.50**
+
+Il colore non cambia di un bit: la shader emette `vec4(0.0)`, e con
+`srcAlpha × src + (1 - srcAlpha) × dst` (Starter.hpp:4439-4442) un alpha di 0
+restituisce `dst`. È una color-write mask scritta con un blend factor, perché
+`Pipeline` espone `setTransparency()` e non la mask. La depth invece viene
+scritta lo stesso, `depthWriteEnable` è hardcoded a `VK_TRUE`
+(Starter.hpp:4496). A schermo non è successo nulla; nel depth buffer c'è il
+**minimo**, cioè la superficie del fantasma più vicina all'occhio. L'ordine di
+arrivo non conta più: `LESS` scarta il lontano se arriva secondo e lo
+sovrascrive se arriva primo.
+
+Seconda passata, `Pspectral` + `Spectral.frag`, compare **`LESS_OR_EQUAL`**:
+
+- piedino, `0.55 ≤ 0.50`? No → **scartato**, il fragment shader non gira nemmeno
+- veste, `0.50 ≤ 0.50`? Sì → disegna
+
+Un solo strato per pixel, il più vicino. Il piedino non viene coperto, viene
+rifiutato dal depth test prima di poter contribuire al colore. Il criterio non è
+mai "che pezzo sei", è sempre e solo "a che distanza sei rispetto al numero che
+trovi nel pixel" — ed è **la veste stessa**, nella prima passata, ad aver
+scritto il numero che poi ammazza il piedino nella seconda.
+
+Il `LESS_OR_EQUAL` (main.cpp:2727) da difensivo diventa portante: con un `LESS`
+stretto fallirebbe anche la veste, contro la depth che si è scritta da sola un
+draw prima, e il fantasma sparirebbe del tutto. Il `LESS` del prepass invece non
+è scritto da nessuna parte, è il default di `Pipeline::init`
+(Starter.hpp:4298) — `PspectralDepth` non chiama mai `setCompareOp`.
+
+**Dove stanno le due draw.** Il prepass deve cadere **dopo** il dungeon e
+**prima** del colore dei fantasmi. Dopo il dungeon perché una depth di fantasma
+scritta prima di un muro che gli sta dietro rifiuterebbe quel muro, lasciando un
+buco a forma di fantasma; prima del colore per ovvi motivi. Ma
+`Scene::populateCommandBuffer` percorre le technique una di fila all'altra senza
+nessun aggancio in mezzo. Quindi lo slot che `Scene` gestisce è stato dato al
+prepass — main.cpp:2937 registra `&PspectralDepth` come pipeline della technique
+"Spectral" — e le draw a colori sono emesse a mano subito dopo
+`SC.populateCommandBuffer()`, a main.cpp:4972-4981, iterando le stesse istanze
+di `SC.TI[1]`. I descriptor set costruiti da `Scene` valgono per entrambe le
+pipeline senza modifiche, perché sono costruiti sui DSL, che sono identici.
+
+Costo: una seconda draw depth-only per fantasma, tre istanze, nessun descriptor
+in più. `SpectralDepth.frag` non dichiara nemmeno un binding: solo il vertex
+stage legge qualcosa, e il layout con cui la pipeline è creata è quello di
+`Pspectral`.
+
+> **Se il prof chiede**
+>
+> *"Perché serve un prepass se hai già il depth test?"* — Perché il depth test
+> confronta il frammento in arrivo con **quello che c'è adesso** nel pixel, non
+> con l'insieme dei frammenti futuri. Con la geometria che arriva dal lontano al
+> vicino, il pezzo nascosto viene disegnato e poi il pezzo davanti gli si fonde
+> sopra al 46%, lasciandolo visibile. Il prepass stabilisce il minimo prima che
+> chiunque disegni colore, così il confronto avviene contro il valore giusto.
+>
+> *"Non bastava ordinare i triangoli?"* — È un mesh rigido: l'ordine corretto
+> dipende dal punto di vista e cambia ogni frame. Ordinare per-triangolo in CPU
+> costerebbe più delle due draw, e per geometria compenetrata non esiste comunque
+> un ordine corretto.
+>
+> *"Perché due pipeline e non una riconfigurata?"* — Il compare op e il blending
+> sono cotti dentro il `VkPipeline` alla `create()` (main.cpp:4728-4729):
+> cambiarli richiede ricrearla, non si commutano per draw call.
+
+## 3.15 Shader minori
 
 - `UiQuad.vert` / `UiQuad.frag` — rettangoli a colore piatto. Colore via push constant, nessun descriptor set, nessuna texture. Esistono perché `TextMaker` sa disegnare solo glifi del suo atlante e nel range ASCII stampabile non c'è un rettangolo pieno con cui simulare uno sfondo. Servono al pannello della HUD cheat e al mirino (due istanze separate, con command buffer separati, perché disegnano contenuti indipendenti).
 - `LightDebug.vert` / `LightDebug.frag` — croci e frecce colorate su ogni luce attiva, attivabili dal menu cheat.
 - `framework/Text.vert` / `.frag` — il `TextMaker` del framework.
 - `framework/ColliderShow.vert` / `.frag` — visualizzazione dei collider.
 
-## 3.15 I file GLSL inclusi
+## 3.16 I file GLSL inclusi
 
 GLSL di base non ha `#include`. Qui funziona perché CMake passa a `glslc` la
 stessa `-I` del compilatore C++ e gli shader abilitano

@@ -288,6 +288,21 @@ class Skeleton26ReplaceName : public BaseProject {
 	// blend (see ubo.F0 there).
 	Pipeline Pspectral;
 
+	// The ghosts' DEPTH PREPASS (shaders/SpectralDepth.frag), drawn over the
+	// same instances immediately before Pspectral is. It writes the depth of
+	// the nearest ghost surface and returns the colour attachment untouched, so
+	// that the colour pass behind it can reject the ghost's own interior --
+	// the feet inside the robe -- instead of blending it under the body. See
+	// that shader's header for the mechanism and populateCommandBuffer() for
+	// why THIS one is the pipeline registered with the technique while
+	// Pspectral is the one issued by hand.
+	//
+	// Same DSLs as Pspectral (nothing here reads them, but the layout has to
+	// match the sets Scene binds), same back-face culling, and the default
+	// VK_COMPARE_OP_LESS rather than Pspectral's LESS_OR_EQUAL, which is the
+	// whole point: LESS is what leaves the minimum in the depth buffer.
+	Pipeline PspectralDepth;
+
 	// Shadow mapping, 2D branch: one depth-only render pass per 2D
 	// shadow-casting light (NUM_SHADOW_MAPS_2D, LightConstants.glsl -- just
 	// the sun today) and ONE pipeline shared across all of them. Reusing
@@ -2704,10 +2719,22 @@ class Skeleton26ReplaceName : public BaseProject {
 		// Fresnel rim is what supplies the volume that the second layer would
 		// otherwise have given.
 		//
-		// LESS_OR_EQUAL for the same reason ExitGlow does it: with depth writes
-		// forced on, the strict LESS would make a ghost's own fragments reject
-		// each other wherever two of its surfaces land on the same depth.
+		// LESS_OR_EQUAL, and with the prepass below in front of it this is now
+		// load-bearing rather than defensive: the prepass leaves the nearest
+		// ghost depth in the buffer, and EQUAL is the comparison that lets
+		// exactly the fragments which produced it through. Under a strict LESS
+		// the ghost would vanish entirely.
 		Pspectral.setCompareOp(VK_COMPARE_OP_LESS_OR_EQUAL);
+
+		// The prepass. Everything about it matches Pspectral except the shader
+		// and the compare op -- see the member declaration, and
+		// SpectralDepth.frag for what it is for. Transparency on for the blend,
+		// which is how it avoids writing colour: it emits alpha 0, so
+		// srcAlpha * src + (1 - srcAlpha) * dst returns dst.
+		PspectralDepth.init(this, &VD, "shaders/PosNormUV.vert.spv",
+								   "shaders/SpectralDepth.frag.spv",
+								   {&DSLglobal, &DSLlocal});
+		PspectralDepth.setTransparency(true);
 
 		// The post-processing passes. Two set layouts, differing only in how
 		// many textures they read: one for the passes that transform a single
@@ -2895,8 +2922,19 @@ class Skeleton26ReplaceName : public BaseProject {
 		// DSLlocal takes the instance's own albedo at texture slot 0 -- the
 		// ghost's map, which Spectral.frag reads as a density mask rather than
 		// as a colour.
+		//
+		// The pipeline named here is the DEPTH PREPASS, not Pspectral, and that
+		// is the only way to get one pass between the walls and the ghosts:
+		// Scene draws its techniques back to back with nothing to hook between
+		// them, and the prepass must land after the dungeon (a ghost's depth
+		// written before a wall behind it would reject that wall and leave a
+		// ghost-shaped hole) and before the ghosts' own colour. So the slot
+		// Scene owns goes to the prepass, and populateCommandBuffer() issues
+		// the colour draws by hand right after SC.populateCommandBuffer()
+		// returns. The descriptor sets Scene builds here serve both pipelines
+		// unchanged -- they are built against the DSLs, which are identical.
 		PRs[1].init("Spectral", {
-							{&Pspectral, {
+							{&PspectralDepth, {
 							 /*DSLglobal*/{},
 							 /*DSLlocal*/{
 									/*t0*/{true,  0, {}}
@@ -4688,6 +4726,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		// its depth buffer (which is what lets a wall hide one) and writing into
 		// the same HDR attachment, where the bloom chain can find their rim.
 		Pspectral.create(&RP);
+		PspectralDepth.create(&RP);
 		Pbright.create(&RPbright);
 		PblurH.create(&RPblurH);
 		PblurV.create(&RPblurV);
@@ -4752,6 +4791,7 @@ class Skeleton26ReplaceName : public BaseProject {
 
 		P.cleanup();
 		Pspectral.cleanup();
+		PspectralDepth.cleanup();
 		Pbright.cleanup();
 		PblurH.cleanup();
 		PblurV.cleanup();
@@ -4797,6 +4837,7 @@ class Skeleton26ReplaceName : public BaseProject {
 
 		P.destroy();
 		Pspectral.destroy();
+		PspectralDepth.destroy();
 		Pbright.destroy();
 		PblurH.destroy();
 		PblurV.destroy();
@@ -4915,6 +4956,30 @@ class Skeleton26ReplaceName : public BaseProject {
 		// 1. The scene, into the offscreen HDR target.
 		RP.begin(commandBuffer, currentImage);
 		SC.populateCommandBuffer(commandBuffer, 0, currentImage);
+
+		// The ghosts' COLOUR pass, by hand, because Scene has already spent the
+		// technique's own slot on the depth prepass that has to come between
+		// the dungeon and this -- see PRs[1] in localInit() and
+		// SpectralDepth.frag. Everything the prepass just wrote depth for is
+		// now drawn again through Pspectral, and only its nearest layer per
+		// pixel survives the LESS_OR_EQUAL test, which is what keeps the feet
+		// inside the robe from glowing through the body.
+		//
+		// Technique 1 is the "Spectral" block in scene.json; the shadow loop
+		// above indexes TI[0] the same way and for the same reason. Same
+		// binding sequence Scene::populateCommandBuffer() uses, minus the
+		// per-instance pipeline rebind: one bind covers all three ghosts.
+		Pspectral.bind(commandBuffer);
+		for(int i = 0; i < SC.TI[1].InstanceCount; i++) {
+			Instance &inst = SC.TI[1].I[i];
+			SC.M[inst.Mid]->bind(commandBuffer);
+			for(int j = 0; j < inst.NDs[0]; j++) {
+				inst.DS[0][j]->bind(commandBuffer, Pspectral, j, currentImage);
+			}
+			vkCmdDrawIndexed(commandBuffer,
+							 static_cast<uint32_t>(SC.M[inst.Mid]->indices.size()), 1, 0, 0, 0);
+		}
+
 		flame.populateCommandBuffer(commandBuffer, currentImage);
 		// After the scene, so the castle has already written the depth that
 		// masks this quad down to the shape of the doorway's arch, and after
