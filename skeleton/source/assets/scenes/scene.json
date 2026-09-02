@@ -4,9 +4,9 @@
 
 		{"id": "dungeonFloor", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_StoneFloor_02.gltf", "format": "GLTF"},
 		{"id": "dungeonCeiling", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_StoneCeiling_01.gltf", "format": "GLTF"},
-		{"id": "dungeonWall", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_WallStraight_01.gltf", "format": "GLTF", "collider": "AABB"},
-		{"id": "dungeonCorner", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_WallCorner_01.gltf", "format": "GLTF"},
-		{"id": "dungeonDoorWall", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_WallDoor_Hole_01.gltf", "format": "GLTF"},
+		{"id": "dungeonWall", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_WallStraight_02.gltf", "format": "GLTF", "collider": "AABB"},
+		{"id": "dungeonCorner", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_WallCorner_02.gltf", "format": "GLTF"},
+		{"id": "dungeonDoorWall", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_WallDoor_Hole_02.gltf", "format": "GLTF"},
 		{"id": "dungeonDoorPanel", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_Door_01.gltf", "format": "GLTF", "collider": "AABB"},
 		{"id": "dungeonCarpet", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_Carpet_01.gltf", "format": "GLTF"},
 		{"id": "dungeonTable", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_Table_01.gltf", "format": "GLTF", "collider": "AABB"},
