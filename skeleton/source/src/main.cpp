@@ -14,6 +14,7 @@
 #include "custom/UiQuad.hpp"
 #include "custom/CheatHud.hpp"
 #include "custom/PauseMenu.hpp"
+#include "custom/StartScreen.hpp"
 #include "custom/SceneColliders.hpp"
 #include "custom/SceneMaterials.hpp"
 #include "custom/SceneLights.hpp"
@@ -575,6 +576,17 @@ class Skeleton26ReplaceName : public BaseProject {
 	// open (see GameLogic()'s overlayOpen() gating). ESC toggles it; see
 	// updateUniformBuffer().
 	PauseMenu pauseMenu;
+
+	// Flat-colored quads: opaque backdrop + button backgrounds for the
+	// launch screen. Separate UiQuad instance/named command buffer, same
+	// reasoning as pauseQuad/crosshair above.
+	UiQuad startScreenQuad;
+	// The launch screen: open from the very first frame (see localInit()),
+	// so the app boots into this instead of dropping the player straight
+	// into the castle. Also reopened if the pause menu's Quit abandons the
+	// current run. Folded into overlayOpen() like hud/pauseMenu, so it
+	// freezes GameLogic() the same way.
+	StartScreen startScreen;
 
 	// Other application parameters
 	float Ar;	// Aspect ratio
@@ -1977,10 +1989,10 @@ class Skeleton26ReplaceName : public BaseProject {
 	// instead of closing the window outright (see updateUniformBuffer()).
 	bool escKeyWasPressed = false;
 
-	// True whenever any modal overlay (cheat HUD or pause menu) is open.
-	// GameLogic() freezes camera/movement/physics/the hunt clock behind
-	// this, same as it always did for hud.isOpen() alone.
-	bool overlayOpen() const { return hud.isOpen() || pauseMenu.isOpen(); }
+	// True whenever any modal overlay (cheat HUD, pause menu, or the launch
+	// screen) is open. GameLogic() freezes camera/movement/physics/the hunt
+	// clock behind this, same as it always did for hud.isOpen() alone.
+	bool overlayOpen() const { return hud.isOpen() || pauseMenu.isOpen() || startScreen.isOpen(); }
 
 	// Where the exit is and whether it's locked, both from gameplay.json's
 	// "exit" block. The box is world-space and axis-aligned: the player wins by
@@ -2235,6 +2247,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		uiQuad.resizeScreen(w, h);
 		crosshair.resizeScreen(w, h);
 		pauseQuad.resizeScreen(w, h);
+		startScreenQuad.resizeScreen(w, h);
 		setCrosshairQuad();
 		// The collider visualizer owns a swapchain-attached render pass too
 		// (Colliders.hpp), and it was never being told about resizes -- its own
@@ -3539,17 +3552,37 @@ class Skeleton26ReplaceName : public BaseProject {
 		// initializes the flat-quad dim overlay/button layer for the pause menu;
 		// distinct submitOrder/buffer name for the same reason as crosshair above
 		pauseQuad.init(this, windowWidth, windowHeight, 9003, "pause_quad");
+		// initializes the flat-quad opaque backdrop/button layer for the
+		// launch screen; distinct submitOrder/buffer name for the same
+		// reason as crosshair/pauseQuad above
+		startScreenQuad.init(this, windowWidth, windowHeight, 9004, "start_screen_quad");
 
 		// submits the main command buffer
 		submitCommandBuffer("main", 0, populateCommandBufferAccess, this);
 
-		// Prepares for showing the FPS count
+		// Prepares for showing the FPS count. Left showing (on top of the
+		// launch screen too) rather than hidden behind it: this block's text
+		// (id 1) is never removed for the rest of the run, which is also
+		// what keeps TextMaker's live block list from ever going fully
+		// empty. TextMaker::createTextMesh() (skeleton code: see Libs.cpp's
+		// "must not be modified" line, so this isn't ours to patch) does
+		// M->vertices[0] unconditionally with no guard for zero total
+		// characters across every live block -- an earlier version of this
+		// code removed this text while the launch screen was open, and right
+		// after Play closed it every other block (coordinates, interact
+		// prompt, hunt/end banners, the menus) could also be momentarily
+		// unset at once, crashing the very next updateCommandBuffer() call.
 		txt.print(1.0f, 1.0f, "FPS:",1,"CO",false,false,true,TAL_RIGHT,TRH_RIGHT,TRV_BOTTOM,{1.0f,0.0f,0.0f,1.0f},{0.8f,0.8f,0.0f,1.0f});
 
 		// Wires the cheat HUD to the actual cheat flags, so toggling a row
 		// in the menu flips the exact same bools GameLogic() reads.
 		hud.init(&txt, &uiQuad);
 		pauseMenu.init(&txt, &pauseQuad);
+		// windowTitle is set in setWindowParameters(), well before this runs
+		// -- reused as-is so the launch screen's title only needs changing
+		// in one place.
+		startScreen.init(&txt, &startScreenQuad, windowTitle);
+		startScreen.setOpen(true, windowWidth, windowHeight);
 		hud.addToggle("Collision", &cheats.collisionEnabled);
 		hud.addToggle("Show Coordinates", &cheats.showCoordinates);
 
@@ -4110,6 +4143,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		uiQuad.pipelinesAndDescriptorSetsInit();
 		crosshair.pipelinesAndDescriptorSetsInit();
 		pauseQuad.pipelinesAndDescriptorSetsInit();
+		startScreenQuad.pipelinesAndDescriptorSetsInit();
 		// Same RP as the scene: the flame draws inside it, right after the
 		// scene geometry, so it shares the depth buffer instead of needing its
 		// own render pass the way UiQuad's 2D overlay does -- and so its
@@ -4152,6 +4186,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		uiQuad.pipelinesAndDescriptorSetsCleanup();
 		crosshair.pipelinesAndDescriptorSetsCleanup();
 		pauseQuad.pipelinesAndDescriptorSetsCleanup();
+		startScreenQuad.pipelinesAndDescriptorSetsCleanup();
 		flame.pipelinesAndDescriptorSetsCleanup();
 		exitGlow.pipelinesAndDescriptorSetsCleanup();
 		debugLines.pipelinesAndDescriptorSetsCleanup();
@@ -4213,6 +4248,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		uiQuad.localCleanup();
 		crosshair.localCleanup();
 		pauseQuad.localCleanup();
+		startScreenQuad.localCleanup();
 		flame.localCleanup();
 		exitGlow.localCleanup();
 		debugLines.localCleanup();
@@ -4333,10 +4369,10 @@ class Skeleton26ReplaceName : public BaseProject {
 		// outright -- Quit is reached through the menu instead (see
 		// PauseMenu.hpp). Edge-triggered so holding ESC down doesn't reopen
 		// the menu the instant Resume closes it. Ignored while the cheat HUD
-		// is open: only one modal overlay at a time, and L already owns
-		// closing that one.
+		// or the launch screen is open: only one modal overlay at a time,
+		// and L/Play already own closing those.
 		bool escPressed = glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS;
-		if(escPressed && !escKeyWasPressed && !hud.isOpen()) {
+		if(escPressed && !escKeyWasPressed && !hud.isOpen() && !startScreen.isOpen()) {
 			pauseMenu.setOpen(!pauseMenu.isOpen(), windowWidth, windowHeight);
 		}
 		escKeyWasPressed = escPressed;
@@ -4344,17 +4380,18 @@ class Skeleton26ReplaceName : public BaseProject {
 		// moves the view
 		float deltaT = GameLogic();
 
-		// The pause menu means "stop time", full stop: not just player
-		// movement/physics/the hunt clock (which GameLogic() already gates
-		// on overlayOpen(), same as the cheat HUD always did), but every
-		// other deltaT-driven animation below too (torch flicker, flame UV
-		// scroll, shadow reassignment, ...) -- they all thread through this
-		// one deltaT, so zeroing it here freezes all of them at once instead
-		// of gating each site individually. The cheat HUD deliberately does
-		// NOT also zero this: watching torches keep flickering while
-		// flipping a debug flag is fine, only the actual pause needs to
-		// look like a freeze-frame.
-		if(pauseMenu.isOpen()) {
+		// The pause menu and the launch screen both mean "stop time", full
+		// stop: not just player movement/physics/the hunt clock (which
+		// GameLogic() already gates on overlayOpen(), same as the cheat HUD
+		// always did), but every other deltaT-driven animation below too
+		// (torch flicker, flame UV scroll, shadow reassignment, ...) -- they
+		// all thread through this one deltaT, so zeroing it here freezes all
+		// of them at once instead of gating each site individually. The
+		// cheat HUD deliberately does NOT also zero this: watching torches
+		// keep flickering while flipping a debug flag is fine, only an
+		// actual freeze-frame (paused, or not even started yet) needs to
+		// look like one.
+		if(pauseMenu.isOpen() || startScreen.isOpen()) {
 			deltaT = 0.0f;
 		}
 
@@ -5230,194 +5267,215 @@ class Skeleton26ReplaceName : public BaseProject {
 		renderCubeSlotsOnce(pendingCubeSlotRenders, currentImage);
 		pendingCubeSlotRenders.clear();
 
-		// updates the FPS
+		// updates the FPS. Left running/visible even over the launch screen
+		// (see the seed txt.print() in localInit() for why) -- everything
+		// below this, though, reads game state that GameLogic() never even
+		// updates while the launch screen is open (nearbyDoor, the hunt
+		// cycle, ...), and the opaque backdrop would hide it anyway, but
+		// TextMaker draws after (submit order 10000, above every UiQuad
+		// instance) so a still-live text block would show through the
+		// backdrop regardless. Skipping the rest of this block leaves them
+		// exactly as hidden as removeText() would.
+		//
+		// Timed off glfwGetTime() rather than accumulated deltaT: deltaT is
+		// forced to 0 while the pause menu/launch screen is open (see
+		// updateUniformBuffer()'s "stop time" comment), which is exactly
+		// right for gameplay but would otherwise freeze this readout too --
+		// an FPS counter that stops updating while paused is telling the
+		// player the wrong thing, since frames are still being rendered.
 		static float elapsedT = 0.0f;
 		static int countedFrames = 0;
-		
+		static double lastFpsTime = glfwGetTime();
+
+		double nowFpsTime = glfwGetTime();
 		countedFrames++;
-		elapsedT += deltaT;
+		elapsedT += (float)(nowFpsTime - lastFpsTime);
+		lastFpsTime = nowFpsTime;
 		if(elapsedT > 1.0f) {
 			float Fps = (float)countedFrames / elapsedT;
-			
+
 			std::ostringstream oss;
 			oss << "FPS: " << Fps << "\n";
 
 			txt.print(1.0f, 1.0f, oss.str(), 1, "CO", false, false, true,TAL_RIGHT,TRH_RIGHT,TRV_BOTTOM,{1.0f,0.0f,0.0f,1.0f},{0.8f,0.8f,0.0f,1.0f});
-			
+
 			elapsedT = 0.0f;
-		    countedFrames = 0;
+			countedFrames = 0;
 		}
 
-		// Coordinates debug overlay (Show Coordinates cheat). Sits just above
-		// the FPS line, bottom-right. Throttled to 10Hz rather than every
-		// frame: print() unconditionally marks the text command buffer
-		// dirty, so printing every frame would force a mesh/command-buffer
-		// rebuild every frame just to show a live camera readout.
-		static float coordsElapsedT = 0.0f;
-		static bool coordsShown = false;
-		coordsElapsedT += deltaT;
-		if(cheats.showCoordinates) {
-			if(!coordsShown || coordsElapsedT > 0.1f) {
-				std::ostringstream coss;
-				coss << "X: " << camPos.x << "  Y: " << camPos.y << "  Z: " << camPos.z
-					 << "  Yaw: " << camYaw << "\n";
+		if(!startScreen.isOpen()) {
+			// Coordinates debug overlay (Show Coordinates cheat). Sits just above
+			// the FPS line, bottom-right. Throttled to 10Hz rather than every
+			// frame: print() unconditionally marks the text command buffer
+			// dirty, so printing every frame would force a mesh/command-buffer
+			// rebuild every frame just to show a live camera readout.
+			static float coordsElapsedT = 0.0f;
+			static bool coordsShown = false;
+			coordsElapsedT += deltaT;
+			if(cheats.showCoordinates) {
+				if(!coordsShown || coordsElapsedT > 0.1f) {
+					std::ostringstream coss;
+					coss << "X: " << camPos.x << "  Y: " << camPos.y << "  Z: " << camPos.z
+						 << "  Yaw: " << camYaw << "\n";
 
-				// FPS is anchored at pixel-NDC (1,1), i.e. the screen's
-				// bottom-right corner; this line sits a fixed pixel offset
-				// above it so the two never overlap, converted through the
-				// same pixelToScr TextMaker uses internally.
-				float sx, sy;
-				txt.pixelToScr((float)windowWidth - 1.0f, (float)windowHeight - 40.0f, sx, sy);
-				txt.print(sx, sy, coss.str(), 2, "CO", false, false, true,
-						  TAL_RIGHT, TRH_RIGHT, TRV_BOTTOM,
-						  {1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f});
+					// FPS is anchored at pixel-NDC (1,1), i.e. the screen's
+					// bottom-right corner; this line sits a fixed pixel offset
+					// above it so the two never overlap, converted through the
+					// same pixelToScr TextMaker uses internally.
+					float sx, sy;
+					txt.pixelToScr((float)windowWidth - 1.0f, (float)windowHeight - 40.0f, sx, sy);
+					txt.print(sx, sy, coss.str(), 2, "CO", false, false, true,
+							  TAL_RIGHT, TRH_RIGHT, TRV_BOTTOM,
+							  {1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f});
 
-				coordsShown = true;
-				coordsElapsedT = 0.0f;
+					coordsShown = true;
+					coordsElapsedT = 0.0f;
+				}
+			} else if(coordsShown) {
+				txt.removeText(2);
+				coordsShown = false;
 			}
-		} else if(coordsShown) {
-			txt.removeText(2);
-			coordsShown = false;
-		}
 
-		// "[E] Interact"/"[E] Pick up" prompt, shown while a door or a pickup
-		// is in range (nearbyDoor/nearbyPickup, set every frame in
-		// GameLogic() -- pickups take priority, same as the E handling
-		// itself). Re-prints on top of a shown/hidden toggle whenever the
-		// text itself changes (e.g. walking from a door straight to the key),
-		// not just on the binary transition the door-only version needed.
-		// The locked-exit line rides the same slot: it's the same kind of
-		// message (a one-line explanation of what the thing in front of you
-		// needs), it appears in the same place, and the two can't be in range
-		// at once in any layout worth building.
-		static bool interactPromptShown = false;
-		static std::string interactPromptText;
-		//
-		// Suppressed once a run has ended: GameLogic() stops updating
-		// nearbyDoor/nearbyPickup/atLockedExit when it freezes, so whatever was
-		// in range on the last live frame would otherwise sit there under the
-		// game-over text still inviting a keypress that does nothing.
-		bool showInteractPrompt = runState == RunState::Running &&
-								  (nearbyDoor >= 0 || nearbyPickup >= 0 ||
-								   nearbyCandle >= 0 || atLockedExit);
-		// Door prompts split four ways once locks exist: a padlock the
-		// player can open ("[E] Unlock", and the wording warns the key is
-		// spent, since it can't be got back), one they can't (what to go find
-		// -- by lockLabel, not the raw id), one they're standing behind (no
-		// key named at all: from this side there is no padlock in sight, and
-		// naming one would be telling them something they can't see), and a
-		// plain door.
-		std::string wantedPromptText;
-		if(atLockedExit) {
-			wantedPromptText = "The way out is locked - find the key";
-		} else if(nearbyPickup >= 0) {
-			wantedPromptText = "[E] Pick up";
-		} else if(nearbyCandle >= 0) {
-			// Two ways, matching the aura the candle is wearing right now:
-			// with fire in hand it's an invitation, without it's the reason
-			// the candle won't take.
-			wantedPromptText = hasBurningTorch()
-							 ? "[E] Light the candle"
-							 : "You need a lit torch to light this";
-		} else if(nearbyDoor >= 0 && doors[nearbyDoor].locked) {
-			// Each of the three has a per-door override (Door::promptReady and
-			// friends) that wins when it isn't empty. Only the bookcase sets
-			// them: a padlock explains itself and wants the generic wording,
-			// while a bookcase must never say "locked" -- it is furniture until
-			// the player decides it isn't.
-			const Door &d = doors[nearbyDoor];
-			if(!d.onLockSide(camPos)) {
-				wantedPromptText = d.promptBlocked.empty() ? "This door is blocked"
-														   : d.promptBlocked;
-			} else if(findKeyInRing(d.lockKeyId) >= 0) {
-				wantedPromptText = d.promptReady.empty()
-								 ? "[E] Unlock (uses the " + d.lockLabel + ")"
-								 : d.promptReady;
+			// "[E] Interact"/"[E] Pick up" prompt, shown while a door or a pickup
+			// is in range (nearbyDoor/nearbyPickup, set every frame in
+			// GameLogic() -- pickups take priority, same as the E handling
+			// itself). Re-prints on top of a shown/hidden toggle whenever the
+			// text itself changes (e.g. walking from a door straight to the key),
+			// not just on the binary transition the door-only version needed.
+			// The locked-exit line rides the same slot: it's the same kind of
+			// message (a one-line explanation of what the thing in front of you
+			// needs), it appears in the same place, and the two can't be in range
+			// at once in any layout worth building.
+			static bool interactPromptShown = false;
+			static std::string interactPromptText;
+			//
+			// Suppressed once a run has ended: GameLogic() stops updating
+			// nearbyDoor/nearbyPickup/atLockedExit when it freezes, so whatever was
+			// in range on the last live frame would otherwise sit there under the
+			// game-over text still inviting a keypress that does nothing.
+			bool showInteractPrompt = runState == RunState::Running &&
+									  (nearbyDoor >= 0 || nearbyPickup >= 0 ||
+									   nearbyCandle >= 0 || atLockedExit);
+			// Door prompts split four ways once locks exist: a padlock the
+			// player can open ("[E] Unlock", and the wording warns the key is
+			// spent, since it can't be got back), one they can't (what to go find
+			// -- by lockLabel, not the raw id), one they're standing behind (no
+			// key named at all: from this side there is no padlock in sight, and
+			// naming one would be telling them something they can't see), and a
+			// plain door.
+			std::string wantedPromptText;
+			if(atLockedExit) {
+				wantedPromptText = "The way out is locked - find the key";
+			} else if(nearbyPickup >= 0) {
+				wantedPromptText = "[E] Pick up";
+			} else if(nearbyCandle >= 0) {
+				// Two ways, matching the aura the candle is wearing right now:
+				// with fire in hand it's an invitation, without it's the reason
+				// the candle won't take.
+				wantedPromptText = hasBurningTorch()
+								 ? "[E] Light the candle"
+								 : "You need a lit torch to light this";
+			} else if(nearbyDoor >= 0 && doors[nearbyDoor].locked) {
+				// Each of the three has a per-door override (Door::promptReady and
+				// friends) that wins when it isn't empty. Only the bookcase sets
+				// them: a padlock explains itself and wants the generic wording,
+				// while a bookcase must never say "locked" -- it is furniture until
+				// the player decides it isn't.
+				const Door &d = doors[nearbyDoor];
+				if(!d.onLockSide(camPos)) {
+					wantedPromptText = d.promptBlocked.empty() ? "This door is blocked"
+															   : d.promptBlocked;
+				} else if(findKeyInRing(d.lockKeyId) >= 0) {
+					wantedPromptText = d.promptReady.empty()
+									 ? "[E] Unlock (uses the " + d.lockLabel + ")"
+									 : d.promptReady;
+				} else {
+					wantedPromptText = d.promptMissing.empty()
+									 ? "Locked - needs the " + d.lockLabel
+									 : d.promptMissing;
+				}
 			} else {
-				wantedPromptText = d.promptMissing.empty()
-								 ? "Locked - needs the " + d.lockLabel
-								 : d.promptMissing;
+				wantedPromptText = "[E] Interact";
 			}
-		} else {
-			wantedPromptText = "[E] Interact";
-		}
-		if(showInteractPrompt && (!interactPromptShown || wantedPromptText != interactPromptText)) {
-			if(interactPromptShown) txt.removeText(3);
-			float sx, sy;
-			txt.pixelToScr((float)windowWidth / 2.0f, (float)windowHeight - 60.0f, sx, sy);
-			txt.print(sx, sy, wantedPromptText, 3, "CO", false, true, false,
-					  TAL_CENTER, TRH_CENTER, TRV_BOTTOM,
-					  {1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f});
-			interactPromptShown = true;
-			interactPromptText = wantedPromptText;
-		} else if(!showInteractPrompt && interactPromptShown) {
-			txt.removeText(3);
-			interactPromptShown = false;
-		}
-
-		// The hunt banner, centred and high on the screen: the words behind
-		// what the torches are already saying in colour. Two lines only,
-		// because a player reading a paragraph is a player not running.
-		//
-		// Re-printed only when the text changes, not every frame -- print()
-		// unconditionally dirties the text command buffer, and the countdown is
-		// therefore deliberately rounded to whole seconds so it changes at most
-		// once a second instead of once a frame.
-		static bool huntBannerShown = false;
-		static std::string huntBannerText;
-		std::string wantedHuntText;
-		if(runState == RunState::Running) {
-			if(huntCycle.phase() == HuntPhase::Warning) {
-				std::ostringstream hoss;
-				hoss << "THE LIGHTS ARE TURNING - "
-					 << (int)std::ceil(huntCycle.timeLeftInPhase()) << "\n";
-				wantedHuntText = hoss.str();
-			} else if(huntCycle.phase() == HuntPhase::Hunt) {
-				wantedHuntText = "RUN\n";
+			if(showInteractPrompt && (!interactPromptShown || wantedPromptText != interactPromptText)) {
+				if(interactPromptShown) txt.removeText(3);
+				float sx, sy;
+				txt.pixelToScr((float)windowWidth / 2.0f, (float)windowHeight - 60.0f, sx, sy);
+				txt.print(sx, sy, wantedPromptText, 3, "CO", false, true, false,
+						  TAL_CENTER, TRH_CENTER, TRV_BOTTOM,
+						  {1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f});
+				interactPromptShown = true;
+				interactPromptText = wantedPromptText;
+			} else if(!showInteractPrompt && interactPromptShown) {
+				txt.removeText(3);
+				interactPromptShown = false;
 			}
-		}
-		if(!wantedHuntText.empty() && (!huntBannerShown || wantedHuntText != huntBannerText)) {
-			if(huntBannerShown) txt.removeText(4);
-			float sx, sy;
-			txt.pixelToScr((float)windowWidth / 2.0f, 60.0f, sx, sy);
-			txt.print(sx, sy, wantedHuntText, 4, "CO", false, true, false,
-					  TAL_CENTER, TRH_CENTER, TRV_TOP,
-					  {1.0f, 0.85f, 0.2f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f});
-			huntBannerShown = true;
-			huntBannerText = wantedHuntText;
-		} else if(wantedHuntText.empty() && huntBannerShown) {
-			txt.removeText(4);
-			huntBannerShown = false;
-		}
 
-		// End of run. Static text, so unlike the banner above it's printed once
-		// on the transition and left alone until the run restarts.
-		static bool endBannerShown = false;
-		static std::string endBannerText;
-		std::string wantedEndText;
-		if(runState == RunState::Caught) {
-			wantedEndText = "CAUGHT\n[R] Try again\n";
-		} else if(runState == RunState::Escaped) {
-			wantedEndText = "YOU ESCAPED THE CASTLE\n[R] Play again\n";
-		}
-		if(!wantedEndText.empty() && (!endBannerShown || wantedEndText != endBannerText)) {
-			if(endBannerShown) txt.removeText(5);
-			float sx, sy;
-			txt.pixelToScr((float)windowWidth / 2.0f, (float)windowHeight / 2.0f, sx, sy);
-			txt.print(sx, sy, wantedEndText, 5, "CO", false, true, false,
-					  TAL_CENTER, TRH_CENTER, TRV_MIDDLE,
-					  {1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f});
-			endBannerShown = true;
-			endBannerText = wantedEndText;
-		} else if(wantedEndText.empty() && endBannerShown) {
-			txt.removeText(5);
-			endBannerShown = false;
+			// The hunt banner, centred and high on the screen: the words behind
+			// what the torches are already saying in colour. Two lines only,
+			// because a player reading a paragraph is a player not running.
+			//
+			// Re-printed only when the text changes, not every frame -- print()
+			// unconditionally dirties the text command buffer, and the countdown is
+			// therefore deliberately rounded to whole seconds so it changes at most
+			// once a second instead of once a frame.
+			static bool huntBannerShown = false;
+			static std::string huntBannerText;
+			std::string wantedHuntText;
+			if(runState == RunState::Running) {
+				if(huntCycle.phase() == HuntPhase::Warning) {
+					std::ostringstream hoss;
+					hoss << "THE LIGHTS ARE TURNING - "
+						 << (int)std::ceil(huntCycle.timeLeftInPhase()) << "\n";
+					wantedHuntText = hoss.str();
+				} else if(huntCycle.phase() == HuntPhase::Hunt) {
+					wantedHuntText = "RUN\n";
+				}
+			}
+			if(!wantedHuntText.empty() && (!huntBannerShown || wantedHuntText != huntBannerText)) {
+				if(huntBannerShown) txt.removeText(4);
+				float sx, sy;
+				txt.pixelToScr((float)windowWidth / 2.0f, 60.0f, sx, sy);
+				txt.print(sx, sy, wantedHuntText, 4, "CO", false, true, false,
+						  TAL_CENTER, TRH_CENTER, TRV_TOP,
+						  {1.0f, 0.85f, 0.2f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f});
+				huntBannerShown = true;
+				huntBannerText = wantedHuntText;
+			} else if(wantedHuntText.empty() && huntBannerShown) {
+				txt.removeText(4);
+				huntBannerShown = false;
+			}
+
+			// End of run. Static text, so unlike the banner above it's printed once
+			// on the transition and left alone until the run restarts.
+			static bool endBannerShown = false;
+			static std::string endBannerText;
+			std::string wantedEndText;
+			if(runState == RunState::Caught) {
+				wantedEndText = "CAUGHT\n[R] Try again\n";
+			} else if(runState == RunState::Escaped) {
+				wantedEndText = "YOU ESCAPED THE CASTLE\n[R] Play again\n";
+			}
+			if(!wantedEndText.empty() && (!endBannerShown || wantedEndText != endBannerText)) {
+				if(endBannerShown) txt.removeText(5);
+				float sx, sy;
+				txt.pixelToScr((float)windowWidth / 2.0f, (float)windowHeight / 2.0f, sx, sy);
+				txt.print(sx, sy, wantedEndText, 5, "CO", false, true, false,
+						  TAL_CENTER, TRH_CENTER, TRV_MIDDLE,
+						  {1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f});
+				endBannerShown = true;
+				endBannerText = wantedEndText;
+			} else if(wantedEndText.empty() && endBannerShown) {
+				txt.removeText(5);
+				endBannerShown = false;
+			}
 		}
 
 		txt.updateCommandBuffer();
 		uiQuad.updateCommandBuffer();
 		crosshair.updateCommandBuffer();
 		pauseQuad.updateCommandBuffer();
+		startScreenQuad.updateCommandBuffer();
 	}
 	
 	// --- Ghost navigation ---------------------------------------------------
@@ -5747,29 +5805,41 @@ class Skeleton26ReplaceName : public BaseProject {
 		glm::vec3 m = glm::vec3(0.0f), r = glm::vec3(0.0f);
 		bool fire = false;
 
-		// Poll/render the cheat HUD and pause menu BEFORE getSixAxis.
-		// getSixAxis turns on GLFW_STICKY_MOUSE_BUTTONS, which makes
-		// glfwGetMouseButton a one-shot read (it flips back to "released"
-		// once polled). Reading their own click hit-tests first guarantees
-		// they get that one authoritative read of a click, not getSixAxis's
-		// drag-look check.
+		// Poll/render the launch screen, cheat HUD and pause menu BEFORE
+		// getSixAxis. getSixAxis turns on GLFW_STICKY_MOUSE_BUTTONS, which
+		// makes glfwGetMouseButton a one-shot read (it flips back to
+		// "released" once polled). Reading their own click hit-tests first
+		// guarantees they get that one authoritative read of a click, not
+		// getSixAxis's drag-look check.
 		//
-		// The HUD only gets to react while the pause menu is closed --
-		// one modal overlay at a time, and ESC (updateUniformBuffer()) is
-		// the pause menu's own equivalent guard against L while paused.
-		if(!pauseMenu.isOpen()) {
+		// The HUD only gets to react while neither the pause menu nor the
+		// launch screen is open -- one modal overlay at a time, and ESC
+		// (updateUniformBuffer()) is the pause menu's own equivalent guard
+		// against L while paused.
+		if(!pauseMenu.isOpen() && !startScreen.isOpen()) {
 			hud.update(window, windowWidth, windowHeight);
 		}
+
+		startScreen.update(window, windowWidth, windowHeight);
+		if(startScreen.playClicked()) {
+			startScreen.setOpen(false, windowWidth, windowHeight);
+		}
+		if(startScreen.quitClicked()) {
+			glfwSetWindowShouldClose(window, GL_TRUE);
+		}
+
 		pauseMenu.update(window, windowWidth, windowHeight);
 		if(pauseMenu.resumeClicked()) {
 			pauseMenu.setOpen(false, windowWidth, windowHeight);
 		}
 		if(pauseMenu.quitClicked()) {
-			// Not implemented yet: there is no main menu/start screen to
-			// return to. Wired up (hover/click both work) so the button
-			// isn't dead-looking, but it currently does nothing but log.
-			std::cout << "[pause] Quit clicked (not implemented yet)\n";
-			pauseMenu.clearRequests();
+			// Abandon the current run and drop back to the launch screen --
+			// restartRun() puts every piece of world state (camera, doors,
+			// keys, ghosts, candles) back to spawn, the same reset a fresh
+			// Play needs, so the next Play click starts clean either way.
+			pauseMenu.setOpen(false, windowWidth, windowHeight);
+			restartRun();
+			startScreen.setOpen(true, windowWidth, windowHeight);
 		}
 
 		getSixAxis(deltaT, m, r, fire);
