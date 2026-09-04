@@ -1163,11 +1163,11 @@ class Skeleton26ReplaceName : public BaseProject {
 	// What kind of thing gazedInstance is, so CookTorrance.frag can pick a
 	// distinct aura color per category (doors gold, pickups blue/purple)
 	// instead of every interactable looking the same. Encoded as
-	// ubo.glow's magnitude (1 = Door, 2 = Pickup, 3 = Candle) alongside the
-	// sign for gazedInteractionDisabled -- see the assignment in
+	// ubo.glow's magnitude (1 = Door, 2 = Pickup, 3 = Candle, 4 = WallTorch)
+	// alongside the sign for gazedInteractionDisabled -- see the assignment in
 	// updateUniformBuffer(). A plain enum rather than a bool, which is what
-	// let Candle slot in later without renaming anything.
-	enum class GlowKind { Door = 1, Pickup = 2, Candle = 3 };
+	// let Candle and WallTorch slot in later without renaming anything.
+	enum class GlowKind { Door = 1, Pickup = 2, Candle = 3, WallTorch = 4 };
 	GlowKind gazedGlowKind = GlowKind::Door;
 
 	// True if `front` (the camera's normalized forward vector) is aimed
@@ -1410,6 +1410,13 @@ class Skeleton26ReplaceName : public BaseProject {
 	// from the camera's position and basis vectors, so it follows the view
 	// like a first-person weapon model. Null if the instance isn't found.
 	Instance *handTorchInst = nullptr;
+	// Index into `torchFlames` of the held torch's flame, or -1 if the
+	// instance wasn't found. The held torch is authored UNLIT (see the
+	// addTorchFlame call in localInit): the player lights it by holding it up
+	// to a burning wall torch and pressing [E], the mirror of the candle
+	// interaction. Everything that asks "is there fire in hand" goes through
+	// hasBurningTorch(), which reads this flame's `burning` flag.
+	int handFlameIdx = -1;
 	// Torch position relative to the eye, in camera space (right, up,
 	// -front). Low and close enough that the handle crops off the bottom
 	// of the screen, so only the torch itself is visible, like a held
@@ -1570,10 +1577,12 @@ class Skeleton26ReplaceName : public BaseProject {
 		// hands out its instance ids once at init (flame.spawn in
 		// addTorchFlame) and has no way to give one back.
 		//
-		// False only for a candle authored unlit in flames.json ("burning": false),
+		// False for a candle authored unlit in flames.json ("burning": false),
 		// which is every candle as shipped: lighting one with [E] off the held
-		// torch is the interaction (see nearbyCandle in GameLogic). Torches are
-		// authored burning and no code ever puts them out.
+		// torch is the interaction (see nearbyCandle in GameLogic). Also false
+		// for the held torch itself, which is spawned unlit and lit from a
+		// burning wall torch (see nearbyWallTorch in GameLogic). Wall torches
+		// are authored burning and no code ever puts them out.
 		bool burning = true;
 		// What `burning` was authored as, so restartRun() can blow the candles the
 		// player lit back out -- a run that started dark has to start dark
@@ -1667,6 +1676,45 @@ class Skeleton26ReplaceName : public BaseProject {
 		return best;
 	}
 
+	// Wall-torch lighting: the mirror of the candle interaction above. The
+	// held torch starts unlit; aiming at a burning wall torch within reach
+	// and pressing [E] lights it. Once lit it stays lit for the run
+	// (restartRun blows it out again, exactly like the candles the player
+	// lit). A wall torch is a far bigger target than a wick and sits at head
+	// height, so the aim cone is more forgiving than the candle's; the reach
+	// is the same close-range gesture.
+	static constexpr float WALL_TORCH_INTERACT_RADIUS = 3.0f;
+	static constexpr float WALL_TORCH_LOOK_DISTANCE = 6.0f;
+	static constexpr float WALL_TORCH_AIM_RADIUS = 0.6f;
+	// Index into `torchFlames` of the burning wall torch currently in reach
+	// and aimed at, or -1. Mirrors nearbyCandle, set every frame in GameLogic().
+	int nearbyWallTorch = -1;
+
+	// Index into `torchFlames` of the burning wall torch the player is aiming
+	// at within look range, or -1. Only ever non-negative while the held
+	// torch is unlit: a lit torch has nothing to gain from another, so no
+	// wall torch is offered as a target once it's burning. Same two-gate
+	// split as findGazedCandle: this answers "targeted at all",
+	// WALL_TORCH_INTERACT_RADIUS answers "close enough to light from".
+	int findGazedWallTorch(const glm::vec3 &front) const {
+		if(handFlameIdx < 0 || torchFlames[handFlameIdx].burning) return -1;
+		int best = -1;
+		float bestCos = -1.0f;
+		for(int i = 0; i < (int)torchFlames.size(); i++) {
+			const TorchFlame &tf = torchFlames[i];
+			if(tf.isCandle || tf.heldByCamera || !flameBurning(tf)) continue;
+			float cosAngle;
+			if(isGazedAt(front, tf.anchorWorld, WALL_TORCH_LOOK_DISTANCE,
+						 WALL_TORCH_AIM_RADIUS, cosAngle)) {
+				if(best < 0 || cosAngle > bestCos) {
+					best = i;
+					bestCos = cosAngle;
+				}
+			}
+		}
+		return best;
+	}
+
 	// Is this flame currently burning at all? The single question the two
 	// flame cheats (CheatFlags::roomTorchesEnabled/handTorchEnabled) are asked
 	// through, so every consequence of a flame -- its point light, its
@@ -1676,19 +1724,20 @@ class Skeleton26ReplaceName : public BaseProject {
 	// claims them, and whether one burns is gameplay (the player lit it, see
 	// the candle block in GameLogic) rather than a debug switch.
 	bool flameBurning(const TorchFlame &tf) const {
-		if(tf.heldByCamera) return cheats.handTorchEnabled;
+		if(tf.heldByCamera) return cheats.handTorchEnabled && tf.burning;
 		if(tf.isCandle)     return tf.burning;
 		return cheats.roomTorchesEnabled;
 	}
 
 	// Does the player currently have fire in hand to light something WITH?
-	// The held torch is a scene instance that always exists, so today this is
-	// only ever false with the "Holding Torch" cheat off -- but the candles
-	// ask through this rather than reading the cheat, so the day the torch
-	// becomes something that can be dropped or put out, the answer changes in
-	// one place.
+	// The held torch is a scene instance that always exists, but it starts
+	// unlit (see handFlameIdx) -- so this is false until the player lights it
+	// from a wall torch, and false again if the "Holding Torch" cheat is off.
+	// The candles ask through this rather than reading the cheat or the flame
+	// directly, so there is one place that decides "there is fire in hand".
 	bool hasBurningTorch() const {
-		return handTorchInst != nullptr && cheats.handTorchEnabled;
+		return handTorchInst != nullptr && cheats.handTorchEnabled &&
+			   handFlameIdx >= 0 && torchFlames[handFlameIdx].burning;
 	}
 
 	// Global glare level, 0..1: the max over every wall torch's own stare-at
@@ -3639,7 +3688,13 @@ class Skeleton26ReplaceName : public BaseProject {
 		};
 
 		if(handTorchInst != nullptr) {
-			addTorchFlame("handTorch", TORCH_FLAME_ANCHOR, true);
+			// Spawned UNLIT: the player lights it from a burning wall torch
+			// with [E] (see nearbyWallTorch in GameLogic). handFlameIdx is the
+			// slot it lands in, captured before the push.
+			handFlameIdx = (int)torchFlames.size();
+			addTorchFlame("handTorch", TORCH_FLAME_ANCHOR, true,
+						  TORCH_LIGHT_COLOR, 1.0f, 1.0f, /*isCandle=*/false,
+						  /*burning=*/false);
 		}
 
 		// Every OTHER flame in the scene: read from flames.json instead of
@@ -6089,7 +6144,8 @@ class Skeleton26ReplaceName : public BaseProject {
 			// game-over text still inviting a keypress that does nothing.
 			bool showInteractPrompt = runState == RunState::Running &&
 									  (nearbyDoor >= 0 || nearbyPickup >= 0 ||
-									   nearbyCandle >= 0 || atLockedExit);
+									   nearbyCandle >= 0 || nearbyWallTorch >= 0 ||
+									   atLockedExit);
 			// Door prompts split four ways once locks exist: a padlock the
 			// player can open ("[E] Unlock", and the wording warns the key is
 			// spent, since it can't be got back), one they can't (what to go find
@@ -6102,6 +6158,8 @@ class Skeleton26ReplaceName : public BaseProject {
 				wantedPromptText = "The way out is locked - find the key";
 			} else if(nearbyPickup >= 0) {
 				wantedPromptText = "[E] Pick up";
+			} else if(nearbyWallTorch >= 0) {
+				wantedPromptText = "[E] Light your torch";
 			} else if(nearbyCandle >= 0) {
 				// Two ways, matching the aura the candle is wearing right now:
 				// with fire in hand it's an invitation, without it's the reason
@@ -6479,10 +6537,11 @@ class Skeleton26ReplaceName : public BaseProject {
 		// new run, right after the loop above put it back on its table.
 		keyLowerIdx = -1;
 
-		// Every candle the player lit goes back out, for the same reason the
-		// doors above are re-locked: a castle that keeps the light it was
-		// given gets brighter with every restart, and the whole point of the
-		// candles is that the player earns the light.
+		// Every candle the player lit goes back out, and so does the hand
+		// torch (spawnBurning == false for it), for the same reason the doors
+		// above are re-locked: a castle that keeps the light it was given gets
+		// brighter with every restart, and the whole point is that the player
+		// earns the light -- starting with lighting their own torch.
 		for(TorchFlame &tf : torchFlames) {
 			tf.burning = tf.spawnBurning;
 		}
@@ -6490,6 +6549,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		nearbyDoor = -1;
 		nearbyPickup = -1;
 		nearbyCandle = -1;
+		nearbyWallTorch = -1;
 		gazedInstance = nullptr;
 		atLockedExit = false;
 		// The way out closes again with the rest of the doors (the loop above
@@ -6836,17 +6896,40 @@ class Skeleton26ReplaceName : public BaseProject {
 				}
 			}
 
+			// Wall torches: a burning one within reach, aimed at, lights the
+			// unlit torch in the player's hand ([E]). The mirror of the candle
+			// block above. findGazedWallTorch already returns -1 once the held
+			// torch is burning, so this quietly stops offering a target then.
+			nearbyWallTorch = -1;
+			{
+				int gazed = findGazedWallTorch(front);
+				if(gazed >= 0) {
+					const TorchFlame &tf = torchFlames[gazed];
+					float dx = camPos.x - tf.anchorWorld.x;
+					float dy = camPos.y - tf.anchorWorld.y;
+					float dz = camPos.z - tf.anchorWorld.z;
+					float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+					if(dist < WALL_TORCH_INTERACT_RADIUS) {
+						nearbyWallTorch = gazed;
+					}
+				}
+			}
+
 			// Whichever single instance is currently targeted (pickup first,
-			// then candle, then door -- same priority as the E-key handling
-			// below), for the per-instance focus glow -- see ubo.glow in
-			// updateUniformBuffer(). Candles sit above doors because one
-			// stands in front of a wall or a doorway more often than not, and
-			// the smaller, nearer thing is the one the player means.
+			// then wall torch, then candle, then door -- same priority as the
+			// E-key handling below), for the per-instance focus glow -- see
+			// ubo.glow in updateUniformBuffer(). Candles and wall torches sit
+			// above doors because one stands in front of a wall or a doorway
+			// more often than not, and the smaller, nearer thing is the one
+			// the player means.
 			gazedInstance = nullptr;
 			gazedInteractionDisabled = false;
 			if(nearbyPickup >= 0) {
 				gazedInstance = pickups[nearbyPickup].inst;
 				gazedGlowKind = GlowKind::Pickup;
+			} else if(nearbyWallTorch >= 0) {
+				gazedInstance = torchFlames[nearbyWallTorch].inst;
+				gazedGlowKind = GlowKind::WallTorch;
 			} else if(nearbyCandle >= 0) {
 				gazedInstance = torchFlames[nearbyCandle].inst;
 				gazedGlowKind = GlowKind::Candle;
@@ -6898,6 +6981,16 @@ class Skeleton26ReplaceName : public BaseProject {
 						// than appear already in place.
 						keyRaiseElapsed = 0.0f;
 					}
+				} else if(nearbyWallTorch >= 0) {
+					// Lighting the held torch is the same single bool as a
+					// candle: flip `burning` on the held flame and flameBurning()
+					// turns its billboard, sparks and point light on this frame.
+					// From here hasBurningTorch() is true, so candles can be lit.
+					torchFlames[handFlameIdx].burning = true;
+					std::cout << "[torch] lit hand torch from '"
+							  << *torchFlames[nearbyWallTorch].inst->id << "'\n";
+					nearbyWallTorch = -1;
+					gazedInstance = nullptr;
 				} else if(nearbyCandle >= 0) {
 					// Lighting a candle is one bool: `burning` is what flameBurning()
 					// answers with, and every consequence of a burning flame

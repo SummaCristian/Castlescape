@@ -1092,8 +1092,9 @@ void main() {
         // ubo.glow (set in main.cpp's updateUniformBuffer, see gazedGlowKind
         // and gazedInteractionDisabled there) packs two things into one
         // scalar: rounded magnitude selects the category color (1 = Door,
-        // gold; 2 = Pickup, blue/purple; 3 = Candle, warm flame orange),
-        // then a negative sign overrides that with red -- the player is
+        // gold; 2 = Pickup, blue/purple; 3 = Candle, warm flame orange;
+        // 4 = WallTorch, bright fire yellow), then a negative sign overrides
+        // that with red -- the player is
         // aimed at something disabled right now (e.g. a locked door with no
         // matching key, or a candle with nothing to light it with). Same
         // aura either way, just a different color, so everything below is
@@ -1104,10 +1105,16 @@ void main() {
         // glance: a candle promises FIRE, and the aura is the only cue the
         // player gets before pressing the key.
         const vec3 GLOW_COLOR_CANDLE = vec3(1.0, 0.45, 0.10);
+        // Brighter and yellower than the candle's ember orange: a burning
+        // wall torch is a strong light source, and this is the cue that it's
+        // the thing to light your own torch from.
+        const vec3 GLOW_COLOR_TORCH = vec3(1.0, 0.66, 0.22);
         const vec3 GLOW_COLOR_DISABLED = vec3(1.0, 0.15, 0.1);
         vec3 GLOW_COLOR;
         if(ubo.glow < 0.0) {
             GLOW_COLOR = GLOW_COLOR_DISABLED;
+        } else if(ubo.glow > 3.5) {
+            GLOW_COLOR = GLOW_COLOR_TORCH;
         } else if(ubo.glow > 2.5) {
             GLOW_COLOR = GLOW_COLOR_CANDLE;
         } else if(ubo.glow > 1.5) {
