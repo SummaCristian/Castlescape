@@ -1417,6 +1417,22 @@ class Skeleton26ReplaceName : public BaseProject {
 	// interaction. Everything that asks "is there fire in hand" goes through
 	// hasBurningTorch(), which reads this flame's `burning` flag.
 	int handFlameIdx = -1;
+	// True once the player has picked the torch up off the floor. Until
+	// then handTorchInst sits at its authored scene.json pose as a pickup
+	// target (findGazedHandTorch / nearbyHandTorch), no flame or hand model
+	// is drawn, and hasBurningTorch() is false so no candle can be lit.
+	// restartRun() clears it -- every run begins with the torch back on the
+	// ground, the first thing the player earns before the light.
+	bool handTorchCollected = false;
+	// The torch's authored floor pose and position, captured in localInit
+	// before the per-frame held-torch code can overwrite Wm. Used for the
+	// gaze/proximity check while it's on the ground and to put it back
+	// there (updateUniformBuffer's not-collected branch, restartRun).
+	glm::mat4 handTorchSpawnWm{1.0f};
+	glm::vec3 handTorchWorldPos{0.0f};
+	// True when the crosshair is on the floor torch within reach this
+	// frame. Mirrors nearbyPickup; set every frame in GameLogic().
+	bool nearbyHandTorch = false;
 	// Torch position relative to the eye, in camera space (right, up,
 	// -front). Low and close enough that the handle crops off the bottom
 	// of the screen, so only the torch itself is visible, like a held
@@ -1696,8 +1712,11 @@ class Skeleton26ReplaceName : public BaseProject {
 	// wall torch is offered as a target once it's burning. Same two-gate
 	// split as findGazedCandle: this answers "targeted at all",
 	// WALL_TORCH_INTERACT_RADIUS answers "close enough to light from".
+	// Also -1 until the torch is actually in hand: there's nothing to light
+	// while it's still on the floor.
 	int findGazedWallTorch(const glm::vec3 &front) const {
-		if(handFlameIdx < 0 || torchFlames[handFlameIdx].burning) return -1;
+		if(handFlameIdx < 0 || !handTorchCollected ||
+		   torchFlames[handFlameIdx].burning) return -1;
 		int best = -1;
 		float bestCos = -1.0f;
 		for(int i = 0; i < (int)torchFlames.size(); i++) {
@@ -1715,6 +1734,19 @@ class Skeleton26ReplaceName : public BaseProject {
 		return best;
 	}
 
+	// The floor torch, before it's picked up: a single gaze target at its
+	// authored resting place. True when aimed at within look range and
+	// still on the ground. The mirror of findGazedPickup for the one prop
+	// that doesn't ride the Pickup/keyRing machinery -- it reuses the
+	// pickup look/aim tolerances since it's the same kind of small floor
+	// object.
+	bool findGazedHandTorch(const glm::vec3 &front) const {
+		if(handTorchInst == nullptr || handTorchCollected) return false;
+		float cosAngle;
+		return isGazedAt(front, handTorchWorldPos, PICKUP_LOOK_DISTANCE,
+						 PICKUP_AIM_RADIUS, cosAngle);
+	}
+
 	// Is this flame currently burning at all? The single question the two
 	// flame cheats (CheatFlags::roomTorchesEnabled/handTorchEnabled) are asked
 	// through, so every consequence of a flame -- its point light, its
@@ -1730,13 +1762,16 @@ class Skeleton26ReplaceName : public BaseProject {
 	}
 
 	// Does the player currently have fire in hand to light something WITH?
-	// The held torch is a scene instance that always exists, but it starts
-	// unlit (see handFlameIdx) -- so this is false until the player lights it
-	// from a wall torch, and false again if the "Holding Torch" cheat is off.
-	// The candles ask through this rather than reading the cheat or the flame
-	// directly, so there is one place that decides "there is fire in hand".
+	// The held torch is a scene instance that always exists, but the player
+	// starts without it: it has to be picked up off the floor
+	// (handTorchCollected), then lit from a wall torch (see handFlameIdx) --
+	// so this is false until both have happened, and false again if the
+	// "Holding Torch" cheat is off. The candles ask through this rather than
+	// reading the cheat or the flame directly, so there is one place that
+	// decides "there is fire in hand".
 	bool hasBurningTorch() const {
-		return handTorchInst != nullptr && cheats.handTorchEnabled &&
+		return handTorchInst != nullptr && handTorchCollected &&
+			   cheats.handTorchEnabled &&
 			   handFlameIdx >= 0 && torchFlames[handFlameIdx].burning;
 	}
 
@@ -3594,14 +3629,24 @@ class Skeleton26ReplaceName : public BaseProject {
 			}
 		}
 
-		// Held torch. Its Wm is overwritten every frame in GameLogic(), so
-		// the placeholder transform in scene.json never actually shows.
+		// Held torch. Starts on the FLOOR at its authored scene.json pose
+		// (translate/eulerAngles/scale): the player walks up to it and picks
+		// it up with [E] (see nearbyHandTorch in GameLogic). Only once
+		// handTorchCollected is set does GameLogic start rebuilding its Wm
+		// from the camera every frame -- until then the authored pose is what
+		// shows, so it's captured here before anything can overwrite it.
 		{
 			auto it = SC.InstanceIds.find("handTorch");
 			if(it == SC.InstanceIds.end()) {
 				std::cout << "Hand torch instance 'handTorch' not found, skipping\n";
 			} else {
 				handTorchInst = SC.I[it->second];
+				handTorchSpawnWm = handTorchInst->Wm;
+				// Aim point for the floor pickup, lifted off the instance
+				// origin (which sits below the mesh once the torch is laid on
+				// its side) so the crosshair lands on the torch body itself.
+				handTorchWorldPos = glm::vec3(handTorchInst->Wm[3]) +
+									glm::vec3(0.0f, 0.35f, 0.0f);
 			}
 		}
 
@@ -6145,7 +6190,7 @@ class Skeleton26ReplaceName : public BaseProject {
 			bool showInteractPrompt = runState == RunState::Running &&
 									  (nearbyDoor >= 0 || nearbyPickup >= 0 ||
 									   nearbyCandle >= 0 || nearbyWallTorch >= 0 ||
-									   atLockedExit);
+									   nearbyHandTorch || atLockedExit);
 			// Door prompts split four ways once locks exist: a padlock the
 			// player can open ("[E] Unlock", and the wording warns the key is
 			// spent, since it can't be got back), one they can't (what to go find
@@ -6156,6 +6201,8 @@ class Skeleton26ReplaceName : public BaseProject {
 			std::string wantedPromptText;
 			if(atLockedExit) {
 				wantedPromptText = "The way out is locked - find the key";
+			} else if(nearbyHandTorch) {
+				wantedPromptText = "[E] Pick up torch";
 			} else if(nearbyPickup >= 0) {
 				wantedPromptText = "[E] Pick up";
 			} else if(nearbyWallTorch >= 0) {
@@ -6537,11 +6584,15 @@ class Skeleton26ReplaceName : public BaseProject {
 		// new run, right after the loop above put it back on its table.
 		keyLowerIdx = -1;
 
-		// Every candle the player lit goes back out, and so does the hand
-		// torch (spawnBurning == false for it), for the same reason the doors
-		// above are re-locked: a castle that keeps the light it was given gets
-		// brighter with every restart, and the whole point is that the player
-		// earns the light -- starting with lighting their own torch.
+		// The torch goes back on the floor, and every candle the player lit
+		// goes back out (the torch's flame with them -- spawnBurning == false
+		// for it), for the same reason the doors above are re-locked: a
+		// castle that keeps the light it was given gets brighter with every
+		// restart, and the whole point is that the player earns the light --
+		// starting with finding and lighting their own torch. The instance's
+		// Wm is put back to the authored floor pose by updateUniformBuffer()
+		// on the next frame, once handTorchCollected is false again.
+		handTorchCollected = false;
 		for(TorchFlame &tf : torchFlames) {
 			tf.burning = tf.spawnBurning;
 		}
@@ -6550,6 +6601,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		nearbyPickup = -1;
 		nearbyCandle = -1;
 		nearbyWallTorch = -1;
+		nearbyHandTorch = false;
 		gazedInstance = nullptr;
 		atLockedExit = false;
 		// The way out closes again with the rest of the doors (the loop above
@@ -6915,16 +6967,34 @@ class Skeleton26ReplaceName : public BaseProject {
 				}
 			}
 
-			// Whichever single instance is currently targeted (pickup first,
-			// then wall torch, then candle, then door -- same priority as the
-			// E-key handling below), for the per-instance focus glow -- see
-			// ubo.glow in updateUniformBuffer(). Candles and wall torches sit
-			// above doors because one stands in front of a wall or a doorway
-			// more often than not, and the smaller, nearer thing is the one
-			// the player means.
+			// The floor torch: aimed at, within reach, and not yet picked
+			// up. Uses the ordinary pickup look/interact/aim tolerances --
+			// it's the same kind of small floor object. findGazedHandTorch
+			// already returns false once it's been collected.
+			nearbyHandTorch = false;
+			if(findGazedHandTorch(front)) {
+				float dx = camPos.x - handTorchWorldPos.x;
+				float dy = camPos.y - handTorchWorldPos.y;
+				float dz = camPos.z - handTorchWorldPos.z;
+				if(std::sqrt(dx * dx + dy * dy + dz * dz) < PICKUP_INTERACT_RADIUS) {
+					nearbyHandTorch = true;
+				}
+			}
+
+			// Whichever single instance is currently targeted (floor torch
+			// and pickup first, then wall torch, then candle, then door --
+			// same priority as the E-key handling below), for the
+			// per-instance focus glow -- see ubo.glow in
+			// updateUniformBuffer(). Candles and wall torches sit above doors
+			// because one stands in front of a wall or a doorway more often
+			// than not, and the smaller, nearer thing is the one the player
+			// means.
 			gazedInstance = nullptr;
 			gazedInteractionDisabled = false;
-			if(nearbyPickup >= 0) {
+			if(nearbyHandTorch) {
+				gazedInstance = handTorchInst;
+				gazedGlowKind = GlowKind::Pickup;
+			} else if(nearbyPickup >= 0) {
 				gazedInstance = pickups[nearbyPickup].inst;
 				gazedGlowKind = GlowKind::Pickup;
 			} else if(nearbyWallTorch >= 0) {
@@ -6949,7 +7019,17 @@ class Skeleton26ReplaceName : public BaseProject {
 
 			bool interactKey = glfwGetKey(window, GLFW_KEY_E);
 			if(interactKey && !interactKeyWasPressed) {
-				if(nearbyPickup >= 0) {
+				if(nearbyHandTorch) {
+					// Into the hand it goes, still unlit. From the next frame
+					// updateUniformBuffer() rebuilds its Wm off the camera
+					// instead of leaving it at the authored floor pose, and
+					// findGazedWallTorch() starts offering a flame to light
+					// it from.
+					handTorchCollected = true;
+					std::cout << "[torch] picked up hand torch\n";
+					nearbyHandTorch = false;
+					gazedInstance = nullptr;
+				} else if(nearbyPickup >= 0) {
 					Pickup &p = pickups[nearbyPickup];
 					p.collected = true;
 					// No per-instance visibility flag exists (Starter draws
@@ -7531,14 +7611,23 @@ class Skeleton26ReplaceName : public BaseProject {
 			walkBobPhase += WALK_BOB_SPEED * (sprinting ? 1.4f : 1.0f) * deltaT;
 		}
 
-		// Held torch: sits at a fixed offset from the eye, in that camera-local space.
+		// Held torch: sits at a fixed offset from the eye, in that camera-local space --
+		// but only once the player has picked it up (handTorchCollected). Before
+		// that it's left exactly where localInit captured it, lying on the floor
+		// at its authored scene.json pose, for the player to walk up to.
 		// With the "Holding Torch" cheat off it's parked below the map instead,
 		// which is how everything else here hides a mesh (see consumeKey():
 		// Starter draws every instance every frame, there's no per-instance
 		// visibility flag). Its flame and light are dropped separately, through
 		// flameBurning().
-		if(handTorchInst != nullptr && !cheats.handTorchEnabled) {
-			handTorchInst->Wm = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
+		bool torchInHand = handTorchCollected && cheats.handTorchEnabled;
+		if(handTorchInst != nullptr && !torchInHand) {
+			// On the floor if it hasn't been picked up and the torch isn't
+			// cheat-disabled; parked below the map otherwise (collected but
+			// cheat off).
+			handTorchInst->Wm = (!handTorchCollected && cheats.handTorchEnabled)
+				? handTorchSpawnWm
+				: glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
 		} else if(handTorchInst != nullptr) {
 			float bobLateral = sinf(walkBobPhase) * WALK_BOB_LATERAL * walkBobBlend;
 			float bobVertical = sinf(walkBobPhase * 2.0f) * WALK_BOB_VERTICAL * walkBobBlend;

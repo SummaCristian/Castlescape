@@ -173,7 +173,7 @@
 			{"id": "dvBarrel", "model": "dungeonBarrel", "texture": ["dungeonBarrelTex"], "translate": [15.5, 0.02, 22.5], "eulerAngles": [0.0, 20.0, 0.0], "scale": [0.48, 0.48, 0.48]},
 			{"id": "dvSkull", "model": "dungeonSkull", "texture": ["dungeonSkullTex"], "translate": [15.5, 0.02, 30.5], "eulerAngles": [0.0, -20.0, 0.0], "scale": [0.46, 0.46, 0.46]},
 
-			{"id": "handTorch", "model": "dungeonTorchHeld", "texture": ["dungeonTorchTex"]}
+			{"id": "handTorch", "model": "dungeonTorchHeld", "texture": ["dungeonTorchTex"], "translate": [-31.2, -0.12, 27.8], "eulerAngles": [0.0, 35.0, -90.0], "scale": [1.0, 1.0, 1.0]}
 		]},
 
 		{"technique": "Spectral", "elements": [
