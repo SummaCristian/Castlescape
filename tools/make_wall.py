@@ -107,13 +107,12 @@ PIECES = [
     ("SM_WallStraight_01", "SM_WallStraight_02", "SM_WallStraight_01", [(0, -1)], []),
     ("SM_WallCorner_01", "SM_WallCorner_02", "SM_WallCorner_01", [(0, -1), (2, -1)], []),
     ("SM_WallDoor_Hole_01", "SM_WallDoor_Hole_02", "SM_WallDoor_Hole_01", [(0, -1)], []),
-    # Il soffitto guarda in giu': la "stanza" sta sotto. Le travi del cassettone
-    # sono gia' geometria (le ha fatte make_ceiling.py), il fondo fra loro no.
-    # L'intradosso delle travi, a y=0, si lascia stare: la texture ci porta sopra
-    # gli stessi mattoni -- e' l'atlante, non una scelta -- ma una trave non e'
-    # muratura, e la fascia e' larga 65 cm contro conci da un metro, cosi' se ne
-    # alzavano quattro sparsi e le travi sembravano sbriciolate. Non c'e' un
-    # criterio automatico onesto per distinguerlo, quindi sta scritto qui.
+    # Il soffitto guarda in giu': la "stanza" sta sotto. Il fondo del cassettone
+    # e' un campo di conci come un muro e si misura sulla texture; l'intradosso
+    # delle travi, a y=0, e' un campo di conci anche lui ma la sua griglia sulla
+    # texture non c'e' -- il pittore ci ha steso gli stessi mattoni del fondo,
+    # perche' e' l'atlante a decidere, non noi. Quel piano si dichiara qui e la
+    # griglia gliela costruisce Beam.
     ("SM_StoneCeiling_01", "SM_StoneCeiling_02", "SM_StoneCeiling_01", [(1, -1)],
      [(1, -1, 0.0)]),
 ]
@@ -135,6 +134,7 @@ CHIP_MIN = 0.018        # sotto questa soglia l'angolo si lascia netto
 SET = 0.004             # arretramento del concio dal filo del muro
 TILT = 0.006            # e di quanto e' fuori piombo da un capo all'altro
 STEP = 0.40             # passo di campionatura del bordo del concio
+BEAM_STONE = 1.25       # lunghezza di riferimento di un concio di trave
 
 # RINGS e STEP vanno letti insieme, come nel pavimento: le onde sono lunghe 2.4 e
 # 1.0 m contro un passo di 40 cm. Con un rumore a onda corta la campionatura lo
@@ -312,7 +312,13 @@ class Face(object):
         return bool(np.any((w0 >= -1e-6) & (w1 >= -1e-6) & (w0 + w1 <= 1 + 1e-6)))
 
     def blocks(self):
-        """I conci in metri: (k, i, x0, x1, y0, y1, semifughe, chiavi, ultimo)."""
+        """I conci in metri: (identita', x0, x1, y0, y1, semifughe, chiavi).
+
+        L'identita' e' del CONCIO, non della cella: il primo e l'ultimo di un
+        corso sono le due meta' dello stesso concio, tagliato dal bordo della
+        piastrella, e si incontrano solo affiancando due pezzi nella scena.
+        Devono arretrare uguale, ed e' l'identita' comune a garantirlo.
+        """
         out = []
         # Il ritaglio del quadrante e' arrotondato al texel, quindi la griglia
         # sborda della frazione di texel che avanza: sul fondo del cassettone
@@ -342,11 +348,175 @@ class Face(object):
             if self.fh < 0:
                 kh0, kh1 = kh1, kh0
             last = max(c[1] for c in self.cells if c[0] == k)
-            out.append((k, i, x0, x1, y0, y1,
+            out.append(((k, 0 if i == last else i), x0, x1, y0, y1,
                         (hw0 * self.mw, hw1 * self.mw, hh0 * self.mh, hh1 * self.mh),
-                        (kw0, kw1, kh0, kh1), last))
+                        (kw0, kw1, kh0, kh1)))
 
         return out
+
+    def recess(self, bkey, y0, y1):
+        """L'arretramento della faccia del concio dal filo del muro: non un
+        numero ma una funzione di (X, Y), perche' un concio si assesta ruotando
+        e la sua faccia smette di essere parallela al muro.
+
+        La parte lungo l'altezza e' lineare -- il concio pende da una parte -- e
+        usa il corso, che non e' tagliato da niente. Quella lungo il muro e'
+        invece l'onda periodica: un termine lineare in X non si richiuderebbe
+        sul modulo, e le due meta' del concio tagliato dal bordo prenderebbero
+        arretramenti diversi, cioe' uno scalino ogni 7.2 m sulla faccia.
+        """
+        r = random.Random(repr(("set", bkey)))
+        base = SET * r.random()
+        gy, gx = r.uniform(-1.0, 1.0), r.uniform(-1.0, 1.0)
+
+        def at(X, Y):
+            v = gy * (2.0 * (Y - y0) / max(y1 - y0, 1e-9) - 1.0)
+            v += gx * wobble(("tilt", bkey), X, self.W)
+            return base + 0.25 * TILT * (v + 2.0)      # sempre >= 0: mai fuori dal filo
+
+        return at
+
+    def what(self):
+        n = len(set(c[0] for c in self.cells))
+        return "%2d cors%s" % (n, "o" if n == 1 else "i")
+
+
+class Beam(Face):
+    """La cornice di travi del cassettone del soffitto: un campo di conci di cui
+    pero' sulla texture non c'e' scritta la griglia.
+
+    Le travi prendono dall'atlante gli stessi mattoni del fondo -- e' la
+    proiezione dall'alto di make_ceiling.py, non una scelta -- ma una trave non
+    e' muratura. La fascia e' larga 45 cm e i conci dipinti sono lunghi 1.15,
+    quindi dentro la fascia non ci sta un corso: ci stanno dei pezzi di conci
+    tagliati per il lungo, e alzando quelli si alzavano quattro frammenti sparsi
+    con la trave che sembrava sbriciolata. Per questo prima restava piatta.
+
+    Un concio di trave e' invece un pezzo unico che tiene tutta la larghezza
+    della fascia, e i suoi giunti sono TRASVERSALI. Quella griglia non e'
+    disegnata da nessuna parte e non c'e' niente da misurare, quindi la si
+    costruisce -- ed e' la cornice stessa a darla, senza inventare: i quattro
+    cantonali dove le due fasce si incrociano, e fra un cantonale e l'altro il
+    numero di conci uguali che sta piu' vicino a BEAM_STONE. Dalla texture si
+    prende solo la larghezza delle fughe, che e' l'unica cosa che deve restare
+    la stessa del resto del soffitto.
+
+    L'altra differenza sta nel bordo della piastrella. Sul muro il bordo taglia
+    in due i conci di un corso e le due meta' stanno ai due capi dello stesso
+    corso; qui taglia in DUE DIREZIONI, perche' una trave del mondo e' larga 90
+    cm -- due fasce di due piastrelle affiancate -- e un cantonale e' un quarto
+    di blocco diviso fra quattro piastrelle. Percio' le meta' che si devono
+    richiudere sono la fascia bassa con quella alta e la sinistra con la destra,
+    i quattro cantonali fra loro, e l'arretramento dev'essere periodico su
+    tutt'e due gli assi invece che su uno solo: vedi recess.
+    """
+
+    def __init__(self, *args):
+        Face.__init__(self, *args)
+        self.band = self._band()
+        # La fuga: quella misurata sulla texture della faccia stessa. Un numero
+        # scritto a mano qui sarebbe l'unica quota del pezzo non presa dal kit,
+        # e si vedrebbe -- la trave sta a un metro dal fondo del cassettone,
+        # nello stesso colpo d'occhio.
+        half = [v for b in Face.blocks(self) for v in b[5] if v > 1e-9]
+        assert half, "nessuna fuga misurata sulla texture della cornice"
+        self.joint = float(np.median(half))
+
+    def _band(self):
+        """La larghezza della fascia, misurata sul contorno libero della faccia.
+
+        La cornice e' un anello, e i suoi bordi liberi sono due: l'ingombro
+        della piastrella e il perimetro della luce interna. Quelli che non
+        stanno sull'ingombro danno la luce, e la differenza e' la fascia. Le
+        diagonali dei cantonali non entrano: sono spigoli interni, ci passano
+        due triangoli.
+        """
+        count = {}
+        for tri in self.poly:
+            pts = [(round(x, 6), round(y, 6)) for x, y in tri]
+            for i in range(3):
+                a, b = pts[i], pts[(i + 1) % 3]
+                e = (a, b) if a <= b else (b, a)
+                count[e] = count.get(e, 0) + 1
+        lo = (self.X0, self.Y0)
+        hi = (self.X0 + self.W, self.Y0 + self.H)
+        on = lambda p: any(abs(p[i] - lo[i]) < 1e-4 or abs(p[i] - hi[i]) < 1e-4
+                           for i in (0, 1))
+        inner = [p for e, n in count.items() if n == 1 for p in e if not on(p)]
+        assert inner, "la faccia non e' una cornice: non ha luce interna"
+        band = [min(p[0] for p in inner) - lo[0], hi[0] - max(p[0] for p in inner),
+                min(p[1] for p in inner) - lo[1], hi[1] - max(p[1] for p in inner)]
+        assert max(band) - min(band) < 1e-4, "cornice di larghezza disuguale: %s" % band
+        return band[0]
+
+    def _lines(self, i):
+        """I tagli lungo una fascia, e la chiave del giunto su ognuno.
+
+        Le due fasce parallele di una piastrella hanno gli stessi tagli e le
+        stesse chiavi: sono le due meta' delle stesse travi del mondo, e un
+        taglio in piu' su una sola vorrebbe dire un giunto che si ferma a meta'
+        della trave.
+        """
+        lo = (self.X0, self.Y0)[i]
+        L = (self.W, self.H)[i] - 2.0 * self.band
+        n = max(1, int(round(L / BEAM_STONE)))
+        xs = ([lo, lo + self.band] + [lo + self.band + L * j / n for j in range(1, n)]
+              + [lo + self.band + L, lo + self.band * 2 + L])
+        # ai due capi il bordo della piastrella, dove il concio non finisce: li'
+        # non c'e' fuga, il concio prosegue nella piastrella accanto
+        return xs, [None] + [("BJ", i, j) for j in range(n + 1)] + [None]
+
+    def blocks(self):
+        xs, xk = self._lines(0)
+        ys, yk = self._lines(1)
+        out = []
+
+        def add(bkey, x0, x1, y0, y1, key):
+            out.append((bkey, x0, x1, y0, y1,
+                        tuple(0.0 if k is None else self.joint for k in key), key))
+
+        # Le fasce lungo X si prendono anche i quattro cantonali: cosi' l'anello
+        # si scompone in rettangoli senza sovrapporsi, e un cantonale e' un
+        # concio come gli altri invece di un pezzo a L che outline non saprebbe
+        # disegnare.
+        for i in range(len(xs) - 1):
+            corner = i in (0, len(xs) - 2)
+            for lo, hi in ((0, 1), (-2, -1)):
+                add(("BC",) if corner else ("BX", i),
+                    xs[i], xs[i + 1], ys[lo], ys[hi],
+                    (xk[i], xk[i + 1], yk[lo], yk[hi]))
+        # ...e quelle lungo Y vanno da un cantonale all'altro
+        for j in range(1, len(ys) - 2):
+            for lo, hi in ((0, 1), (-2, -1)):
+                add(("BY", j), xs[lo], xs[hi], ys[j], ys[j + 1],
+                    (xk[lo], xk[hi], yk[j], yk[j + 1]))
+        return out
+
+    def recess(self, bkey, y0, y1):
+        """Come Face.recess, ma periodico su tutt'e due gli assi.
+
+        Il termine lineare lungo il corso, che sulla parete descrive il concio
+        che pende, qui non si puo' usare: il concio e' tagliato in due anche
+        nell'altra direzione, e un termine lineare darebbe alle due meta'
+        arretramenti diversi, cioe' uno scalino in mezzo a ogni trave. Restano
+        le due onde, che sul modulo si richiudono per costruzione. La faccia
+        resta comunque fuori piano -- e' questo che serve, perche' sotto la
+        torcia ogni concio prenda la sua intensita' -- solo che invece di pendere
+        da un capo all'altro si assesta seguendo l'onda.
+        """
+        r = random.Random(repr(("set", bkey)))
+        base = SET * r.random()
+        gx, gy = r.uniform(-1.0, 1.0), r.uniform(-1.0, 1.0)
+
+        def at(X, Y):
+            v = gx * wobble(("tiltx", bkey), X, self.W)
+            v += gy * wobble(("tilty", bkey), Y, self.H)
+            return base + 0.25 * TILT * (v + 2.0)
+
+        return at
+
+    def what(self):
+        return "fascia %.2f m" % self.band
 
 
 def side(t, key, s, period, amp):
@@ -447,29 +617,6 @@ def outline(f, x0, x1, y0, y1, half, key):
     return loop
 
 
-def recess(bkey, f, y0, y1):
-    """L'arretramento della faccia del concio dal filo del muro: non un numero
-    ma una funzione di (X, Y), perche' un concio si assesta ruotando e la sua
-    faccia smette di essere parallela al muro.
-
-    La parte lungo l'altezza e' lineare -- il concio pende da una parte -- e usa
-    il corso, che non e' tagliato da niente. Quella lungo il muro e' invece
-    l'onda periodica: un termine lineare in X non si richiuderebbe sul modulo, e
-    le due meta' del concio tagliato dal bordo prenderebbero arretramenti
-    diversi, cioe' uno scalino ogni 7.2 m sulla faccia del muro.
-    """
-    r = random.Random(repr(("set", bkey)))
-    base = SET * r.random()
-    gy, gx = r.uniform(-1.0, 1.0), r.uniform(-1.0, 1.0)
-
-    def at(X, Y):
-        v = gy * (2.0 * (Y - y0) / max(y1 - y0, 1e-9) - 1.0)
-        v += gx * wobble(("tilt", bkey), X, f.W)
-        return base + 0.25 * TILT * (v + 2.0)      # sempre >= 0: mai fuori dal filo
-
-    return at
-
-
 def relief(f):
     """La faccia a vista, scavata. Restituisce i poligoni (punti di mondo, uv)
     gia' orientati verso la stanza, piu' due contatori per il resoconto."""
@@ -480,23 +627,21 @@ def relief(f):
     # piu' perche' un concio troppo stretto va scartato INSIEME alla sua altra
     # meta', che sta dall'altro capo della piastrella e si incontra dopo.
     plan = []
-    for k, i, x0, x1, y0, y1, half, key, last in f.blocks():
+    for bkey, x0, x1, y0, y1, half, key in f.blocks():
         loop = outline(f, x0, x1, y0, y1, half, key)
         w = max(p[0] for p in loop) - min(p[0] for p in loop)
         h = max(p[1] for p in loop) - min(p[1] for p in loop)
-        plan.append((k, i, x0, x1, y0, y1, key, last, loop, min(w, h)))
+        plan.append((bkey, x0, x1, y0, y1, key, loop, min(w, h)))
     # Le due meta' del concio tagliato dal bordo devono comportarsi uguale --
     # arretrare uguale e, se sono schegge, sparire tutt'e due: buttarne via una
     # sola lascerebbe uno scalino sul giunto fra due muri affiancati.
-    tiny = set((k, 0 if i == last else i)
-               for k, i, _, _, _, _, _, last, _, s in plan if s < MIN_PIECE)
+    tiny = set(b[0] for b in plan if b[-1] < MIN_PIECE)
     total = len(plan)
 
-    for k, i, x0, x1, y0, y1, key, last, loop, _ in plan:
-        bkey = (k, 0 if i == last else i)
+    for bkey, x0, x1, y0, y1, key, loop, _ in plan:
         if bkey in tiny:
             continue
-        depth = recess(bkey, f, y0, y1)
+        depth = f.recess(bkey, y0, y1)
         # Un concio che sporge dal poligono della faccia non si alza: intorno
         # all'arcata resta la malta piana, che li' e' coperta dalla ghiera.
         if not all(f.inside(x, y) for x, y, _, _ in loop):
@@ -504,13 +649,20 @@ def relief(f):
         raised += 1
         thin = min(thin, max(p[0] for p in loop) - min(p[0] for p in loop),
                    max(p[1] for p in loop) - min(p[1] for p in loop))
-        if key[0] is None or key[1] is None:
-            # Le due meta' dello stesso concio, una per lato della piastrella:
-            # quello che deve combaciare e' il profilo sul bordo, quote comprese.
-            edge = x0 if key[0] is None else x1
-            border.setdefault((k, i if key[0] is None else last), []).append(sorted(
-                (round(y, 9), round(depth(edge, y), 9))
-                for x, y, _, _ in loop if abs(x - edge) < 1e-9))
+        # I lati che sono il bordo della piastrella. Quello che deve combaciare
+        # con l'altra meta' dello stesso concio -- che sta all'altro capo della
+        # mesh e si incontra solo affiancando due pezzi nella scena -- e' il
+        # profilo su quel bordo, quote comprese. Si guardano tutt'e due gli
+        # assi, non solo quello dei corsi: sulla cornice del soffitto un concio
+        # e' tagliato in due direzioni e un cantonale in quattro.
+        for a, (lo, hi, k0, k1) in enumerate(((x0, x1, key[0], key[1]),
+                                              (y0, y1, key[2], key[3]))):
+            if k0 is None or k1 is None:
+                e = lo if k0 is None else hi
+                border.setdefault((bkey, a, round(x0 if a else y0, 9),
+                                   round(x1 if a else y1, 9)), []).append(sorted(
+                    (round(p[1 - a], 9), round(depth(p[0], p[1]), 9))
+                    for p in loop if abs(p[a] - e) < 1e-9))
 
         top = [(x, y, depth(x, y)) for x, y, _, _ in loop]
         bot = [(x + ox, y + oy, DEPTH) for x, y, ox, oy in loop]
@@ -532,10 +684,10 @@ def relief(f):
                 out.append(poly(f, quad))
 
     for k, pair in border.items():
-        # Se queste due non coincidono, affiancando due muri il concio tagliato
-        # dal bordo cambia larghezza o arretramento a meta': uno scalino in mezzo
-        # alla parete, e ce n'e' uno ogni 7.2 m.
-        assert len(pair) != 2 or pair[0] == pair[1], (k, pair)
+        # Se questi profili non coincidono, affiancando due pezzi il concio
+        # tagliato dal bordo cambia larghezza o arretramento a meta': uno
+        # scalino in mezzo alla parete, e ce n'e' uno ogni 7.2 m.
+        assert all(p == pair[0] for p in pair), (k, pair)
     # Niente del rilievo deve stare DAVANTI al filo della parete: il muro
     # mangerebbe lo spazio della stanza e le quote di scene.json non sarebbero
     # piu' quelle. Si guarda qui e non sulla mesh finita, perche' li' davanti ci
@@ -629,9 +781,12 @@ def newell(vs):
     return n
 
 
-def find_faces(pos, uv, idx, image, rooms, skip=()):
+def find_faces(pos, uv, idx, image, rooms, beams=()):
     """I campi di conci: i triangoli complanari con la normale verso la stanza,
     abbastanza grandi, su cui wall_grid riesce a misurare una griglia.
+
+    `beams` sono i piani dichiarati come cornice di travi: quelli la griglia non
+    la fanno misurare, se la fanno costruire (vedi Beam).
 
     Cercarli e non scriverli a mano e' il punto: il muro dritto ne ha due (il
     campo intorno all'arcata e il fondo della nicchia), il pezzo d'angolo
@@ -654,10 +809,17 @@ def find_faces(pos, uv, idx, image, rooms, skip=()):
 
     out = []
     for (ax, sg, plane), group in sorted(groups.items()):
-        if any(a == ax and s == sg and abs(v - plane) < 1e-4 for a, s, v in skip):
-            continue
+        beam = any(a == ax and s == sg and abs(v - plane) < 1e-4 for a, s, v in beams)
         for ts in components(group, idx):
             if float(L[ts].sum()) / 2.0 < MIN_AREA:
+                continue
+            if beam:
+                # Niente prova nei due versi e nessun minimo di conci: sulla
+                # cornice non c'e' una griglia da riconoscere, e l'orientamento
+                # non conta perche' l'anello e' simmetrico.
+                f = Beam(ax, sg, plane, idx[ts], pos, uv, image)
+                f.members = set(ts)
+                out.append(f)
                 continue
             # Su una faccia verticale i corsi sono livellati e non c'e' niente
             # da scegliere. Su una orizzontale -- il fondo del cassettone del
@@ -714,7 +876,7 @@ def components(ts, idx):
     return list(out.values())
 
 
-def carve(src, dst, tex, rooms, skip):
+def carve(src, dst, tex, rooms, beams):
     a = Asset(os.path.join(MODELS, src + ".gltf"))
     p = a.json["meshes"][0]["primitives"][0]
     pos = a.read_accessor(p["attributes"]["POSITION"]).astype(np.float64)
@@ -724,7 +886,7 @@ def carve(src, dst, tex, rooms, skip):
 
     img = np.asarray(Image.open(os.path.join(TEXTURES, tex + ".png")).convert("RGB"))
     lum = img @ np.array([0.2126, 0.7152, 0.0722])
-    faces = find_faces(pos, uv, idx, lum, rooms, skip)
+    faces = find_faces(pos, uv, idx, lum, rooms, beams)
     assert faces, "nessun campo di conci trovato in " + src
     print("%s: %d camp%s di conci" % (src, len(faces), "o" if len(faces) == 1 else "i"))
 
@@ -735,10 +897,8 @@ def carve(src, dst, tex, rooms, skip):
         assert front >= -1e-4, "il rilievo esce dal filo del muro: %.4f" % front
         thinnest = min(thinnest, thin)
         polys += ps
-        print("   %sx%+d a %7.4f  %5.2f x %5.2f m  %2d cors%s  %3d/%3d conci alzati"
-              % ("xyz"[f.axis], f.sign, f.plane, f.W, f.H,
-                 len(set(c[0] for c in f.cells)),
-                 "o" if len(set(c[0] for c in f.cells)) == 1 else "i", raised, total))
+        print("   %sx%+d a %7.4f  %5.2f x %5.2f m  %-12s %3d/%3d conci alzati"
+              % ("xyz"[f.axis], f.sign, f.plane, f.W, f.H, f.what(), raised, total))
 
     # I triangoli che restano, cosi' come sono; poi il rilievo; poi la malta,
     # che e' la faccia originale arretrata ed e' l'ULTIMA cosa nel buffer.
@@ -795,8 +955,8 @@ def check(P, ind, src_pos, faces, thinnest):
 
 
 def main():
-    for src, dst, tex, rooms, skip in PIECES:
-        carve(src, dst, tex, rooms, skip)
+    for src, dst, tex, rooms, beams in PIECES:
+        carve(src, dst, tex, rooms, beams)
     print("\nora aggiorna scene.json: %s" % ", ".join(p[1] for p in PIECES))
 
 

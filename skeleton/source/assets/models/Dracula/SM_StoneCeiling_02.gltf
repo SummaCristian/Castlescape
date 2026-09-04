@@ -36,32 +36,32 @@
  "buffers": [
   {
    "uri": "SM_StoneCeiling_02.bin",
-   "byteLength": 115872
+   "byteLength": 167660
   }
  ],
  "bufferViews": [
   {
    "buffer": 0,
    "byteOffset": 0,
-   "byteLength": 37296,
+   "byteLength": 53940,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 37296,
-   "byteLength": 37296,
+   "byteOffset": 53940,
+   "byteLength": 53940,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 74592,
-   "byteLength": 24864,
+   "byteOffset": 107880,
+   "byteLength": 35960,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 99456,
-   "byteLength": 16416,
+   "byteOffset": 143840,
+   "byteLength": 23820,
    "target": 34963
   }
  ],
@@ -70,7 +70,7 @@
    "bufferView": 0,
    "byteOffset": 0,
    "componentType": 5126,
-   "count": 3108,
+   "count": 4495,
    "type": "VEC3",
    "min": [
     -7.199999809265137,
@@ -87,21 +87,21 @@
    "bufferView": 1,
    "byteOffset": 0,
    "componentType": 5126,
-   "count": 3108,
+   "count": 4495,
    "type": "VEC3"
   },
   {
    "bufferView": 2,
    "byteOffset": 0,
    "componentType": 5126,
-   "count": 3108,
+   "count": 4495,
    "type": "VEC2"
   },
   {
    "bufferView": 3,
    "byteOffset": 0,
    "componentType": 5125,
-   "count": 4104,
+   "count": 5955,
    "type": "SCALAR"
   }
  ]
