@@ -2063,6 +2063,101 @@ class Castlescape : public BaseProject {
 	static constexpr float TORCH_LIGHT_CULL_DIST = 120.0f;
 	static constexpr int TORCH_LIGHT_MAX_LIVE = 32;
 
+	// Geometry visibility: a radius around the player, plus a longer cone
+	// down whatever direction the camera is actually facing. Replaces an
+	// earlier room-graph approach (flood-filling through open doors from an
+	// authored or collider-derived room box) that turned out to be too
+	// fragile against this asset pack: wall pieces don't reliably tile a
+	// room's full footprint with a scene.json "collider", so the derived
+	// boxes had gaps big enough to hide the room the player was STANDING
+	// in, not just the ones further away. A radius+cone test needs none of
+	// that: it reads only the camera's live position/facing and each
+	// instance's own position, so there is no room topology to get wrong
+	// and no per-scene authoring to keep in sync as the level changes.
+	//
+	// The tradeoff, on purpose: unlike a room graph this has no idea a wall
+	// is between the camera and something behind it, so a light-hearted
+	// example would be an instance just past an open doorway showing up
+	// slightly before the doorway itself is reached, if it happens to sit
+	// inside the cone. That's an acceptable, cheap approximation for a
+	// player-facing "what's worth drawing" cut, not a portal-correct
+	// visibility system. Only applied to GEOMETRY (see the UBO loop in
+	// updateUniformBuffer()) -- deliberately NOT applied to the torch light
+	// list below, which stays on its own pure-distance cull: a light that
+	// stops being uploaded to gubo while its flame's billboard (drawn
+	// separately, unconditionally, see Flame.hpp) keeps rendering reads as
+	// a burning torch that lights nothing, which is exactly the bug
+	// TORCH_LIGHT_CULL_DIST's own comment above already had to fix once.
+	//
+	// GEOM_CULL_RADIUS: always draw anything this close, regardless of
+	// facing -- so turning around, or a wall just to your side, doesn't pop.
+	// Camera FOV is only 45 degrees vertical (see FOVy below), but on a wide
+	// enough window the diagonal half-angle still stretches close to the
+	// cone's own half-angle, so this and GEOM_CULL_CONE_COS both carry
+	// comfortable headroom past the frustum's actual edges rather than
+	// tracking them exactly -- cheaper than deriving the true frustum planes
+	// every time the window resizes, for a cut that only has to be
+	// approximately right.
+	static constexpr float GEOM_CULL_RADIUS = 16.0f;
+	// GEOM_CULL_CONE_DIST: how far the extended cone reaches down the view
+	// direction -- long enough to see clear down the dungeon's own ~60-unit
+	// longest sightline without popping the far wall into view a step at a
+	// time.
+	static constexpr float GEOM_CULL_CONE_DIST = 50.0f;
+	// GEOM_CULL_CONE_COS: half-angle of that cone, as a cosine (so the test
+	// is a plain dot product, no acos per instance per frame). ~70 degrees
+	// half-angle (140 total), well past the widest diagonal FOV this camera
+	// can produce, plus the per-instance size allowance below on top.
+	static constexpr float GEOM_CULL_CONE_COS = 0.34f;
+	// A wall or piece of furniture is tested by its CENTRE, not its visual
+	// extent, so a long wall segment whose pivot sits at one end (this asset
+	// pack's meshes aren't consistently centre-pivoted) could measure as
+	// outside the radius/cone while half of it is still plainly on screen --
+	// this was the actual cause of things vanishing right at the screen's
+	// edges, not the angle/distance numbers being too tight. Fixed by
+	// pretending every instance is a bounding SPHERE instead of a point:
+	// its collider's extents give a real radius when it has one (most
+	// walls/furniture do, see scene.json's "collider": "AABB"); anything
+	// without one (candles, skulls, floor/ceiling tiles, ...) falls back to
+	// this flat allowance, sized to a floor/ceiling tile's own footprint
+	// (the largest un-collided things in the scene) so it still errs toward
+	// not culling rather than under-covering them.
+	static constexpr float GEOM_CULL_FALLBACK_RADIUS = 4.0f;
+
+	// True if the instance at worldPos, with bounding radius objRadius, is
+	// close/aimed-at enough to draw, per GEOM_CULL_* above. eyePos/forward:
+	// the same pair updateUniformBuffer() already computes once per frame
+	// from the view matrix, passed through rather than recomputed per
+	// instance.
+	static bool geometryVisible(const glm::vec3 &worldPos, float objRadius,
+								const glm::vec3 &eyePos, const glm::vec3 &forward) {
+		glm::vec3 d = worldPos - eyePos;
+		float dist = glm::length(d);
+		// The object's own half-size eaten out of the distance it's judged
+		// by, so a big/near object (large objRadius relative to dist) is
+		// effectively already "at" the camera well before its centre is.
+		float effDist = std::max(0.0f, dist - objRadius);
+		if(effDist <= GEOM_CULL_RADIUS) {
+			return true;
+		}
+		if(effDist > GEOM_CULL_CONE_DIST) {
+			return false;
+		}
+		if(dist <= 1e-4f) {
+			return true;	// camera exactly at the object's centre
+		}
+		float facing = glm::dot(d / dist, forward);
+		// Same idea for the angle test: an object's own angular size is
+		// roughly objRadius/dist (small-angle approximation), so a nearby or
+		// large one needs proportionally less of a head-on facing to still
+		// count as in the cone. Clamped so a tiny/far object still needs the
+		// full GEOM_CULL_CONE_COS, and a huge/adjacent one doesn't get
+		// forgiven into a 0 (i.e. treated as always in the cone) -- that's
+		// what GEOM_CULL_RADIUS above is already for.
+		float angularSlack = glm::clamp(objRadius / dist, 0.0f, 1.0f) * 0.5f;
+		return facing >= (GEOM_CULL_CONE_COS - angularSlack);
+	}
+
 	// How much a candidate's priority (both the live-light cut above and the
 	// shadow-cube pool below) is skewed by whether it's ahead of or behind
 	// the player, as a fraction of its real distance. 0 disables this
@@ -6210,7 +6305,46 @@ class Castlescape : public BaseProject {
 		// belong to.
 		for(int techniqueId = 0; techniqueId < SC.TechniqueInstanceCount; techniqueId++) {
 			for(int instanceId = 0; instanceId < SC.TI[techniqueId].InstanceCount; instanceId++) {
-				ubo.mMat = SC.TI[techniqueId].I[instanceId].Wm;
+				glm::mat4 renderWm = SC.TI[techniqueId].I[instanceId].Wm;
+				// Geometry visibility cull (GEOM_CULL_* above): an instance
+				// too far outside the radius+cone gets a stand-in render
+				// matrix instead of its real one, so it draws nowhere the
+				// camera can ever see it. Same "park it off the map" idiom
+				// already used to hide a consumed key/prop/sinking object
+				// elsewhere in this file (an invertible translate, not a
+				// zero matrix -- nMat below is its inverse-transpose, and a
+				// true zero matrix has none, which is a NaN CookTorrance.frag
+				// has no guard against). Only this render-time copy changes:
+				// SC.TI[...].Wm and the instance's collider are left alone,
+				// so a culled instance still exists for gameplay/collision
+				// purposes, it just isn't drawn.
+				//
+				// Tested as a bounding SPHERE, not a bare point: this
+				// instance's own translation column is a fine stand-in for
+				// its position, but a long wall segment's pivot can sit at
+				// one end rather than its centre (this asset pack isn't
+				// consistently centre-pivoted), so judging it by that point
+				// alone clipped things right at the screen's edges that were
+				// still plainly in view. Instances with a collider (most
+				// walls/furniture, see scene.json's "collider": "AABB") get
+				// their real world-space extents; everything else falls back
+				// to GEOM_CULL_FALLBACK_RADIUS.
+				Instance &cullInst = SC.TI[techniqueId].I[instanceId];
+				glm::vec3 instPos = glm::vec3(renderWm[3]);
+				float instRadius = GEOM_CULL_FALLBACK_RADIUS;
+				if(cullInst.C != nullptr) {
+					AABBextents e = cullInst.C->getExtents();
+					instPos = glm::vec3((e.xMin + e.xMax) * 0.5f,
+										 (e.yMin + e.yMax) * 0.5f,
+										 (e.zMin + e.zMax) * 0.5f);
+					instRadius = 0.5f * glm::length(glm::vec3(e.xMax - e.xMin,
+															   e.yMax - e.yMin,
+															   e.zMax - e.zMin));
+				}
+				if(!geometryVisible(instPos, instRadius, eyePos, forward)) {
+					renderWm = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
+				}
+				ubo.mMat = renderWm;
 				ubo.mvpMat = ViewPrj * ubo.mMat;
 				ubo.nMat = glm::inverse(glm::transpose(ubo.mMat));
 
