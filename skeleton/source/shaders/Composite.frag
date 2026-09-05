@@ -79,6 +79,42 @@ void main() {
 		color = toneMap(color);
 	}
 
+	// Vignette: darkens the corners/edges of the frame, screen-space and
+	// resolution-independent (computed from uv, not pixel coordinates).
+	// Pairs with CookTorrance.frag's distance fog for the same reason RE-era
+	// survival horror leaned on both together -- fog hides the draw
+	// distance AHEAD of the player, the vignette hides the SCREEN EDGES,
+	// where the geometry visibility cull's cone (GEOM_CULL_CONE_COS in
+	// main.cpp) is narrower than the actual camera frustum and so is at its
+	// most likely to be caught mid-fade by a glance toward the corner of the
+	// view. Also just reads as moody in a dungeon, independent of any of
+	// that.
+	//
+	// Applied post-tonemap (like the whiteout below) since darkening the
+	// corners is a display-referred vignette, the same as a real lens's,
+	// not a physical light falloff CookTorrance.frag's fog already is.
+	// Applied BEFORE the whiteout mix, not after: escapeFlash washing the
+	// whole frame to white should read as an even, blinding flash, not a
+	// flash with a dark ring still sitting around it.
+	{
+		// Distance from centre in uv space: 0 at the middle, ~0.707 at a
+		// corner. Not aspect-corrected on purpose -- a plain uv-space circle
+		// comes out as an ellipse hugging the frame's actual proportions
+		// (wider on a wide window), which is what a vignette should do
+		// anyway, rather than a true circle that would clip harder on the
+		// short (vertical) axis of a widescreen window.
+		float vignetteDist = length(uv - vec2(0.5));
+		// 0 within VIGNETTE_INNER of centre, ramping to 1 by VIGNETTE_OUTER
+		// (and staying 1 past it, smoothstep's usual clamp).
+		const float VIGNETTE_INNER = 0.35;
+		const float VIGNETTE_OUTER = 0.75;
+		float vignette = smoothstep(VIGNETTE_INNER, VIGNETTE_OUTER, vignetteDist);
+		// How dark the corners get at full vignette: 1.0 would crush them to
+		// black, which read as a hole cut in the screen rather than a haze.
+		const float VIGNETTE_STRENGTH = 0.6;
+		color *= (1.0 - vignette * VIGNETTE_STRENGTH);
+	}
+
 	// The escape whiteout, applied AFTER the tone map on purpose. Before it,
 	// this would just be more exposure, and the tone map's own curve --
 	// c / (Y + 1), which approaches white without ever arriving -- would eat

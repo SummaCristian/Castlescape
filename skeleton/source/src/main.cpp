@@ -130,12 +130,18 @@ struct GlobalUniformBufferObject {
 	// How much of a point/spot light's radiance comes back as indirect light.
 	// See AmbientLight::bounce in SceneLights.hpp.
 	//
-	// The last scalar that fits for free: ambientDir ends at 60, debugFlags
-	// fills that slot, and time/ambientWeight/this take 64, 68 and 72. The
-	// array's own alignas(16) starts it at 80 either way, so this costs
-	// nothing. A second one would still fit at 76; a third moves lights[] and
-	// every offset in four shaders with it.
+	// ambientDir ends at 60, debugFlags fills that slot, and
+	// time/ambientWeight/this take 64, 68 and 72.
 	float ambientBounce;
+	// Exponential-squared distance fog (fogFactor = exp(-(fogDensity*dist)^2)
+	// in CookTorrance.frag), meant to fade geometry toward black before the
+	// GEOM_CULL_* visibility cull above stops drawing it, rather than let it
+	// pop out of view -- see updateUniformBuffer() for how this is derived
+	// from GEOM_CULL_CONE_DIST. The one scalar that still fits here for
+	// free: ambientBounce ends at 76, and the array's own alignas(16) starts
+	// it at 80 either way. A second one here would move lights[] and every
+	// offset in four shaders with it.
+	float fogDensity;
 	LightData lights[MAX_LIGHTS];
 };
 
@@ -625,6 +631,63 @@ class Castlescape : public BaseProject {
 	// downsampling is how you get a WIDE soft halo out of a cheap 9-tap kernel
 	// instead of a tight one.
 	static constexpr int BLOOM_DIV = 4;
+
+	// The 3D scene (RP, the hdrAtt chain CookTorrance.frag draws into) renders
+	// at this fraction of the window's actual resolution in each axis, i.e.
+	// renderScale^2 of its pixel count -- 0.8 is ~64%. Composite.frag then
+	// upsamples it back up to the real window size through the same
+	// bilinear sampler it already reads srcTex with, so the OUTPUT still
+	// fills the window at full resolution; only the scene's own detail is
+	// computed at fewer pixels. Free performance-wise in proportion to that
+	// pixel-count cut (every fragment invocation this saves is one this
+	// project's forced per-sample shading -- see msaaSamples' comment above
+	// -- would otherwise have run the full light loop for), paid for in a
+	// slightly softer scene, which fog/vignette/bloom/the general darkness of
+	// a dungeon already hide well.
+	//
+	// The UI (txt/uiQuad/crosshair/hud/pauseMenu/startScreen) is NOT part of
+	// this: those all render in their own separate command buffers/passes,
+	// submitted after RPcomposite (see populateCommandBuffer()'s comment),
+	// which stays at the window's real resolution unconditionally -- so text
+	// and prompts stay perfectly sharp regardless of this value.
+	//
+	// A runtime member, not a compile-time constant: the "Render Scale"
+	// slider in the cheat HUD (see its addSlider() call below) changes this
+	// live, then replays the same rebuild path a real window resize already
+	// uses -- onWindowResize(windowWidth, windowHeight) to recompute
+	// RP/bloom sizes at the new scale, then RebuildPipeline() to actually
+	// tear down and recreate the render targets at those sizes. Everything
+	// that used to read the old compile-time constant (renderWidth()/
+	// renderHeight(), bloomWidth()/bloomHeight(), and both call sites below)
+	// reads this member instead, so nothing needed to change but this
+	// declaration and its initial value.
+	float renderScale = 0.8f;
+
+	// The scene's own render resolution, some window dimension scaled by
+	// renderScale and clamped to at least 1 (a minimised or absurdly narrow
+	// window can't ask for a zero-sized image). Takes the window dimension
+	// as a parameter rather than reading swapChainExtent directly, since
+	// onWindowResize() needs to compute this from the NEW size it was just
+	// handed, before swapChainExtent itself has necessarily been updated to
+	// match.
+	int renderWidth(int windowW) const {
+		return std::max(1, (int)std::lround(windowW * renderScale));
+	}
+	int renderHeight(int windowH) const {
+		return std::max(1, (int)std::lround(windowH * renderScale));
+	}
+
+	// The MSAA sample count as a log2 "level" (0 -> 1x, 1 -> 2x, 2 -> 4x, ...)
+	// rather than the raw VkSampleCountFlagBits value, so the "MSAA" cheat
+	// slider's fixed +/-1-per-press step (see CheatHud::addSlider) lands
+	// exactly on the powers of two Vulkan sample counts have to be, instead
+	// of needing a doubling step a plain additive slider can't express.
+	// Starts at 2 (4x), matching msaaSamples' own initial value below.
+	float msaaLevel = 2.0f;
+	// The slider's upper bound, in the same units: set from
+	// getMaxUsableSampleCount() once at startup (see localInit()) so a GPU
+	// that can't do 16x is never offered it.
+	float maxMsaaLevel = 2.0f;
 
 	// Bright-pass threshold and knee, in luminance. Set high enough to clear
 	// the SCENE's own peak radiance, not just 1.0: a sunlit wall with a pale
@@ -2049,23 +2112,142 @@ class Castlescape : public BaseProject {
 	static constexpr float SHADOW_REACH_CUTOFF = 0.02f;
 
 	// How far a torch light still gets uploaded, and how many may be live at
-	// once. CookTorrance.frag loops over every light for every fragment (times
-	// the sample count, since Starter.hpp forces per-sample shading), so an
-	// uploaded light costs a full GGX evaluation across the whole screen
-	// whether or not it can be seen.
+	// once. CookTorrance.frag loops over every light for every fragment
+	// (times the MSAA sample count -- Starter.hpp turns on
+	// sampleShadingEnable with minSampleShading 1.0, i.e. full per-SAMPLE
+	// shading, and this project runs 4x MSAA -- see msaaSamples), so an
+	// uploaded light costs a full GGX evaluation FOUR TIMES per pixel,
+	// whether or not it can be seen. This is the actual dominant per-frame
+	// GPU cost in this renderer, well above anything the geometry visibility
+	// cull below touches (that one only trims draw calls, which were never
+	// the bottleneck at this instance count).
 	//
 	// 25 used to be "generous" back when this was written against a
 	// six-torch scene and a much smaller live-light/shadow-slot budget --
-	// wrong now: the dungeon's own footprint is ~60 units across, so a
-	// 25-unit radius drops any torch in a room the player isn't standing
-	// in, VISIBLY (its flame billboard is unconditional, see Flame.hpp, so
-	// it stays lit-looking on screen while casting zero light and shading
-	// its own surroundings pitch black -- exactly what a purely-numeric
-	// "3% contribution, below what ambient hides" estimate can't catch).
-	// 120 comfortably covers the whole level from any point in it, so this
-	// cull now only ever drops what's actually, truly out of range.
-	static constexpr float TORCH_LIGHT_CULL_DIST = 120.0f;
+	// wrong for a while after that: the dungeon's own footprint is ~60 units
+	// across, so a 25-unit radius dropped any torch in a room the player
+	// wasn't standing in, VISIBLY (its flame billboard is unconditional, see
+	// Flame.hpp, so it stayed lit-looking on screen while casting zero light
+	// and shading its own surroundings pitch black -- exactly what a
+	// purely-numeric "3% contribution, below what ambient hides" estimate
+	// can't catch). 120 fixed that by comfortably covering the whole level
+	// from any point in it, at the cost of uploading nearly every torch in
+	// the dungeon nearly all the time.
+	//
+	// Tied to GEOM_CULL_CONE_DIST below (with a small margin) rather than to
+	// its own flat number now that that geometry cull exists: anything whose
+	// TORCH BRACKET is still being drawn is guaranteed to still be lit, so
+	// the "visibly glowing but dark" case above can't reoccur for anything
+	// with a visible model behind it. The residual case that can still
+	// happen -- a flame's billboard alone, unconditional and undimmed,
+	// rendering past both cutoffs with nothing lighting it -- is far less
+	// noticeable than a fully modelled, clearly-visible dark torch was: a
+	// small/distant glow with no bracket to contrast it against. Kept as a
+	// static_assert right after GEOM_CULL_CONE_DIST is declared, so the two
+	// can't drift out of sync by editing only one of them.
+	static constexpr float TORCH_LIGHT_CULL_DIST = 55.0f;
 	static constexpr int TORCH_LIGHT_MAX_LIVE = 32;
+
+	// Geometry visibility: a radius around the player, plus a longer cone
+	// down whatever direction the camera is actually facing. Replaces an
+	// earlier room-graph approach (flood-filling through open doors from an
+	// authored or collider-derived room box) that turned out to be too
+	// fragile against this asset pack: wall pieces don't reliably tile a
+	// room's full footprint with a scene.json "collider", so the derived
+	// boxes had gaps big enough to hide the room the player was STANDING
+	// in, not just the ones further away. A radius+cone test needs none of
+	// that: it reads only the camera's live position/facing and each
+	// instance's own position, so there is no room topology to get wrong
+	// and no per-scene authoring to keep in sync as the level changes.
+	//
+	// The tradeoff, on purpose: unlike a room graph this has no idea a wall
+	// is between the camera and something behind it, so a light-hearted
+	// example would be an instance just past an open doorway showing up
+	// slightly before the doorway itself is reached, if it happens to sit
+	// inside the cone. That's an acceptable, cheap approximation for a
+	// player-facing "what's worth drawing" cut, not a portal-correct
+	// visibility system. Only applied to GEOMETRY (see the UBO loop in
+	// updateUniformBuffer()) -- deliberately NOT applied to the torch light
+	// list below, which stays on its own pure-distance cull: a light that
+	// stops being uploaded to gubo while its flame's billboard (drawn
+	// separately, unconditionally, see Flame.hpp) keeps rendering reads as
+	// a burning torch that lights nothing, which is exactly the bug
+	// TORCH_LIGHT_CULL_DIST's own comment above already had to fix once.
+	//
+	// GEOM_CULL_RADIUS: always draw anything this close, regardless of
+	// facing -- so turning around, or a wall just to your side, doesn't pop.
+	// Camera FOV is only 45 degrees vertical (see FOVy below), but on a wide
+	// enough window the diagonal half-angle still stretches close to the
+	// cone's own half-angle, so this and GEOM_CULL_CONE_COS both carry
+	// comfortable headroom past the frustum's actual edges rather than
+	// tracking them exactly -- cheaper than deriving the true frustum planes
+	// every time the window resizes, for a cut that only has to be
+	// approximately right.
+	static constexpr float GEOM_CULL_RADIUS = 16.0f;
+	// GEOM_CULL_CONE_DIST: how far the extended cone reaches down the view
+	// direction -- long enough to see clear down the dungeon's own ~60-unit
+	// longest sightline without popping the far wall into view a step at a
+	// time.
+	static constexpr float GEOM_CULL_CONE_DIST = 50.0f;
+	// Keeps TORCH_LIGHT_CULL_DIST (declared above, before this one exists --
+	// see its own comment for why) at least as far as this cone reaches, so
+	// nothing whose torch bracket is still drawn can ever end up unlit.
+	static_assert(TORCH_LIGHT_CULL_DIST >= GEOM_CULL_CONE_DIST,
+				  "a torch light cull shorter than the geometry cone would "
+				  "leave a visible torch model unlit");
+	// GEOM_CULL_CONE_COS: half-angle of that cone, as a cosine (so the test
+	// is a plain dot product, no acos per instance per frame). ~70 degrees
+	// half-angle (140 total), well past the widest diagonal FOV this camera
+	// can produce, plus the per-instance size allowance below on top.
+	static constexpr float GEOM_CULL_CONE_COS = 0.34f;
+	// A wall or piece of furniture is tested by its CENTRE, not its visual
+	// extent, so a long wall segment whose pivot sits at one end (this asset
+	// pack's meshes aren't consistently centre-pivoted) could measure as
+	// outside the radius/cone while half of it is still plainly on screen --
+	// this was the actual cause of things vanishing right at the screen's
+	// edges, not the angle/distance numbers being too tight. Fixed by
+	// pretending every instance is a bounding SPHERE instead of a point:
+	// its collider's extents give a real radius when it has one (most
+	// walls/furniture do, see scene.json's "collider": "AABB"); anything
+	// without one (candles, skulls, floor/ceiling tiles, ...) falls back to
+	// this flat allowance, sized to a floor/ceiling tile's own footprint
+	// (the largest un-collided things in the scene) so it still errs toward
+	// not culling rather than under-covering them.
+	static constexpr float GEOM_CULL_FALLBACK_RADIUS = 4.0f;
+
+	// True if the instance at worldPos, with bounding radius objRadius, is
+	// close/aimed-at enough to draw, per GEOM_CULL_* above. eyePos/forward:
+	// the same pair updateUniformBuffer() already computes once per frame
+	// from the view matrix, passed through rather than recomputed per
+	// instance.
+	static bool geometryVisible(const glm::vec3 &worldPos, float objRadius,
+								const glm::vec3 &eyePos, const glm::vec3 &forward) {
+		glm::vec3 d = worldPos - eyePos;
+		float dist = glm::length(d);
+		// The object's own half-size eaten out of the distance it's judged
+		// by, so a big/near object (large objRadius relative to dist) is
+		// effectively already "at" the camera well before its centre is.
+		float effDist = std::max(0.0f, dist - objRadius);
+		if(effDist <= GEOM_CULL_RADIUS) {
+			return true;
+		}
+		if(effDist > GEOM_CULL_CONE_DIST) {
+			return false;
+		}
+		if(dist <= 1e-4f) {
+			return true;	// camera exactly at the object's centre
+		}
+		float facing = glm::dot(d / dist, forward);
+		// Same idea for the angle test: an object's own angular size is
+		// roughly objRadius/dist (small-angle approximation), so a nearby or
+		// large one needs proportionally less of a head-on facing to still
+		// count as in the cone. Clamped so a tiny/far object still needs the
+		// full GEOM_CULL_CONE_COS, and a huge/adjacent one doesn't get
+		// forgiven into a 0 (i.e. treated as always in the cone) -- that's
+		// what GEOM_CULL_RADIUS above is already for.
+		float angularSlack = glm::clamp(objRadius / dist, 0.0f, 1.0f) * 0.5f;
+		return facing >= (GEOM_CULL_CONE_COS - angularSlack);
+	}
 
 	// How much a candidate's priority (both the live-light cut above and the
 	// shadow-cube pool below) is skewed by whether it's ahead of or behind
@@ -2659,17 +2841,22 @@ class Castlescape : public BaseProject {
 	void onWindowResize(int w, int h) {
 		std::cout << "Window resized to: " << w << " x " << h << "\n";
 		Ar = (float)w / (float)h;
-		// Update Render Passes. Every one of them: the scene and the composite
-		// follow the window, the three bloom targets follow it divided down.
-		// Their attachment images are torn down and rebuilt around this by
-		// pipelinesAndDescriptorSetsCleanup()/Init(), which Starter.hpp calls
-		// on either side of a resize.
-		RP.width = w;
-		RP.height = h;
+		// Update Render Passes. The composite follows the window exactly (the
+		// final image always fills it); the scene follows it scaled down by
+		// renderScale; the three bloom targets follow THAT, divided down
+		// again by BLOOM_DIV -- see bloomWidth()/bloomHeight() and
+		// renderScale's own comment for why each of those reads what it
+		// reads. Their attachment images are torn down and rebuilt around
+		// this by pipelinesAndDescriptorSetsCleanup()/Init(), which
+		// Starter.hpp calls on either side of a resize.
+		RP.width = renderWidth(w);
+		RP.height = renderHeight(h);
 		RPcomposite.width = w;
 		RPcomposite.height = h;
-		RPbright.width = RPblurH.width = RPblurV.width = std::max(1, w / BLOOM_DIV);
-		RPbright.height = RPblurH.height = RPblurV.height = std::max(1, h / BLOOM_DIV);
+		// After RP.width/height above, not before: bloomWidth()/bloomHeight()
+		// read those, so they only see the new scene size once it's set.
+		RPbright.width = RPblurH.width = RPblurV.width = bloomWidth();
+		RPbright.height = RPblurH.height = RPblurV.height = bloomHeight();
 
 		// windowWidth/windowHeight are otherwise only set once in
 		// setWindowParameters() and never refreshed here; the cheat HUD
@@ -2709,7 +2896,17 @@ class Castlescape : public BaseProject {
 	// from wanting a 16-bit float target instead.
 	void buildPostAttachments() {
 		const VkFormat HDR = VK_FORMAT_R16G16B16A16_SFLOAT;
-		const VkClearValue SKY = {.color = {.float32 = {0.0f, 0.9f, 1.0f, 1.0f}}};
+		// Was a bright cyan (0.0, 0.9, 1.0): with the dungeon sealed and no
+		// real skybox/cubemap anywhere, this only ever showed through a gap
+		// in the geometry, and the one deliberate gap -- the exit archway --
+		// is covered by ExitGlow's own warm daylight quads and a closing
+		// ceiling piece (see EXIT_GLOW_CEILING's comment), not by this raw
+		// clear colour. So it was never actually meant to be seen. Now that
+		// the geometry visibility cull (GEOM_CULL_* above) stops drawing
+		// walls/ceiling past its radius+cone, THIS is what shows through
+		// instead of them -- black keeps that masked as darkness/distance
+		// rather than a jarring bright cyan wall in the distance.
+		const VkClearValue SKY = {.color = {.float32 = {0.0f, 0.0f, 0.0f, 1.0f}}};
 		const VkClearValue BLACK = {.color = {.float32 = {0.0f, 0.0f, 0.0f, 1.0f}}};
 
 		// --- the scene pass: multisampled HDR colour, depth, and a resolve
@@ -2805,14 +3002,67 @@ class Castlescape : public BaseProject {
 		};
 	}
 
-	// Width/height of the bloom chain's targets, derived from the swapchain.
-	// Clamped at 1 so a minimised or absurdly narrow window can't ask for a
-	// zero-sized image.
+	// (Re)builds the attachment property lists via buildPostAttachments()
+	// above, then (re)initializes the five render passes from them -- the
+	// scene at renderWidth()/renderHeight(), the bloom chain at
+	// bloomWidth()/bloomHeight() (which read the scene's own just-set
+	// width/height), the composite at the window's real size.
+	//
+	// Called once from localInit(), and again whenever something that
+	// changes what buildPostAttachments() produces needs to take effect at
+	// runtime -- today, msaaSamples (see the "MSAA" slider below): unlike
+	// renderScale, which only changes the WIDTH/HEIGHT each RenderPass is
+	// initialized with (onWindowResize() pokes RP.width/height directly,
+	// exactly like a real resize would), a new sample count changes the
+	// hdrAtt COLOR/DEPTH ATTACHMENT PROPERTIES themselves, which only
+	// buildPostAttachments() knows how to regenerate and only .init() (not
+	// a direct member poke) re-copies into each RenderPass. Either way, the
+	// caller still has to follow this with RebuildPipeline() to actually
+	// tear down and recreate the underlying images/pipelines around the
+	// new properties -- this only updates the C++-side description of what
+	// they should look like.
+	void initRenderPasses() {
+		// initializes the render passes. The scene one no longer draws to the
+		// screen: it renders into an offscreen floating-point target which the
+		// bloom chain and the composite then read back. See
+		// buildPostAttachments() for what each attachment is and why.
+		buildPostAttachments();
+
+		// ATDEP_SIMPLE rather than the default ATDEP_SURFACE_ONLY: the scene's
+		// output is now sampled by a later pass, so it needs the dependency
+		// pair that orders a colour write against a subsequent shader read
+		// (and, in the other direction, against the NEXT frame overwriting it).
+		//
+		// renderWidth()/renderHeight() rather than -1,-1 (which would mean
+		// "match the swapchain" -- see RenderPass::init): this is renderScale
+		// above, the actual point of it being able to differ from the
+		// window's own resolution at all.
+		RP.init(this, renderWidth(swapChainExtent.width), renderHeight(swapChainExtent.height), -1, &hdrAtt,
+				RenderPass::getStandardDependencies(ATDEP_SIMPLE), true);
+
+		RPbright.init(this, bloomWidth(), bloomHeight(), -1, &brightAtt,
+					  RenderPass::getStandardDependencies(ATDEP_SIMPLE), true);
+		RPblurH.init(this, bloomWidth(), bloomHeight(), -1, &blurHAtt,
+					 RenderPass::getStandardDependencies(ATDEP_SIMPLE), true);
+		RPblurV.init(this, bloomWidth(), bloomHeight(), -1, &blurVAtt,
+					 RenderPass::getStandardDependencies(ATDEP_SIMPLE), true);
+		// The composite writes the swapchain and is read by nobody, so the
+		// plain surface dependency the main pass always used is right here.
+		RPcomposite.init(this, -1, -1, -1, &compositeAtt,
+						 RenderPass::getStandardDependencies(ATDEP_SURFACE_ONLY), false);
+	}
+
+	// Width/height of the bloom chain's targets, derived from the SCENE pass's
+	// own current resolution (RP.width/height, already scaled by
+	// renderScale) rather than the swapchain's -- bloom reads the scene's
+	// resolve target, so its size should track what that target actually is,
+	// not the window's. Clamped at 1 so a minimised or absurdly narrow window
+	// can't ask for a zero-sized image.
 	int bloomWidth() const {
-		return std::max(1, (int)swapChainExtent.width / BLOOM_DIV);
+		return std::max(1, RP.width / BLOOM_DIV);
 	}
 	int bloomHeight() const {
-		return std::max(1, (int)swapChainExtent.height / BLOOM_DIV);
+		return std::max(1, RP.height / BLOOM_DIV);
 	}
 
 	// Here you load and setup all your Vulkan Models and Textures.
@@ -2875,7 +3125,8 @@ class Castlescape : public BaseProject {
 				         sizeof(glm::vec2), UV}
 				});
 
-		// Anti-aliasing level, set BEFORE RP.init() below reads it.
+		// Anti-aliasing level, set BEFORE initRenderPasses() below reads it
+		// (via buildPostAttachments()).
 		//
 		// Starter.hpp's default is getMaxUsableSampleCount(), i.e. as many
 		// samples as the GPU will admit to supporting -- 16 on this machine.
@@ -2894,31 +3145,20 @@ class Castlescape : public BaseProject {
 		// Assigning it here is legal without touching Starter.hpp: msaaSamples
 		// is a protected member of BaseProject, and pickPhysicalDevice() (which
 		// sets the default) runs earlier in initVulkan() than localInit() does.
+		//
+		// Now also changeable live via the "MSAA" slider (see its addSlider()
+		// call below) for the same reason renderScale's is: rather than
+		// guessing at this compromise, try it on the actual machine it's
+		// running on.
 		msaaSamples = VK_SAMPLE_COUNT_4_BIT;
+		// The slider's own upper bound: the device's real cap
+		// (getMaxUsableSampleCount(), queried once at startup by
+		// pickPhysicalDevice()), not an assumed 16 -- a GPU that tops out
+		// lower must not be offered a sample count it can't actually create
+		// an image at.
+		maxMsaaLevel = std::log2((float)getMaxUsableSampleCount());
 
-		// initializes the render passes. The scene one no longer draws to the
-		// screen: it renders into an offscreen floating-point target which the
-		// bloom chain and the composite then read back. See
-		// buildPostAttachments() for what each attachment is and why.
-		buildPostAttachments();
-
-		// ATDEP_SIMPLE rather than the default ATDEP_SURFACE_ONLY: the scene's
-		// output is now sampled by a later pass, so it needs the dependency
-		// pair that orders a colour write against a subsequent shader read
-		// (and, in the other direction, against the NEXT frame overwriting it).
-		RP.init(this, -1, -1, -1, &hdrAtt,
-				RenderPass::getStandardDependencies(ATDEP_SIMPLE), true);
-
-		RPbright.init(this, bloomWidth(), bloomHeight(), -1, &brightAtt,
-					  RenderPass::getStandardDependencies(ATDEP_SIMPLE), true);
-		RPblurH.init(this, bloomWidth(), bloomHeight(), -1, &blurHAtt,
-					 RenderPass::getStandardDependencies(ATDEP_SIMPLE), true);
-		RPblurV.init(this, bloomWidth(), bloomHeight(), -1, &blurVAtt,
-					 RenderPass::getStandardDependencies(ATDEP_SIMPLE), true);
-		// The composite writes the swapchain and is read by nobody, so the
-		// plain surface dependency the main pass always used is right here.
-		RPcomposite.init(this, -1, -1, -1, &compositeAtt,
-						 RenderPass::getStandardDependencies(ATDEP_SURFACE_ONLY), false);
+		initRenderPasses();
 
 		// The 2D shadow render passes -- the sun's today, in
 		// LightData::shadowIndex order (see SceneLights::init). AT_DEPTH_ONLY
@@ -4171,6 +4411,79 @@ class Castlescape : public BaseProject {
 		hud.addToggle("Shadow Frustums", &cheats.showShadowFrustums);
 		hud.addToggle("Show Colliders", &cheats.showColliders);
 		hud.addToggle("Light Heatmap", &cheats.showLightHeatmap);
+
+		// Render Scale: see renderScale's own declaration/comment above for
+		// what this actually resizes. onChange replays the same rebuild path
+		// a real window resize already goes through (see
+		// framebufferResizeCallback/onWindowResize in Starter.hpp) at the
+		// CURRENT window size, so only the internal render resolution
+		// changes, nothing about the window itself. Floor of 0.4 (40%, i.e.
+		// 16% of the pixel count): below that the upscale reliably reads as
+		// blurry rather than atmospheric even with fog/vignette/bloom all
+		// helping hide it, so there's little reason to let the slider go
+		// lower than the point it stops being a useful comparison. 0.05 per
+		// press (Left/Right on the selected row) gives 12 steps across the
+		// full range -- fine enough to feel the difference between two
+		// adjacent presses without needing dozens of them to cross the range.
+		hud.addSlider("Render Scale", &renderScale, 0.4f, 1.0f, 0.05f, [this]() {
+			// Skipped while a rebuild (this one, a previous slider press, or
+			// an actual window resize) is still pending -- see
+			// framebufferResized's own comment in Starter.hpp and
+			// RebuildPipeline()'s. recreateSwapChain() only runs once, at
+			// the very end of the CURRENT frame's drawFrame(); stacking a
+			// second target size on top before that has happened is what
+			// let a render pass get begun against a size newer than the
+			// framebuffer it was actually bound to, which is what the
+			// "renderArea... greater than framebuffer" validation errors
+			// (and the crash that followed them) were. This can't fully
+			// rule out the same race from resizing the WINDOW itself very
+			// rapidly, since that path lives in the immutable Starter.hpp
+			// and isn't something this guard touches -- but it stops our
+			// own sliders from being an extra source of the same pileup.
+			if(!framebufferResized) {
+				onWindowResize((int)windowWidth, (int)windowHeight);
+				RebuildPipeline();
+			}
+		}, [this](float /*scale*/) {
+			// Shows the actual pixel resolution alongside the percentage
+			// (e.g. "< 80% (1536x864) >") rather than switching to fixed
+			// presets like 720p/1080p: those only mean one specific shape
+			// (16:9) at one specific window size, while this scale has to
+			// stay meaningful at whatever size/shape the window is
+			// resized to. Reads renderWidth()/renderHeight() -- which
+			// read the LIVE renderScale, not the parameter -- rather than
+			// recomputing from scratch, so this can never drift from
+			// what's actually being rendered.
+			char buf[32];
+			snprintf(buf, sizeof(buf), "< %d%% (%dx%d) >",
+					 (int)std::lround(renderScale * 100.0f),
+					 renderWidth((int)windowWidth), renderHeight((int)windowHeight));
+			return std::string(buf);
+		});
+
+		// MSAA: see msaaLevel's own declaration for what the units are and
+		// why (a log2 level, not the raw sample count -- a plain additive
+		// slider step can't land on 1/2/4/8/16 otherwise). onChange converts
+		// the level back to a real VkSampleCountFlagBits, then rebuilds the
+		// render passes' attachment properties around it (initRenderPasses(),
+		// since a sample-count change -- unlike renderScale's plain
+		// width/height change -- has to regenerate hdrAtt itself) before
+		// tearing down and recreating the actual GPU images/pipelines
+		// (RebuildPipeline()). maxMsaaLevel: this device's real cap, set in
+		// localInit() from getMaxUsableSampleCount(). Step 1.0 moves exactly
+		// one power of two per press.
+		hud.addSlider("MSAA", &msaaLevel, 0.0f, maxMsaaLevel, 1.0f, [this]() {
+			// Same guard as Render Scale's onChange above, same reason.
+			if(!framebufferResized) {
+				msaaSamples = static_cast<VkSampleCountFlagBits>(1 << (int)std::lround(msaaLevel));
+				initRenderPasses();
+				RebuildPipeline();
+			}
+		}, [](float level) {
+			char buf[16];
+			snprintf(buf, sizeof(buf), "< %dx >", 1 << (int)std::lround(level));
+			return std::string(buf);
+		});
 	}
 
 	// Six 90-degree perspective faces covering a point light's whole sphere,
@@ -5835,6 +6148,36 @@ class Castlescape : public BaseProject {
 		// Same bucket, so the same gate covers it. See CookTorrance.frag's blend.
 		gubo.ambientBounce = amb.bounce;
 
+		// Distance fog density: derived from GEOM_CULL_CONE_DIST rather than
+		// its own hand-picked number, so the two can't drift apart the way
+		// TORCH_LIGHT_CULL_DIST and GEOM_CULL_CONE_DIST would have without
+		// their static_assert above. Solves exp(-(density*dist)^2) =
+		// FOG_RESIDUAL_AT_CULL_DIST for dist == GEOM_CULL_CONE_DIST *
+		// FOG_REFERENCE_DIST_SCALE, i.e. fog reaches (in this case) 1% of
+		// unfogged brightness only some distance PAST where the geometry
+		// cull would stop drawing something, rather than exactly at it --
+		// the single knob to turn if the fog still reads as too heavy or too
+		// light close up:
+		//   1.0   the first version: fully faded right at the cull distance,
+		//         which read as noticeably dark well before that (~60% by
+		//         the middle of the cull's own range) -- an exponential
+		//         curve's brightness already drops fast long before it
+		//         visually "arrives" at its target residual.
+		//   >1.0  gentler up close, and fully faded only somewhat past the
+		//         cull distance instead of exactly at it -- some genuine
+		//         geometry pop can peek through right at the true cull edge
+		//         as a result, softened by the vignette below and by fog and
+		//         background sharing the same black. 2.5 keeps close-up
+		//         brightness within a few percent of unfogged out to the
+		//         GEOM_CULL_RADIUS "always visible" ring, and still reaches
+		//         roughly half brightness by the cull's own farthest reach.
+		//   <1.0  the opposite tradeoff: fully hides the pop with room to
+		//         spare, at the cost of a noticeably darker foreground.
+		constexpr float FOG_RESIDUAL_AT_CULL_DIST = 0.01f;
+		constexpr float FOG_REFERENCE_DIST_SCALE = 2.5f;
+		gubo.fogDensity = std::sqrt(-std::log(FOG_RESIDUAL_AT_CULL_DIST))
+						/ (GEOM_CULL_CONE_DIST * FOG_REFERENCE_DIST_SCALE);
+
 		// The lighting debug cheats, packed into the one int the shader reads.
 		// Note the two inversions: the cheat says what the frame should still
 		// have, the flag says what the shader should drop.
@@ -5908,8 +6251,12 @@ class Castlescape : public BaseProject {
 		// texture it READS, not the one it writes, since it is used to step
 		// from one source texel to the next.
 		{
-			const glm::vec2 fullTexel = glm::vec2(1.0f / (float)swapChainExtent.width,
-												  1.0f / (float)swapChainExtent.height);
+			// RP.width/height, not swapChainExtent: the scene's resolve
+			// target (what the bright pass below actually reads) is sized to
+			// renderScale's scaled-down resolution, which can now differ
+			// from the swapchain/window's.
+			const glm::vec2 fullTexel = glm::vec2(1.0f / (float)RP.width,
+												  1.0f / (float)RP.height);
 			const glm::vec2 bloomTexel = glm::vec2(1.0f / (float)bloomWidth(),
 												   1.0f / (float)bloomHeight());
 
@@ -6238,7 +6585,46 @@ class Castlescape : public BaseProject {
 		// belong to.
 		for(int techniqueId = 0; techniqueId < SC.TechniqueInstanceCount; techniqueId++) {
 			for(int instanceId = 0; instanceId < SC.TI[techniqueId].InstanceCount; instanceId++) {
-				ubo.mMat = SC.TI[techniqueId].I[instanceId].Wm;
+				glm::mat4 renderWm = SC.TI[techniqueId].I[instanceId].Wm;
+				// Geometry visibility cull (GEOM_CULL_* above): an instance
+				// too far outside the radius+cone gets a stand-in render
+				// matrix instead of its real one, so it draws nowhere the
+				// camera can ever see it. Same "park it off the map" idiom
+				// already used to hide a consumed key/prop/sinking object
+				// elsewhere in this file (an invertible translate, not a
+				// zero matrix -- nMat below is its inverse-transpose, and a
+				// true zero matrix has none, which is a NaN CookTorrance.frag
+				// has no guard against). Only this render-time copy changes:
+				// SC.TI[...].Wm and the instance's collider are left alone,
+				// so a culled instance still exists for gameplay/collision
+				// purposes, it just isn't drawn.
+				//
+				// Tested as a bounding SPHERE, not a bare point: this
+				// instance's own translation column is a fine stand-in for
+				// its position, but a long wall segment's pivot can sit at
+				// one end rather than its centre (this asset pack isn't
+				// consistently centre-pivoted), so judging it by that point
+				// alone clipped things right at the screen's edges that were
+				// still plainly in view. Instances with a collider (most
+				// walls/furniture, see scene.json's "collider": "AABB") get
+				// their real world-space extents; everything else falls back
+				// to GEOM_CULL_FALLBACK_RADIUS.
+				Instance &cullInst = SC.TI[techniqueId].I[instanceId];
+				glm::vec3 instPos = glm::vec3(renderWm[3]);
+				float instRadius = GEOM_CULL_FALLBACK_RADIUS;
+				if(cullInst.C != nullptr) {
+					AABBextents e = cullInst.C->getExtents();
+					instPos = glm::vec3((e.xMin + e.xMax) * 0.5f,
+										 (e.yMin + e.yMax) * 0.5f,
+										 (e.zMin + e.zMax) * 0.5f);
+					instRadius = 0.5f * glm::length(glm::vec3(e.xMax - e.xMin,
+															   e.yMax - e.yMin,
+															   e.zMax - e.zMin));
+				}
+				if(!geometryVisible(instPos, instRadius, eyePos, forward)) {
+					renderWm = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
+				}
+				ubo.mMat = renderWm;
 				ubo.mvpMat = ViewPrj * ubo.mMat;
 				ubo.nMat = glm::inverse(glm::transpose(ubo.mMat));
 

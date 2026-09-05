@@ -102,6 +102,10 @@ layout(binding = 0, set = 0) uniform GlobalUniformBufferObject {
     // light. See AmbientLight::bounce in SceneLights.hpp and pointBounce()
     // below. Rides in the same padding.
     float ambientBounce;
+    // Distance fog density, set from GEOM_CULL_CONE_DIST in
+    // updateUniformBuffer() -- see its comment there. Used at the very end
+    // of main() below, in the same padding as everything above it.
+    float fogDensity;
     Light lights[MAX_LIGHTS];
 } gubo;
 
@@ -1164,6 +1168,23 @@ void main() {
         float baseLuminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
         color += glowRaw * (1.0 + baseLuminance);
     }
+
+    // Distance fog: fades toward black (matching buildPostAttachments()'s
+    // background clear colour, see main.cpp) as fragPos gets further from
+    // the eye, so the geometry visibility cull (GEOM_CULL_* in main.cpp)
+    // reads as things dissolving into a dark, atmospheric haze -- the classic
+    // "heavy fog hides the draw distance" trick -- rather than popping out of
+    // view partway through the screen. Exponential-SQUARED falloff (as
+    // opposed to plain exponential) rather than a hard linear ramp: it stays
+    // close to 1 near the camera, where clarity still matters for gameplay
+    // (reading a door, spotting a key), and only starts biting hard in the
+    // back half of its range, right where the cull needs it to. Computed in
+    // HDR linear space, before Composite.frag's tone map: fogging AFTER
+    // tonemapping would fight the display-referred curve instead of blending
+    // like a physical haze would.
+    float fogDist = length(fragPos - gubo.eyePos);
+    float fogFactor = exp(-pow(gubo.fogDensity * fogDist, 2.0));
+    color = mix(vec3(0.0), color, fogFactor);
 
     // Written linear and unclamped into an R16G16B16A16_SFLOAT attachment, so
     // a surface that receives more than a unit of light keeps saying so rather
