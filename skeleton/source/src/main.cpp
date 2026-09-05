@@ -220,6 +220,9 @@ struct PostUniformBufferObject {
 	// exposure ramp is still there and still doing the work of blowing the
 	// scene out; this is what finishes the job.
 	float escapeFlash;
+	// composite: 0 normally, ramping to 1 as the camera sinks into a ghost.
+	// See SPECTRAL_VEIL_OUTER.
+	float spectralVeil;
 };
 
 // A full-screen quad vertex for those passes. Only a position: Post.vert
@@ -2571,6 +2574,19 @@ class Castlescape : public BaseProject {
 	// test would need a radius big enough to be unfair horizontally.
 	static constexpr float GHOST_CATCH_RADIUS = 0.85f;
 	static constexpr float GHOST_CATCH_VERTICAL = 2.5f;
+
+	// THE SPECTRAL VEIL, the screen half of the ghost fade in
+	// include/custom/SpectralFade.glsl. Walking through a ghost is a thing the
+	// player does -- the catch above only fires while they are hunting -- and a
+	// ghost that simply disappears when you reach it says it was never a body.
+	// So Composite.frag washes the frame cold instead, and these numbers MUST
+	// match SPECTRAL_INSIDE_* in that file: a gap between the two ramps is a
+	// moment with no ghost and no wash.
+	static constexpr float SPECTRAL_VEIL_OUTER = 2.00f;
+	static constexpr float SPECTRAL_VEIL_INNER = 1.05f;
+	// Margin above and below the model's Y bounds (ghostBodyBottom/Top), so the
+	// bob doesn't blink the wash on and off from the edge of its reach.
+	static constexpr float SPECTRAL_VEIL_FADE_Y = 0.60f;
 	// Breadcrumb spacing, and the radius within which a new breadcrumb counts
 	// as revisiting an old one (and prunes the loop between them). The prune
 	// radius has to be comfortably larger than the spacing, or consecutive
@@ -6291,6 +6307,40 @@ class Castlescape : public BaseProject {
 			// the frame is already blowing out by the time the white arrives
 			// rather than being painted over while it is still readable.
 			post.escapeFlash = glm::smoothstep(0.45f, 1.0f, escapeFlash);
+
+			// The spectral veil's ramp -- see SPECTRAL_VEIL_OUTER. Here rather
+			// than in the ghost loop because that loop runs on the game clock:
+			// pausing inside a ghost would freeze the wash while the camera
+			// kept moving. max() over the ghosts, not a sum; two ghosts on the
+			// same square is still one player inside a ghost. Reads the drawn
+			// matrix so the bob counts, which at this range is the difference
+			// between being inside the body and under it.
+			{
+				float veil = 0.0f;
+				for(const Ghost &g : ghosts) {
+					if(g.inst == nullptr) continue;
+					const glm::vec3 gp = glm::vec3(g.inst->Wm[3]);
+
+					// Vertical first: one subtraction rejects most ghosts, and
+					// the horizontal test costs a square root.
+					const float dy = eyePos.y - gp.y;
+					const float below = ghostBodyBottom - SPECTRAL_VEIL_FADE_Y;
+					const float above = ghostBodyTop + SPECTRAL_VEIL_FADE_Y;
+					if(dy <= below || dy >= above) continue;
+					const float vy = glm::smoothstep(below, ghostBodyBottom, dy) *
+									 (1.0f - glm::smoothstep(ghostBodyTop, above, dy));
+
+					const float dx = eyePos.x - gp.x;
+					const float dz = eyePos.z - gp.z;
+					const float horiz = std::sqrt(dx * dx + dz * dz);
+					const float vxz = 1.0f - glm::smoothstep(SPECTRAL_VEIL_INNER,
+															 SPECTRAL_VEIL_OUTER, horiz);
+
+					veil = std::max(veil, vxz * vy);
+				}
+				post.spectralVeil = veil;
+			}
+
 			post.debugFlags = gubo.debugFlags;
 
 			// Bright pass: reads the full-resolution scene and writes the

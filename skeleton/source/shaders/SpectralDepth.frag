@@ -31,20 +31,26 @@
 // colour-write mask spelled with a blend factor, because Pipeline exposes
 // setTransparency() and not the mask.
 //
-// It also declares no descriptors -- not the UBO, not the albedo map. Only the
-// vertex stage needs anything, and the pipeline layout it is created with is
-// Pspectral's, so the sets Scene binds for the instance fit either pipeline.
+// The one DISCARD replicates spectralFade(), and only that -- not the colour
+// pass's ALPHA_CUTOFF, which the body's own alpha (0.33 at its thinnest) never
+// comes near. The fade is different: it takes the whole shell to zero, and a
+// prepass still writing depth across it would punch a ghost-shaped hole
+// through the flames and the exit glow in exactly the case the fade exists
+// for -- the player standing inside a ghost.
 //
-// NO DISCARD, deliberately, where the colour pass discards below ALPHA_CUTOFF.
-// Replicating it would mean recomputing the rim, the noise and the face mask
-// here to reach a branch that, with BODY_ALPHA at 0.46 and the noise bottoming
-// out at 0.72 of it, the body cannot take: the smallest alpha the ghost can
-// reach is around 0.33, twenty times the cutoff. The cutoff guards the depth
-// buffer against a fully transparent fragment punching a hole through the
-// flames, and there is no such fragment to guard against.
+// The threshold is where the thinnest body fragment drops under that cutoff,
+// 0.015 / 0.33. Above it the prepass may write depth for fragments the colour
+// pass rejects as too faint, which costs nothing.
+//
+// Beyond that it declares only what the fade reads: eyePos and the instance's
+// world matrix. The layout it is created with is Pspectral's, so the sets
+// Scene binds for the instance fit either pipeline.
 
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
+#extension GL_GOOGLE_include_directive : require
+
+#include "custom/SpectralFade.glsl"
 
 layout(location = 0) in vec3 fragPos;
 layout(location = 1) in vec3 fragNorm;
@@ -52,6 +58,24 @@ layout(location = 2) in vec2 fragUV;
 
 layout(location = 0) out vec4 outColor;
 
+// Both blocks truncated at the last field read. std140 offsets are positional,
+// so stopping early is legal and reordering is not.
+layout(binding = 0, set = 1) uniform UniformBufferObject {
+    mat4 mvpMat;
+    mat4 mMat;
+} ubo;
+
+layout(binding = 0, set = 0) uniform GlobalUniformBufferObject {
+    vec3 eyePos;
+    int lightCount;
+} gubo;
+
+// 0.015 / 0.33 -- see the header.
+const float FADE_CUTOFF = 0.045;
+
 void main() {
+    if(spectralFade(fragPos, gubo.eyePos, ubo.mMat[3].xyz) < FADE_CUTOFF) {
+        discard;
+    }
     outColor = vec4(0.0);
 }
