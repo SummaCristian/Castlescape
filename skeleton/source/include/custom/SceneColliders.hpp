@@ -1,41 +1,32 @@
 // ***** CUSTOM *****
 
-// Builds the collider list the gameplay code actually collides against.
+// Builds the collider list the gameplay code collides against: everything
+// scene.json auto-generated, plus the boxes and ramps authored in
+// assets/scenes/colliders.json.
 //
-// scene.json's own "collider" field can only auto-fit ONE box around a whole
-// model. That's exactly right for solid, roughly box-shaped meshes (walls,
-// towers, crates) and wrong for anything hollow or profiled:
-//   - the gate's archway is a hole, and a single box fills it in, so the
-//     passage everyone is supposed to walk through becomes solid;
-//   - a staircase's box reaches the height of its TOP step everywhere along
-//     its length, so instead of climbing it you walk into a 9-unit wall.
-// For those models the "collider" field is left out of scene.json entirely and
-// their collision geometry is authored here instead, as a handful of boxes in
-// a separate data file. Keeping collision geometry separate from render
-// geometry (and much coarser than it) is the normal split; what matters is
-// that it's *data*, sitting next to the scene it describes, rather than magic
-// numbers compiled into main.cpp.
+// scene.json's "collider" field can only fit ONE box around a whole model,
+// which is right for solid box-shaped meshes (walls, crates) and wrong for
+// anything hollow or profiled:
+//   - a gate's archway is a hole, and one box fills it in, sealing the passage
+//     the player is meant to walk through;
+//   - a staircase's box is as tall as its top step along its whole length, so
+//     instead of climbing it you walk into a wall.
+// Those models leave "collider" out of scene.json and get their collision
+// geometry authored here instead.
 //
-// Boxes are authored in the MODEL's local space and get the INSTANCE's world
-// matrix applied, so they follow whatever translate/eulerAngles/scale
-// scene.json gives that instance with no duplicated numbers. Note these models
-// are Z-up with their origin at the base, so "up" in local space is -Z: it
-// becomes +Y only after the instance's usual 90-degree X rotation.
+// Boxes are authored in MODEL space and multiplied by the INSTANCE's world
+// matrix, so they follow the translate/rotate/scale in scene.json with no
+// duplicated numbers. Careful: these models are Z-up with the origin at the
+// base, so local "up" is -Z and only becomes +Y after the instance rotation.
 //
-// The list this produces is deliberately FLAT and contains only leaf boxes.
-// Scene.hpp can also parse a "BVH" collider with children, but it pushes the
-// BVH's parent node into GlobalColliders alongside its children, and that
-// parent's getExtents() returns the union of them all, which would bring back
-// the very box-that-fills-the-archway problem we're avoiding. Filtering those
-// parents back out isn't possible from here (Collider::type and ::children are
-// private, and only ColliderShow is a friend), so authoring the leaves
-// ourselves is also what keeps the list usable.
+// The resulting list is flat and holds leaf boxes only. Scene.hpp can parse a
+// BVH collider with children, but it also pushes the parent node into
+// GlobalColliders, and the parent's extents are the union of its children -
+// which brings back the box that seals the archway.
 //
-// Same header-only "module" pattern as TextMaker/Scene/UiQuad/CheatHud:
-// declarations + implementation in this one file, implementation gated behind
-// SCENECOLLIDERS_IMPLEMENTATION (defined once in Libs.cpp). Like those modules
-// this file isn't self-guarded, and assumes "modules/Starter.hpp" and
-// "modules/Scene.hpp" are already included by whoever includes it.
+// Header-only like the rest of custom/: the implementation is compiled only
+// where SCENECOLLIDERS_IMPLEMENTATION is defined (Libs.cpp). Assumes
+// modules/Starter.hpp and modules/Scene.hpp were included first.
 
 #include <algorithm>
 #include <cmath>
@@ -43,19 +34,17 @@
 #include <string>
 #include <vector>
 
-// An inclined (or flat) walkable surface. This is the collision answer for a
-// staircase: the visual mesh keeps its steps, the collision is a plain slope,
-// and the player walks up smoothly instead of being snapped a riser at a time.
-// In first person you never see your own feet, so being up to half a riser off
-// the drawn step is invisible.
+// An inclined (or flat) walkable surface: the collision answer for a staircase.
+// The mesh keeps its steps, the collision is a plain slope, and the player
+// walks up smoothly instead of being snapped up one riser at a time. In first
+// person you never see your feet, so being half a riser off is invisible.
 //
-// It deliberately isn't a Collider: the collision code reads geometry through
-// getExtents(), which returns a world-space axis-ALIGNED box, so a tilted
-// surface can't survive that trip (an OOBB comes back out as its fattened
-// envelope). A slope needs a height *function*, not a box, so ramps live in
-// their own list and are consulted only by the ground pass. The wall pass never
-// sees them, which is also exactly right: a ramp is by definition something you
-// walk onto, never something that blocks you.
+// Not a Collider on purpose: the collision code reads geometry through
+// getExtents(), which returns a world-space axis-ALIGNED box, and a tilted
+// surface can't survive that (it comes back as its fattened envelope). A slope
+// needs a height FUNCTION, not a box, so ramps live in a separate list read
+// only by the ground pass. The wall pass never sees them, which is correct: a
+// ramp is something you walk onto, never something that blocks you.
 struct GroundVolume {
 	glm::mat4 Wm;			// model local -> world
 	glm::mat4 invWm;		// world -> model local
@@ -112,10 +101,9 @@ static int sceneCollidersAxis(const std::string &name) {
 }
 
 bool GroundVolume::groundAt(const glm::vec3 &worldPos, float &worldY) const {
-	// Test in the model's local space: the footprint is axis-aligned there no
-	// matter how the instance is rotated or scaled, so this stays exact for
-	// ramps that aren't turned by a whole multiple of 90 degrees (which is
-	// precisely what an AABB-based collider could never manage).
+	// Tested in model space, where the footprint is axis-aligned whatever the
+	// instance rotation is. This is what stays exact for ramps not turned by a
+	// multiple of 90 degrees, which an AABB never could.
 	glm::vec3 p = glm::vec3(invWm * glm::vec4(worldPos, 1.0f));
 
 	float w = p[widthAxis];
@@ -127,14 +115,13 @@ bool GroundVolume::groundAt(const glm::vec3 &worldPos, float &worldY) const {
 		return false;
 	}
 
-	// Surface height at that point along the run. A flat volume (riseFrom equal
-	// to riseTo) drops out of the same formula, so a landing at the top of a
-	// flight is just a level ramp rather than a second concept.
+	// Height at that point along the run. A flat volume (riseFrom == riseTo)
+	// falls out of the same formula, so a landing is just a level ramp.
 	float t = (runTo == runFrom) ? 0.0f : (r - runFrom) / (runTo - runFrom);
 	float h = riseFrom + (riseTo - riseFrom) * t;
 
-	// Send the surface point back through the world matrix and read its height
-	// there, instead of assuming local "up" ends up as world +Y.
+	// Transform the surface point back to world and read its height there,
+	// rather than assuming local "up" maps to world +Y.
 	glm::vec3 surface = p;
 	surface[riseAxis] = h;
 	worldY = (Wm * glm::vec4(surface, 1.0f)).y;
@@ -143,8 +130,8 @@ bool GroundVolume::groundAt(const glm::vec3 &worldPos, float &worldY) const {
 
 void SceneColliders::addBox(const glm::mat4 &Wm, glm::vec3 lo, glm::vec3 hi) {
 	Collider *c = new Collider();
-	// Order the corners here rather than trusting the data file to have them
-	// the right way round.
+	// Sort the corners here instead of trusting the data file to give them in
+	// min/max order.
 	c->initAABB(std::min(lo.x, hi.x), std::min(lo.y, hi.y), std::min(lo.z, hi.z),
 				std::max(lo.x, hi.x), std::max(lo.y, hi.y), std::max(lo.z, hi.z));
 	c->setWorldMatrix(Wm);
@@ -154,8 +141,8 @@ void SceneColliders::addBox(const glm::mat4 &Wm, glm::vec3 lo, glm::vec3 hi) {
 }
 
 void SceneColliders::init(Scene *SC, const std::string &file) {
-	// Start from what scene.json already built: the auto-fit boxes are still
-	// the right answer for every solid, box-shaped model in the scene.
+	// Start from scene.json's auto-fit boxes: still the right answer for every
+	// solid box-shaped model.
 	colliders = SC->GlobalColliders;
 
 	std::ifstream ifs(file);
@@ -187,10 +174,9 @@ void SceneColliders::init(Scene *SC, const std::string &file) {
 			  << owned.size() << " authored) + " << groundVolumes.size() << " ramps\n";
 }
 
-// "boxes": a plain list of [x1,y1,z1, x2,y2,z2] AABBs in model-local space.
-// Used for shapes an auto-fit box gets wrong but that a couple of hand-placed
-// boxes describe exactly, like the gate (two piers and a lintel, archway left
-// open in between).
+// "boxes": a list of [x1,y1,z1, x2,y2,z2] AABBs in model space. For shapes a
+// single auto-fit box gets wrong but a few hand-placed ones describe exactly,
+// like a gate: two piers and a lintel, archway left open.
 void SceneColliders::addBoxes(Scene *SC, const std::string &instanceId,
 							  const nlohmann::json &boxes) {
 	glm::mat4 Wm = SC->I[SC->InstanceIds[instanceId]]->Wm;
@@ -201,23 +187,20 @@ void SceneColliders::addBoxes(Scene *SC, const std::string &instanceId,
 					  << "' has a box with " << b.size() << " values, needs 6, skipped\n";
 			continue;
 		}
-		// get<float>() rather than letting the json objects convert themselves:
-		// glm::vec3 has several 3-argument constructors, so implicit conversions
-		// from json can pick the wrong one (or fail to pick at all).
+		// Explicit get<float>(): glm::vec3 has several 3-argument constructors
+		// and the implicit json conversion can pick the wrong one.
 		addBox(Wm, glm::vec3(b[0].get<float>(), b[1].get<float>(), b[2].get<float>()),
 				   glm::vec3(b[3].get<float>(), b[4].get<float>(), b[5].get<float>()));
 	}
 }
 
-// "ramps": one or more sloped walkable surfaces, in model-local space. This is
-// what the castle staircase uses: two entries, the flight itself and the flat
-// landing at the top (a ramp whose rise doesn't change).
+// "ramps": sloped walkable surfaces in model space. The castle staircase uses
+// two: the flight itself and the flat landing at the top (a ramp with no rise).
 //
-// Preferred over expanding the flight into one box per tread because these
-// steps are huge next to the player (a 0.45 riser against a 1.8 body, a quarter
-// of his height every 0.8 units of walking): stepped collision is technically
-// correct there but reads as a violent stutter. The average slope is a perfectly
-// ordinary 29 degrees, so the quantisation was the only thing hurting.
+// Preferred over one box per step because the steps are big next to the player
+// (0.45 riser against a 1.8 body, a quarter of his height every 0.8 units
+// walked): stepped collision is correct but feels like a violent stutter. The
+// average slope is an ordinary 29 degrees, so only the quantisation hurt.
 void SceneColliders::addRamps(Scene *SC, const std::string &instanceId,
 							  const nlohmann::json &ramps) {
 	glm::mat4 Wm = SC->I[SC->InstanceIds[instanceId]]->Wm;

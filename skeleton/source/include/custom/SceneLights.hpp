@@ -87,15 +87,13 @@ struct AmbientLight {
 	glm::vec3 lower = glm::vec3(0.0f);				// ground color
 	glm::vec3 dir = glm::vec3(0.0f, 1.0f, 0.0f);	// which way "up" blends
 
-	// The scene's default share of indirect light, 0..1 -- E17's
-	// gubo.ambientLight, which the maze lab sets to 0.05. CookTorrance.frag
-	// blends rather than sums: direct light keeps (1 - weight), ambient takes
-	// weight. So this is the brightness of the indirect term and upper/lower
-	// above are only its two COLORS, which is why an outdoor level authors them
-	// near 1 rather than near 0.1 as it would have when they were summed.
+	// Share of indirect light, 0..1. CookTorrance.frag blends rather than sums:
+	// ambient takes `weight`, direct light keeps (1 - weight). So this is the
+	// brightness and upper/lower above are only the two COLORS -- which is why
+	// an outdoor level authors them near 1, not near 0.1 as when they summed.
 	//
 	// Still meaningful with the hemisphere black: `bounce` below spends the
-	// same share, so this now sizes the torches' indirect contribution.
+	// same share, so this sizes the torches' indirect contribution.
 	//
 	// A material can override it per model (Material::ambientWeight), and that
 	// is the whole point: an enclosed room and an open courtyard need
@@ -174,13 +172,12 @@ class SceneLights {
 	// the sun or a lantern doing that?", and the scene has one sun, two matched
 	// lanterns and one spot, so per-light switches would only add rows.
 	bool directEnabled = true;	// the sun
-	bool pointEnabled = true;	// the gate lanterns
-	bool spotEnabled = true;	// the courtyard spot
-	// The whole indirect term: the hemisphere AND the per-light bounce, since
-	// the two share one bucket. Off means the only light in the scene is what
-	// the sources above put there directly, which is how you tell an unlit
-	// surface from one that is merely dim. Read by main.cpp, which turns it
-	// into the shader's LIGHT_DEBUG_NO_AMBIENT.
+	bool pointEnabled = true;	// the torches and candles
+	bool spotEnabled = true;	// none authored today, kept for completeness
+	// The whole indirect term, hemisphere AND per-light bounce, since the two
+	// share one bucket. Off, the only light is what the sources above put there
+	// directly -- which is how you tell an unlit surface from a merely dim one.
+	// main.cpp turns it into the shader's LIGHT_DEBUG_NO_AMBIENT.
 	bool ambientEnabled = true;
 
 	// Forces an orbit onto the directional lights that were authored static
@@ -385,12 +382,10 @@ void SceneLights::init(Scene *SC, const std::string &file) {
 }
 
 AmbientLight SceneLights::ambient() const {
-	// Handed over as authored, cheat or no cheat. ambientEnabled used to black
-	// the two colors here, which was only ever half the job -- it could not
-	// touch the per-light bounce, and it could not touch a model overriding the
-	// share in materials.json. The switch now lives in one place downstream of
-	// both, the shader's ambientShare() (LIGHT_DEBUG_NO_AMBIENT), and blacking
-	// the colors here as well would just be a second, weaker copy of it.
+	// As authored, cheat or no cheat. Blacking the colors here used to be the
+	// switch, and was only half the job: it missed the per-light bounce and any
+	// model overriding the share in materials.json. It now lives downstream of
+	// both, in the shader's ambientShare() (LIGHT_DEBUG_NO_AMBIENT).
 	return ambientLight;
 }
 

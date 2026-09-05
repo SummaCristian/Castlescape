@@ -28,38 +28,27 @@
 // none left.
 #define NUM_SHADOW_MAPS_2D 2
 
-// How many point lights can cast a shadow, each through one real 6-face cube
-// shadow map (CubeShadowMap.hpp). Exactly one slot is fixed: the last one,
-// reserved by main.cpp for the held torch, which never goes through
-// lights.json (it moves with the camera -- see the HAND_TORCH_SHADOW_INDEX
-// comment there). Every other slot (main.cpp's
-// dynamicShadowSlotBase..HAND_TORCH_SHADOW_INDEX, currently 0..10) is handed
-// out at RUNTIME instead of at load time: there are more shadow-worthy point
-// lights in the scene (the six wall/dv torches, the four colored decorative
-// torches, the two candles -- twelve in all) than there are spare slots, so
-// main.cpp's updateDynamicShadowSlots() gives them to whichever are
-// currently nearest the player, re-deciding as the player moves (see its own
-// header for why that needs hysteresis rather than a plain "N nearest"
-// rule). No point light gets a PERMANENT slot just for being the first one
-// implemented -- lights.json's own "castsShadow" flag isn't used for point
-// lights any more, see its comment there.
+// Slots for point-light cube shadow maps (CubeShadowMap.hpp), each a real
+// 6-face cube. The LAST slot is fixed: main.cpp reserves it for the held
+// torch, which moves with the camera and never goes through lights.json
+// (HAND_TORCH_SHADOW_INDEX). The rest are handed out at RUNTIME, not at load
+// time, by updateDynamicShadowSlots(): a level can author more shadow-worthy
+// torches and candles than there are slots, so the ones nearest the player
+// win, re-decided as the player moves (see that function for why it needs
+// hysteresis rather than a plain "N nearest" rule). No point light gets a
+// permanent slot for being implemented first; lights.json's "castsShadow" is
+// not read for point lights at all.
 //
-// Adding a slot means: this number, one more samplerCube binding plus a
-// sampleShadowCube4() case in CookTorrance.frag, and one more CubeShadowMap
-// instance in main.cpp -- the dynamic pool just gets wider, nothing else
-// needs touching.
+// Growing the pool means: this number, one more samplerCube binding plus a
+// sampleShadowCube4() case in CookTorrance.frag, and one more CubeShadowMap in
+// main.cpp. Nothing else needs touching.
 //
 // These share the fragment stage's sampled-image budget with
-// NUM_SHADOW_MAPS_2D and the albedo map. 20 + 2 + 1 = 23 exceeds the Vulkan
-// GUARANTEED minimum (maxPerStageDescriptorSampledImages) of 16, so this
-// isn't portable to a spec-minimum GPU any more -- deliberately: flames.json
-// (main.cpp) now spawns a flame for every torch/candle a LEVEL authors
-// (keyed by model, not hardcoded per instance), so the scene's point-light
-// count isn't a fixed 13 any more either, and this leaves headroom for
-// levels with more torches than today's one without every extra one
-// instantly losing the shadow contest. Real desktop GPUs allow far more
-// than 16 here in practice. If this ever needs to grow past what a target
-// GPU actually offers, the dynamic pool degrades gracefully either way --
+// NUM_SHADOW_MAPS_2D and the albedo map, and 32 + 2 + 1 is well past the 16
+// that Vulkan GUARANTEES (maxPerStageDescriptorSampledImages). Deliberate:
+// real desktop GPUs allow far more, and the headroom means a level with many
+// torches doesn't have every extra one instantly lose the shadow contest. On a
+// device that offered less, the dynamic pool degrades gracefully anyway --
 // SHADOW_SWAP_MARGIN (main.cpp) just has more candidates to arbitrate.
 #define NUM_SHADOW_CUBES 32
 

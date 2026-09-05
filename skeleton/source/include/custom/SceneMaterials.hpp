@@ -1,46 +1,32 @@
 // ***** CUSTOM *****
 
 // Owns the surface parameters that make stone look like stone and brass like
-// brass, under the same light.
+// brass under the same light.
 //
-// How it fits in:
-//   at startup   main.cpp calls init(), which reads
-//                assets/scenes/materials.json into one Material per model
-//   every frame  for each object it draws, main.cpp calls forModel() and copies
-//                the result into that object's uniform buffer for the shader
+//   startup      init() reads assets/scenes/materials.json into one Material
+//                per model
+//   every frame  main.cpp calls forModel() per object and copies the result
+//                into that object's uniform buffer
 //
-// The four parameters, one line each (the maths is in notes.md):
-//   specularColor  colour of the highlight. White for anything that isn't
-//                  metal, because the highlight is the colour of the lamp, not
-//                  of the object. Only metals tint it.
-//   roughness      how rough the surface is, 0 to 1. 0 is a mirror with a tiny
-//                  sharp highlight, 1 is chalk with none. This is the one you
-//                  actually tune.
-//   F0             how reflective it is when you look straight at it. About
-//                  0.04 for every non-metal there is, so it gets copied rather
-//                  than chosen. Metals are far higher.
-//   k              how much of the surface's response is plain colour versus
-//                  highlight. High for ordinary materials, ignored for the
-//                  ones that set "metallic" (see below), which have none.
+// The BRDF parameters (maths in notes.md):
+//   specularColor  color of the highlight. White for non-metals, since the
+//                  highlight is the color of the lamp, not of the object.
+//   roughness      0 = mirror with a tiny sharp highlight, 1 = chalk with
+//                  none. The one that actually gets tuned.
+//   F0             reflectance when looking straight at the surface. ~0.04 for
+//                  every dielectric; metals are much higher.
+//   k              balance between plain color and highlight. Ignored by
+//                  metals, which have no diffuse term.
 //
-// Plus one switch that changes which lighting path a model takes at all:
-//   metallic       shade it as a conductor rather than as a dielectric. See
-//                  Material::metallic.
+// The base color is not here: it comes per pixel from the texture.
 //
-// The base colour isn't here: it comes from the texture, per pixel.
+// Keyed by MODEL id, so the 4 towers share one entry instead of repeating it
+// per instance. It is a data file and not constants in the code because these
+// values are tuned by looking at the result.
 //
-// A data file rather than constants in main.cpp, for the same reason as
-// colliders.json: these get tuned by looking at the result. scene.json can't
-// carry them (Scene.hpp parses only id/model/texture/translate/eulerAngles/scale
-// and Starter.hpp is off limits).
-//
-// Keyed by MODEL id, unlike colliders.json: a material belongs to the surface,
-// so the 4 towers share one entry instead of repeating it 23 times. A future
-// "instances" section could override this one, resolved after it.
-//
-// Header-only module like the rest of custom/, implementation gated behind
-// SCENEMATERIALS_IMPLEMENTATION (defined once in Libs.cpp). Assumes
-// modules/Starter.hpp and modules/Scene.hpp are already included.
+// Header-only like the rest of custom/: the implementation is compiled only
+// where SCENEMATERIALS_IMPLEMENTATION is defined (Libs.cpp). Assumes
+// modules/Starter.hpp and modules/Scene.hpp were included first.
 
 #include <fstream>
 #include <string>
@@ -54,101 +40,67 @@ struct Material {
 	float F0 = 0.04f;							// reflectance head-on
 	float k = 0.9f;								// diffuse share
 	// The MGCG meshes average their normals across hard edges, which smears the
-	// shading of anything that should be crisp. Set this for those models and
-	// the shader derives the face normal itself. Leave it off for genuinely
-	// curved surfaces (the towers), which the averaged normals suit.
+	// shading of anything that should be crisp. With this on the shader derives
+	// the face normal itself instead. Leave it off for genuinely curved
+	// surfaces, which the averaged normals suit.
+	//
+	// int and not bool because it is copied straight into a uniform buffer, and
+	// std140 has no bool. Same for the other flags below.
 	int flatNormals = 0;
 
-	// Whether this model is drawn into the shadow maps at all. On for
-	// everything except the fixtures that HOLD a light: the torch bracket sits
-	// between the wall and its own flame, and an occluder that close to a point
-	// light subtends a huge solid angle -- it threw a cone of shadow across most
-	// of the room, which read as the torch not lighting anything. There is no bias or resolution that fixes
-	// an occluder practically touching the light; the fix is not to treat it as
-	// one. Not a BRDF parameter like the rest of this struct, but it is per
-	// model and this is the one per-model table the render loop already has in
-	// hand (see the forModel() call in populateCommandBuffer).
+	// Whether this model is rendered into the shadow maps. Off for the fixtures
+	// that hold a light: a torch bracket sits between the wall and its own
+	// flame, and an occluder that close to a point light covers a huge solid
+	// angle, throwing a cone of shadow over most of the room. No bias or
+	// resolution fixes that; the fix is not to treat it as an occluder.
 	//
-	// The cost is that the bracket casts no little shadow of its own downwards.
-	// Getting that honestly needs the light moved out of the fixture, or the
-	// fixture's own shadow faked separately.
+	// The cost is that the bracket casts no small shadow of its own.
 	bool castsShadow = true;
 
-	// Hemispheric ambient blends between "faces the sky" and "faces the ground"
-	// by the surface's own normal (CookTorrance.frag's hemisphericAmbient). That
-	// is right outdoors and wrong inside a closed room, where there is neither:
-	// a ceiling points straight down, so it collects ambientLower alone, which
-	// lights.json authored as bounce off a dirt courtyard -- dark and brown.
-	// Measured on the current values, that is 1.80x less ambient than a wall of
-	// the same stone gets, plus a warm cast the walls don't have, which is
-	// exactly what made the first ceiling read as a different colour no matter
-	// which texture it wore.
+	// Hemispheric ambient blends "faces the sky" and "faces the ground" by the
+	// surface normal (hemisphericAmbient() in CookTorrance.frag). That is right
+	// outdoors and wrong in a closed room: a ceiling points straight down, so it
+	// would collect only the ground color, which lights.json authored as bounce
+	// off a dirt courtyard - dark and brown.
 	//
-	// Set this and the shader uses the weight of a vertical surface instead, so
-	// the ceiling gets the same ambient as the walls it sits on. Opt-in per
-	// model: the castle outdoors wants the real thing, and this is a lie that
-	// only interiors need.
-	//
-	// int rather than bool for the same reason as flatNormals above: it is
-	// copied straight into the uniform buffer, and GLSL has no bool in std140.
+	// With this on the shader uses the weight of a vertical surface instead, so
+	// a ceiling gets the same ambient as the walls it sits on. Opt-in, because
+	// the castle exterior wants the real thing.
 	int interiorAmbient = 0;
 
-	// This model's share of indirect light, overriding AmbientLight::weight.
-	// Negative means "inherit the scene's", which is the default and the
-	// common case.
+	// Per-model override of AmbientLight::weight. Negative means "inherit the
+	// scene's", which is the default: the scene weight is the indoor one, so it
+	// is the exterior models that carry an override.
 	//
-	// Inheriting is the common case because the scene's own weight is the
-	// INDOOR one: the game is played inside the dungeon, so it is the castle
-	// exterior that is the exception and carries the override. A model added to
-	// materials.json and left alone comes out lit like the room it sits in.
+	// Distinct from interiorAmbient: that changes the DIRECTION the hemisphere
+	// is sampled from, this changes HOW MUCH of it is used. A ceiling needs
+	// both, the dungeon floor only this one.
 	//
-	// Separate from interiorAmbient above on purpose, even though both say
-	// something about being indoors. That one changes the DIRECTION the
-	// hemisphere is sampled from; this one changes HOW MUCH of the result is
-	// used. The ceiling wants both, the dungeon walls want only this, and the
-	// dungeon floor wants only this -- materials.json records that the floor's
-	// sky-facing blend reads fine and should be left alone, which one shared
-	// flag could not express.
-	//
-	// What it is for: hemispheric ambient has no visibility term, so before
-	// the E17 blend a sealed room collected exactly as much indirect light as
-	// the open courtyard and the ceiling above it changed nothing. There is no
-	// value of upper/lower that fixes that, because the problem is that the
-	// term is unoccluded, not that it is too bright. Until an AO map exists
-	// (E14 [TODO 5b] samples one; the MGCG pack ships albedo only), this is
-	// the authored stand-in for occlusion: one number per model saying roughly
-	// how enclosed its surfaces are.
+	// It exists because hemispheric ambient has no visibility term, so a sealed
+	// room would collect as much indirect light as an open courtyard. Until
+	// there is an AO map (the MGCG pack ships albedo only), this is the manual
+	// stand-in for occlusion: one number per model saying how enclosed it is.
 	float ambientWeight = -1.0f;
 
-	// Shade this model as a METAL. The four numbers above describe a dielectric
-	// and can only ever approximate one: a conductor differs from a stone in
-	// kind, not in degree, and two of the differences cannot be written as a
-	// value of roughness/F0/k at all.
+	// Shade this model as a metal instead of a dielectric. The parameters above
+	// cannot express a conductor by tuning alone; this switches two things in
+	// CookTorrance.frag:
 	//
-	// What the flag actually switches, both in CookTorrance.frag:
+	//   no diffuse lobe (k forced to 0). The diffuse term is light that entered
+	//   the surface and scattered back out, which the free electrons of a metal
+	//   absorb instead. Any leftover diffuse paints the object with its albedo
+	//   texture, which is what made the brass padlock read as orange plastic.
 	//
-	//   no diffuse lobe. k is forced to 0, ignoring whatever this entry says.
-	//   The diffuse term is light that entered the surface and scattered back
-	//   out; in a conductor the free electrons absorb it instead. A low k gets
-	//   close, but "low" is a number somebody has to keep re-picking, and any
-	//   leftover share paints the object with its albedo texture -- which is
-	//   how the padlock read as orange plastic rather than as brass.
+	//   the indirect term becomes a reflection (metalAmbient()) rather than the
+	//   hemisphere times the albedo. This is the one that sells it: what you
+	//   see on a lock or a chain is mostly the room around it. It also rescues
+	//   dark metal out of direct light, where a near-black albedo multiplied
+	//   the diffuse ambient away and the chains went black.
 	//
-	//   the indirect term becomes a REFLECTION (metalAmbient()) instead of the
-	//   hemisphere times the albedo. This is the one that matters for looking
-	//   like metal: what you see on a lock or a chain is mostly the room
-	//   around it, and a diffuse ambient cannot produce that no matter how it
-	//   is tuned. It also fixes the case the diffuse ambient handles worst --
-	//   dark metal out of direct light, where albedo ~0.03 multiplied the term
-	//   away and the chains went black.
-	//
-	// With this on, specularColor stops being "colour of the highlight" and
-	// becomes the material's own reflectance colour (mS * F0 should come out
-	// at the metal's measured reflectance -- iron ~0.56/0.57/0.58, brass
-	// ~0.95/0.64/0.37), and it is no longer optional: a metal left at white mS
-	// reflects like polished chrome.
-	//
-	// int rather than bool for the same reason as flatNormals above.
+	// With this on, specularColor becomes the material's reflectance color
+	// rather than the highlight color, and is no longer optional: mS * F0
+	// should equal the metal's measured reflectance (iron ~0.56/0.57/0.58,
+	// brass ~0.95/0.64/0.37). Left white, a metal reflects like chrome.
 	int metallic = 0;
 };
 
@@ -158,8 +110,8 @@ class SceneMaterials {
 	// "default", or to Material's own defaults if there's no file.
 	void init(Scene *SC, const std::string &file);
 
-	// Indexed by Instance::Mid rather than looked up by name, so the render loop
-	// doesn't hash 23 strings a frame.
+	// Indexed by Instance::Mid instead of looked up by name, so the render loop
+	// doesn't hash a string per object per frame.
 	const Material &forModel(int modelIndex) const {
 		if(modelIndex < 0 || modelIndex >= (int)byModel.size()) return fallback;
 		return byModel[modelIndex];
@@ -169,8 +121,8 @@ class SceneMaterials {
 	Material fallback;
 	std::vector<Material> byModel;
 
-	// Reads only the fields present, leaving the rest of `m` alone. That's what
-	// makes the default/override layering work.
+	// Reads only the fields present, leaving the rest of `m` untouched: that is
+	// what makes the default/override layering work.
 	static void readInto(const nlohmann::json &js, Material &m);
 };
 
@@ -195,12 +147,11 @@ void SceneMaterials::readInto(const nlohmann::json &js, Material &m) {
 	if(js.contains("castsShadow")) m.castsShadow = js["castsShadow"].get<bool>();
 	if(js.contains("interior"))    m.interiorAmbient = js["interior"].get<bool>() ? 1 : 0;
 	if(js.contains("metallic"))    m.metallic = js["metallic"].get<bool>() ? 1 : 0;
-	// Not clamped to 0 at the bottom: negative is the sentinel for "inherit
-	// the scene's", so only the top end is a data error.
+	// Only the top end is clamped: negative is the "inherit the scene's" flag.
 	if(js.contains("ambientWeight")) m.ambientWeight = glm::min(js["ambientWeight"].get<float>(), 1.0f);
 
-	// roughness 0 divides by zero in GGX. Caught here rather than guarded per
-	// fragment: it's a data error.
+	// roughness 0 divides by zero in GGX. Clamped here, once, rather than
+	// guarded per fragment.
 	m.roughness = glm::clamp(m.roughness, 0.03f, 1.0f);
 }
 
@@ -214,12 +165,12 @@ void SceneMaterials::init(Scene *SC, const std::string &file) {
 		return;
 	}
 
-	// Last arg is ignore_comments, so the file can keep its // lines.
-	// parse(input, callback, allow_exceptions, ignore_comments).
+	// parse(input, callback, allow_exceptions, ignore_comments): the last flag
+	// lets the file keep its // lines.
 	nlohmann::json js = nlohmann::json::parse(ifs, nullptr, true, true);
 
-	// Two layers: the file's "default" replaces the built-in one, per-model
-	// entries override that.
+	// Two layers: the file's "default" replaces the built-in one, then
+	// per-model entries override that.
 	if(js.contains("default")) {
 		readInto(js["default"], fallback);
 		byModel.assign(SC->ModelCount, fallback);
