@@ -1764,6 +1764,19 @@ class Castlescape : public BaseProject {
 	// Uniform scale: SM_Torch_01 is sized for a wall mount, shrunk to look
 	// right at arm's length.
 	static constexpr float HAND_TORCH_SCALE = 0.35f;
+	// Pick-up animation, the exact mirror of the key's (KEY_RAISE_DURATION/
+	// KEY_RAISE_DROP above): the torch rises into frame from below rather
+	// than snapping straight to the held pose. Its own constants rather
+	// than reusing the key's, since a future tweak to one item's flourish
+	// shouldn't silently retune the other's.
+	static constexpr float TORCH_RAISE_DURATION = 0.35f;
+	static constexpr float TORCH_RAISE_DROP = 0.8f;
+	// Seconds elapsed since the torch was picked up, or >= TORCH_RAISE_DURATION
+	// once the rise is over. Reset to 0 in the [E] pickup handler; starts
+	// saturated so a torch that's already collected when the level loads
+	// (not currently possible, but matches keyRaiseElapsed's own default)
+	// doesn't play the animation.
+	float torchRaiseElapsed = TORCH_RAISE_DURATION;
 
 	// The flame at a torch's head. See custom/Flame.hpp: camera-facing
 	// billboard layers shaded by a procedural fire field, drawn as one more
@@ -7781,6 +7794,10 @@ class Castlescape : public BaseProject {
 					// findGazedWallTorch() starts offering a flame to light
 					// it from.
 					handTorchCollected = true;
+					// Restart the raise: drawn from the next frame on, it
+					// should rise up from below rather than appear already
+					// in place (mirrors keyRaiseElapsed's reset below).
+					torchRaiseElapsed = 0.0f;
 					std::cout << "[torch] picked up hand torch\n";
 					nearbyHandTorch = false;
 					gazedInstance = nullptr;
@@ -8444,7 +8461,17 @@ class Castlescape : public BaseProject {
 			// Was an inline copy of handGrip's three rotations; it is the same
 			// expression, and sharing it keeps the two hands tilting alike.
 			glm::mat4 grip = handGrip(tuckedTilt, bobRollDeg);
-			glm::vec3 bobbedOffset = tuckedOffset + glm::vec3(bobLateral, bobVertical, 0.0f);
+
+			// Pick-up rise, same cubic ease-out as the key's (see the held-key
+			// block below for the full rationale): only the Y offset moves,
+			// so it composes with the tuck and bob above without either
+			// knowing about it.
+			torchRaiseElapsed = std::min(torchRaiseElapsed + deltaT, TORCH_RAISE_DURATION);
+			float torchT = torchRaiseElapsed / TORCH_RAISE_DURATION;
+			float torchEased = 1.0f - (1.0f - torchT) * (1.0f - torchT) * (1.0f - torchT);
+			float torchRaiseY = -TORCH_RAISE_DROP * (1.0f - torchEased);
+
+			glm::vec3 bobbedOffset = tuckedOffset + glm::vec3(bobLateral, bobVertical + torchRaiseY, 0.0f);
 
 			handTorchInst->Wm = camWm
 				* glm::translate(glm::mat4(1.0f), bobbedOffset)
