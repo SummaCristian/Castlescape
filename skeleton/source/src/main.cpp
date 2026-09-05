@@ -989,6 +989,10 @@ class Castlescape : public BaseProject {
 			bool whenUnlocked = false;
 		};
 		std::vector<LockProp> lockProps;
+		// How far past its own mesh a lock prop's collider reaches, on the face
+		// the hardware hangs from: the stand-off that keeps the held torch out
+		// of the chains. Raise if the flame still touches. See addLockProp().
+		static constexpr float LOCK_PROP_KEEPOUT = 0.45f;
 		// Which face of the leaf the hardware ended up on, as a sign on the
 		// leaf's local X axis: +1 for the models as make_door_lock.py exports
 		// them (FRONT_ON_PLUS_X), -1 for the half-turned copy. Set by
@@ -3460,9 +3464,10 @@ class Castlescape : public BaseProject {
 		// loader allows one texture per file, and they want different ones --
 		// door iron for the chains, the key's brass for the lock).
 		//
-		// Don't give these instances a "collider" in scene.json: the leaf
-		// already has one, and a prop's would stay behind under the map once
-		// the door is unlocked and the prop is parked there.
+		// These instances DO carry a "collider" in scene.json: the hardware hangs
+		// 0.225 in front of the leaf face, so the leaf's own box leaves it in
+		// open air. Safe only because the prop loop in GameLogic() syncs that box
+		// off the prop's Wm -- a box left behind would seal an unlocked door.
 		//
 		// `flip` puts the hardware on the leaf's OTHER face. make_door_lock.py
 		// builds chains and padlock against one face only (its FRONT_ON_PLUS_X),
@@ -3494,6 +3499,29 @@ class Castlescape : public BaseProject {
 					  * glm::translate(glm::mat4(1.0f), -pivot);
 			}
 			d->lockProps.push_back({SC.I[it->second], local});
+
+			// Grow the auto-fit box outward so the player is stopped before the
+			// hardware is in the torch's reach. A box that hugs the mesh is not
+			// enough: HAND_TUCK_MIN_REACH floors the tuck at 0.35, which still
+			// leaves the grip 0.385 ahead of the eye plus the torch's own body,
+			// against the 0.3 PLAYER_RADIUS holds the player off a collider. The
+			// tuck is already at its floor, so distance is the only lever left.
+			//
+			// xMax alone, in MODEL space: the hardware is modelled entirely on
+			// +X (chains 0.410..0.655, padlock 0.460..0.640, leaf ends at 0.430),
+			// so `local`'s half turn carries mesh and margin to the far face
+			// together. Inflating all six faces would push into the jambs and put
+			// a keep-out on the bare face of the leaf.
+			Collider *propC = SC.I[it->second]->C;
+			if(propC != nullptr) {
+				// getExtents() is world-space; at identity it reads back the
+				// model box. initAABB resets Wm, which the prop loop rewrites.
+				propC->setWorldMatrix(glm::mat4(1.0f));
+				AABBextents L = propC->getExtents();
+				propC->initAABB(L.xMin, L.yMin, L.zMin,
+								L.xMax + Door::LOCK_PROP_KEEPOUT, L.yMax, L.zMax);
+			}
+
 			// Same flag decides where the hardware is drawn and which side E
 			// works from, so the prompt can never disagree with what's on
 			// screen. Every prop on one door is flipped the same way (they're
@@ -7393,6 +7421,14 @@ class Castlescape : public BaseProject {
 					} else {
 						prop.inst->Wm = d.locked ? d.inst->Wm * prop.local
 												 : glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
+					}
+					// The hardware's own collider, off the same matrix. This is
+					// what makes the box safe to have: one left behind would seal
+					// the doorway, one that follows the prop below the map cannot.
+					// Null for a whenUnlocked prop -- those are Pickup instances,
+					// whose models carry no collider.
+					if(prop.inst->C != nullptr) {
+						prop.inst->C->setWorldMatrix(prop.inst->Wm);
 					}
 				}
 			}

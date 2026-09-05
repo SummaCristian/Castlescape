@@ -22,8 +22,8 @@
 		{"id": "ghost", "VD": "VDposNormUV", "model": "assets/models/Entities/Ghost.gltf", "format": "GLTF"},
 
 		{"id": "key", "VD": "VDposNormUV", "model": "assets/models/Miscellaneous/Key.mgcg", "format": "MGCG"},
-		{"id": "doorChains01", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_DoorChains_01.gltf", "format": "GLTF"},
-		{"id": "padlock01", "VD": "VDposNormUV", "model": "assets/models/Miscellaneous/SM_Padlock_01.gltf", "format": "GLTF"},
+		{"id": "doorChains01", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_DoorChains_01.gltf", "format": "GLTF", "collider": "AABB"},
+		{"id": "padlock01", "VD": "VDposNormUV", "model": "assets/models/Miscellaneous/SM_Padlock_01.gltf", "format": "GLTF", "collider": "AABB"},
 		{"id": "bookshelf01", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_Bookshelf_01.gltf", "format": "GLTF", "collider": "AABB"},
 		{"id": "book01", "VD": "VDposNormUV", "model": "assets/models/Dracula/SM_Book_01.gltf", "format": "GLTF"}
 	],
