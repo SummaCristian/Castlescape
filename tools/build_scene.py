@@ -256,8 +256,8 @@ TORCHES = [
 PICKUPS = [
     ("hbKeyIron",   "Key", (13.4,  1.28, 14.3),  0.0032),   # hub, posata dentro un piatto sul tavolo
     ("raBook",      "Book", (14.4,  1.22, -25.2), 1.0),     # room A, sullo scrittoio
-    ("rbKeyBronze", "Key", (-41.0, 1.05, -11.0), 0.0032),   # room B, angolo NO buio
-    ("rcKeyGold",   "Key", (18.0,  2.30, 50.4),  0.0032),   # room C, in cima ai barili
+    ("rbKeyBronze", "Key", (-41.0, 0.05, -11.0), 0.0032),   # room B, a terra nell'angolo NO buio
+    ("rcKeyGold",   "Key", (18.0,  1.12, 50.4),  0.0032),   # room C, sopra il barile rcStep3
 ]
 
 GHOSTS = [

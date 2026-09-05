@@ -244,9 +244,9 @@
 			{"id": "rbW_-5_1_S", "model": "dungeonWall", "texture": ["dungeonWallTex"], "translate": [-28.8, 0.02, 14.4], "eulerAngles": [0.0, 270.0, 0.0]},
 			{"id": "rbW_-4_-2_N", "model": "dungeonWall", "texture": ["dungeonWallTex"], "translate": [-28.8, 0.02, -14.4], "eulerAngles": [0.0, 90.0, 0.0]},
 			{"id": "rbW_-4_1_S", "model": "dungeonWall", "texture": ["dungeonWallTex"], "translate": [-21.6, 0.02, 14.4], "eulerAngles": [0.0, 270.0, 0.0]},
+			{"id": "iaW_-4_3_W", "model": "dungeonWall", "texture": ["dungeonWallTex"], "translate": [-28.8, 0.02, 28.8], "eulerAngles": [0.0, 180.0, 0.0]},
 			{"id": "iaW_-4_3_S", "model": "dungeonWall", "texture": ["dungeonWallTex"], "translate": [-21.6, 0.02, 28.8], "eulerAngles": [0.0, 270.0, 0.0]},
 			{"id": "iaW_-4_3_N", "model": "dungeonWall", "texture": ["dungeonWallTex"], "translate": [-28.8, 0.02, 21.6], "eulerAngles": [0.0, 90.0, 0.0]},
-			{"id": "iaW_-4_3_W", "model": "dungeonWall", "texture": ["dungeonWallTex"], "translate": [-28.8, 0.02, 28.8], "eulerAngles": [0.0, 180.0, 0.0]},
 			{"id": "rbW_-3_-1_E", "model": "dungeonWall", "texture": ["dungeonWallTex"], "translate": [-14.4, 0.02, -7.2], "eulerAngles": [0.0, 0.0, 0.0]},
 			{"id": "iaW_-3_3_S", "model": "dungeonWall", "texture": ["dungeonWallTex"], "translate": [-14.4, 0.02, 28.8], "eulerAngles": [0.0, 270.0, 0.0]},
 			{"id": "iaW_-3_3_N", "model": "dungeonWall", "texture": ["dungeonWallTex"], "translate": [-21.6, 0.02, 21.6], "eulerAngles": [0.0, 90.0, 0.0]},
@@ -491,8 +491,8 @@
 			{"id": "dkGrave", "model": "dkGravestone", "texture": ["dungeonKitTex"], "translate": [24.0, 0.02, 55.0], "eulerAngles": [0.0, 15.0, 0.0], "scale": [1.0, 1.0, 1.0]},
 			{"id": "hbKeyIron", "model": "key", "texture": ["keyTex"], "translate": [13.4, 1.28, 14.3], "scale": [0.0032, 0.0032, 0.0032]},
 			{"id": "raBook", "model": "book01", "texture": ["dungeonBannerTex"], "translate": [14.4, 1.22, -25.2], "scale": [1.0, 1.0, 1.0]},
-			{"id": "rbKeyBronze", "model": "key", "texture": ["keyTex"], "translate": [-41.0, 1.05, -11.0], "scale": [0.0032, 0.0032, 0.0032]},
-			{"id": "rcKeyGold", "model": "key", "texture": ["keyTex"], "translate": [18.0, 2.3, 50.4], "scale": [0.0032, 0.0032, 0.0032]}
+			{"id": "rbKeyBronze", "model": "key", "texture": ["keyTex"], "translate": [-41.0, 0.05, -11.0], "scale": [0.0032, 0.0032, 0.0032]},
+			{"id": "rcKeyGold", "model": "key", "texture": ["keyTex"], "translate": [18.0, 1.12, 50.4], "scale": [0.0032, 0.0032, 0.0032]}
 		]},
 
 		{"technique": "Spectral", "elements": [
