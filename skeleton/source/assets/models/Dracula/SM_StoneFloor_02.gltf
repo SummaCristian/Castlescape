@@ -1,0 +1,108 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "convert_assets.py"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "SM_StoneFloor_02",
+   "mesh": 0
+  }
+ ],
+ "meshes": [
+  {
+   "name": "SM_StoneFloor_02",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "mode": 4
+    }
+   ]
+  }
+ ],
+ "buffers": [
+  {
+   "uri": "SM_StoneFloor_02.bin",
+   "byteLength": 154980
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 47628,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 47628,
+   "byteLength": 47628,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 95256,
+   "byteLength": 31752,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 127008,
+   "byteLength": 27972,
+   "target": 34963
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 3969,
+   "type": "VEC3",
+   "min": [
+    -7.199999809265137,
+    -0.20000000298023224,
+    0.0
+   ],
+   "max": [
+    0.0,
+    -2.3657189558434766e-06,
+    7.199999809265137
+   ]
+  },
+  {
+   "bufferView": 1,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 3969,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 3969,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 3,
+   "byteOffset": 0,
+   "componentType": 5125,
+   "count": 6993,
+   "type": "SCALAR"
+  }
+ ]
+}

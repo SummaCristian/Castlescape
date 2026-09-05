@@ -1,0 +1,108 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "convert_assets.py"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "SM_WallDoor_Hole_02",
+   "mesh": 0
+  }
+ ],
+ "meshes": [
+  {
+   "name": "SM_WallDoor_Hole_02",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "mode": 4
+    }
+   ]
+  }
+ ],
+ "buffers": [
+  {
+   "uri": "SM_WallDoor_Hole_02.bin",
+   "byteLength": 318956
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 91632,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 91632,
+   "byteLength": 91632,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 183264,
+   "byteLength": 61088,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 244352,
+   "byteLength": 74604,
+   "target": 34963
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 7636,
+   "type": "VEC3",
+   "min": [
+    -1.2421382665634155,
+    -3.6887847443267674e-08,
+    0.0
+   ],
+   "max": [
+    0.0,
+    6.1929521560668945,
+    7.200000286102295
+   ]
+  },
+  {
+   "bufferView": 1,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 7636,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "byteOffset": 0,
+   "componentType": 5126,
+   "count": 7636,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 3,
+   "byteOffset": 0,
+   "componentType": 5125,
+   "count": 18651,
+   "type": "SCALAR"
+  }
+ ]
+}

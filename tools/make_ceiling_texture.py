@@ -20,6 +20,17 @@ Quindi: si ritaglia il campo di mattoni regolari del muro e lo si scurisce fino
 alla media della parete. E' la stessa pietra, con lo stesso disegno, portata al
 tono giusto.
 
+Portarlo al tono giusto IN MEDIA pero' non basta, e questa e' la seconda cosa
+che il ritaglio si porta dietro dalla parete: la luminanza non e' uniforme.
+Sulla parete l'occlusione ambientale e' cotta dentro la texture, quindi verso la
+lesena la pietra e' piu' scura, e nel ritaglio questo diventa un gradiente da
+40 a 58 -- il 45% -- da un bordo all'altro. Su un muro quel gradiente e'
+informazione; su una piastrella di soffitto che si ripete ogni 7.2 m e' un
+errore, e si vede: ogni piastrella e' chiara da un lato e scura dall'altro, e
+al passaggio da una all'altra il chiaro va contro lo scuro. La luce sul
+soffitto la fanno le torce, non un'ombra dipinta buona per un altro pezzo.
+Quindi il gradiente si toglie -- vedi flatten.
+
 Come la texture del pavimento, non e' affiancabile: due piastrelle adiacenti
 ripetono la stessa immagine e il giunto si vede, esattamente come succede gia'
 al pavimento del dungeon. Renderla senza cuciture vorrebbe dire inventare
@@ -43,6 +54,43 @@ RECT  = (0.0482, 0.2749, 0.3012, 0.5690)   # u0, v0, u1, v1
 INSET = 4          # texel scartati sui bordi: attorno ci sono arco e pilastri
 SIZE  = 512        # lato dell'immagine finale
 TARGET = 50.0      # luminanza del piano di fondo del muro, misurata per area
+DEG = 3            # grado del polinomio con cui si modella il gradiente
+
+
+def bands(l, n=8):
+    """Luminanza media per fascia sui due assi: il gradiente si legge qui."""
+    k = l.shape[0] // n
+    return ([l[:, i * k:(i + 1) * k].mean() for i in range(n)],
+            [l[i * k:(i + 1) * k].mean() for i in range(n)])
+
+
+def flatten(a):
+    """Toglie il gradiente d'ambiente, lasciando il disegno della pietra.
+
+    Si DIVIDE per il gradiente, non lo si sottrae: la texture e' un albedo e
+    l'occlusione ci e' entrata moltiplicando, quindi solo il quoziente conserva
+    i rapporti fra i toni -- una fuga resta scura quanto lo era rispetto al suo
+    concio, invece di diventare piu' chiara dove si schiarisce il fondo.
+
+    Il modello e' un polinomio di terzo grado nelle due coordinate. Il grado non
+    e' a caso: e' il piu' basso che riporta i due bordi opposti allo stesso tono
+    -- ed e' quello il punto, perche' e' li' che due piastrella si toccano --
+    mentre con una quadrica restava un dislivello dell'8% fra bordo e bordo,
+    l'ombra della lesena non essendo una rampa dritta ma una rampa con un
+    ginocchio. Piu' su non si va: i conci sono larghi un sesto del ritaglio, e
+    un polinomio che cominci a seguirli li spiana, mentre e' proprio il loro
+    chiaroscuro quello che si vuole tenere. Il gradiente scende dal 36% al 7%,
+    che e' quanto varia la pietra da sola: il residuo sono conci piu' scuri di
+    altri, non piu' un'ombra che attraversa la piastrella.
+    """
+    l = a @ np.array([0.2126, 0.7152, 0.0722])
+    n = l.shape[0]
+    y, x = np.mgrid[0:n, 0:n] / float(n - 1)
+    cols = [x ** i * y ** j for i in range(DEG + 1) for j in range(DEG + 1 - i)]
+    M = np.stack([c.ravel() for c in cols], 1)
+    c, *_ = np.linalg.lstsq(M, l.ravel(), rcond=None)
+    g = (M @ c).reshape(n, n)
+    return a * (g.mean() / np.maximum(g, 1e-6))[:, :, None]
 
 
 def main():
@@ -61,9 +109,12 @@ def main():
 
     a = np.asarray(crop).astype(np.float64)
     before = a.mean()
+    u0, v0 = bands(a @ np.array([0.2126, 0.7152, 0.0722]))
+    a = flatten(a)
+    u1, v1 = bands(a @ np.array([0.2126, 0.7152, 0.0722]))
     # moltiplicazione, non gamma: si vuole la stessa pietra meno chiara, e il
     # prodotto conserva i rapporti fra i toni invece di schiacciarne il contrasto
-    a = np.clip(a * (TARGET / before), 0, 255)
+    a = np.clip(a * (TARGET / a.mean()), 0, 255)
 
     out = Image.fromarray(a.round().astype(np.uint8)).resize(
         (SIZE, SIZE), Image.LANCZOS)
@@ -71,8 +122,11 @@ def main():
     out.save(DST, "PNG", optimize=True)
 
     after = np.asarray(out).astype(np.float64).mean()
+    swing = lambda b: 100.0 * (max(b) - min(b)) / (sum(b) / len(b))
     print("ritaglio %dx%d da (%d,%d), fattore %.3f" % (side, side, x0, y0, TARGET / before))
     print("luminanza %.1f -> %.1f  (obiettivo %.1f)" % (before, after, TARGET))
+    print("gradiente su u %.0f%% -> %.0f%%,  su v %.0f%% -> %.0f%%"
+          % (swing(u0), swing(u1), swing(v0), swing(v1)))
     print("scritta %s  (%d KB)" % (DST, os.path.getsize(DST) // 1024))
 
 
