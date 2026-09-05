@@ -1938,6 +1938,18 @@ class Castlescape : public BaseProject {
 		// again, same reasoning as re-locking the doors there.
 		bool spawnBurning = true;
 
+		// Catching-fire envelope, 0 (unlit, invisible) .. ~1.05 at its flare
+		// .. settling to 1 (fully lit). See FLAME_IGNITION_OMEGA/ZETA. Scales
+		// the billboard's size AND the point light's colour (see the light
+		// loop below), the same "one signal, two consumers" reasoning as
+		// `intensity` -- a flame that pops to full size while its light is
+		// still dark, or the reverse, would read as two effects instead of
+		// one catching flame. Seeded in addTorchFlame() to 1 for anything
+		// authored already burning, 0 for anything authored unlit, so
+		// nothing plays this animation on the frame it spawns.
+		float ignitionScale = 1.0f;
+		float ignitionVel = 0.0f;
+
 		// This flame's anchor in WORLD space, computed once at spawn. Only
 		// meaningful for a static flame (!heldByCamera): the held torch's
 		// anchor moves with the camera every frame and is recomputed in the
@@ -2379,6 +2391,21 @@ class Castlescape : public BaseProject {
 	static constexpr float FLAME_GUTTER_LO = 0.66f;	// noise below this: no gutter
 	static constexpr float FLAME_GUTTER_HI = 0.82f;	// above this: full gutter
 	static constexpr float FLAME_GUTTER_DEPTH = 0.48f;	// how far it ducks
+
+	// Catching fire: how a flame grows in from nothing the moment it's lit
+	// (a torch touched to a burning one, a candle lit with [E]), instead of
+	// its billboard and point light snapping straight to full size/strength
+	// the frame `burning` flips true. Modelled as an UNDERDAMPED spring
+	// (TorchFlame::ignitionScale/ignitionVel) chasing 1 when lit / 0 when
+	// not, rather than the critically-damped one FLAME_BRIGHT_OMEGA uses:
+	// a real flame catching fuel doesn't just rise and stop, it flares a
+	// little past its resting size on the way up before settling, and that
+	// one small overshoot is what reads as "catching" rather than "fading
+	// in". OMEGA sets the pace (~0.3 s to settle), ZETA < 1 is what allows
+	// the overshoot -- 1.0 would be critically damped like the brightness
+	// spring above, with no flare at all.
+	static constexpr float FLAME_IGNITION_OMEGA = 9.0f;
+	static constexpr float FLAME_IGNITION_ZETA = 0.55f;
 
 	// Stare-at glare: walking up to a wall torch and centring it in view
 	// swells the post chain's exposure and bloom (and that torch's own HDR
@@ -4297,6 +4324,11 @@ class Castlescape : public BaseProject {
 			tf.isCandle = isCandle;
 			tf.burning = burning;
 			tf.spawnBurning = burning;
+			// Starts already at rest for a flame authored burning (no
+			// catching-fire animation plays on level load), 0 for one
+			// authored unlit (the held torch, and any dungeonCandle) so it
+			// plays in full the first time something actually lights it.
+			tf.ignitionScale = burning ? 1.0f : 0.0f;
 			// Static flames only: the held torch's anchor is rebuilt from the
 			// camera every frame, so a world position captured here would be
 			// wrong from the next one on. Nothing reads it for the held torch.
@@ -6033,6 +6065,22 @@ class Castlescape : public BaseProject {
 			tf.heightScale += (hTarget - tf.heightScale)
 							  * (1.0f - std::exp(-deltaT / FLAME_HEIGHT_TAU));
 
+			// Catching fire / going out: an underdamped spring toward 1 while
+			// lit, 0 while not -- see TorchFlame::ignitionScale and
+			// FLAME_IGNITION_OMEGA/ZETA. Advanced unconditionally (not just
+			// while flameBurning(tf)) so a flame just switched off relaxes
+			// back to 0 instead of freezing wherever it was.
+			float wi = FLAME_IGNITION_OMEGA;
+			float zi = FLAME_IGNITION_ZETA;
+			float ignitionTarget = flameBurning(tf) ? 1.0f : 0.0f;
+			tf.ignitionVel += ((ignitionTarget - tf.ignitionScale) * wi * wi
+								- 2.0f * zi * wi * tf.ignitionVel) * deltaT;
+			tf.ignitionScale += tf.ignitionVel * deltaT;
+			// The overshoot is the point (the flare while catching), but it
+			// must not go negative -- a negative billboard size would flip
+			// the flame's quads inside out for a frame.
+			tf.ignitionScale = std::max(tf.ignitionScale, 0.0f);
+
 			// Lean. A flame is dragged by the air it moves through, so it
 			// leans AGAINST its own velocity: the world-space lean vector is
 			// just the smoothed velocity negated. Only the horizontal part --
@@ -6154,7 +6202,12 @@ class Castlescape : public BaseProject {
 				// rides on colour and reach rides on g, and both are needed:
 				// colour alone makes the lit area pulse in place, g alone makes
 				// it grow and shrink without changing how hot it looks.
-				L.color = tf.color * tf.intensity * tf.lightScale;
+				// tf.ignitionScale rides along here too -- same "one signal,
+				// two consumers" reasoning as the billboard's sizeScale
+				// above, so the light brightens in step with the flame
+				// growing in rather than snapping to full strength the
+				// instant it's lit.
+				L.color = tf.color * tf.intensity * tf.lightScale * tf.ignitionScale;
 				L.g = flameLightG(tf.isCandle, tf.intensity);
 				L.beta = TORCH_LIGHT_BETA;
 				L.cosIn = 1.0f;
@@ -6485,14 +6538,22 @@ class Castlescape : public BaseProject {
 			// the scale factor, with no need to fully decompose Wm.
 			float instScale = glm::length(glm::vec3(tf.inst->Wm[0]));
 
-			// A flame switched off by the cheat menu is collapsed to a point
-			// rather than skipped: Flame's per-flame descriptor set is
-			// recorded once into the command buffer and replayed every frame,
-			// so there is no "don't draw this one" to take here. Zero-sized
-			// basis columns put all three cards' vertices on the anchor, i.e.
-			// zero-area triangles the rasterizer produces no fragments for --
-			// well-defined, unlike leaving w degenerate.
-			float sizeScale = flameBurning(tf) ? tf.sizeScale : 0.0f;
+			// A flame switched off by the cheat menu (or never yet lit) is
+			// collapsed to a point rather than skipped: Flame's per-flame
+			// descriptor set is recorded once into the command buffer and
+			// replayed every frame, so there is no "don't draw this one" to
+			// take here. Zero-sized basis columns put all three cards'
+			// vertices on the anchor, i.e. zero-area triangles the
+			// rasterizer produces no fragments for -- well-defined, unlike
+			// leaving w degenerate.
+			//
+			// tf.ignitionScale carries that on/off state already -- it
+			// springs to 0 the moment flameBurning(tf) goes false and back
+			// to (just past) 1 when it goes true, see the catching-fire
+			// spring above -- so there's no separate flameBurning() gate
+			// here: gating on top of it would only reintroduce the instant
+			// snap-to-zero/full-size this animation exists to replace.
+			float sizeScale = tf.sizeScale * tf.ignitionScale;
 			float halfWidth = FLAME_HALF_WIDTH * instScale * sizeScale;
 			float height = FLAME_HEIGHT * instScale * sizeScale;
 
@@ -7335,6 +7396,12 @@ class Castlescape : public BaseProject {
 		handTorchCollected = false;
 		for(TorchFlame &tf : torchFlames) {
 			tf.burning = tf.spawnBurning;
+			// Snap back to rest instead of leaving it mid-spring: a flame
+			// re-lit on the new run should play its catching-fire animation
+			// from a clean 0, not from wherever the last run's flare/decay
+			// happened to leave it.
+			tf.ignitionScale = tf.spawnBurning ? 1.0f : 0.0f;
+			tf.ignitionVel = 0.0f;
 		}
 
 		nearbyDoor = -1;
