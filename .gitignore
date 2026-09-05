@@ -40,7 +40,7 @@ _deps/
 graphify-out/*
 !graphify-out/cache/
 graphify-out/cache/*
-!graphify-out/cache/semantic/
+!graphify-out/cache/*.json
 
 # Live workspace behind graphify-lectures/lectures/: the text extracted from the
 # professor's slide PDFs, plus the graphify working directory that queries it.
