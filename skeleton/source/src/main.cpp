@@ -2824,7 +2824,17 @@ class Castlescape : public BaseProject {
 	// from wanting a 16-bit float target instead.
 	void buildPostAttachments() {
 		const VkFormat HDR = VK_FORMAT_R16G16B16A16_SFLOAT;
-		const VkClearValue SKY = {.color = {.float32 = {0.0f, 0.9f, 1.0f, 1.0f}}};
+		// Was a bright cyan (0.0, 0.9, 1.0): with the dungeon sealed and no
+		// real skybox/cubemap anywhere, this only ever showed through a gap
+		// in the geometry, and the one deliberate gap -- the exit archway --
+		// is covered by ExitGlow's own warm daylight quads and a closing
+		// ceiling piece (see EXIT_GLOW_CEILING's comment), not by this raw
+		// clear colour. So it was never actually meant to be seen. Now that
+		// the geometry visibility cull (GEOM_CULL_* above) stops drawing
+		// walls/ceiling past its radius+cone, THIS is what shows through
+		// instead of them -- black keeps that masked as darkness/distance
+		// rather than a jarring bright cyan wall in the distance.
+		const VkClearValue SKY = {.color = {.float32 = {0.0f, 0.0f, 0.0f, 1.0f}}};
 		const VkClearValue BLACK = {.color = {.float32 = {0.0f, 0.0f, 0.0f, 1.0f}}};
 
 		// --- the scene pass: multisampled HDR colour, depth, and a resolve
