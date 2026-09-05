@@ -257,15 +257,24 @@
 		// solvable with bias instead. It is still lit and drawn normally; it
 		// just isn't an occluder.
 		"dungeonTorch": { "castsShadow": false },
-		// The held torch (SM_Torch_Held_01, "dungeonTorchHeld" in scene.json)
-		// needs the exact same exemption as "dungeonTorch" above, for the exact
-		// same reason -- its own point light is anchored inside its own cup,
-		// centimetres from the mesh. It's a SEPARATE model id from the
-		// wall-mounted one, so it doesn't inherit that entry; left on "default"
-		// it fell back to castsShadow: true and, once the held torch got its own
-		// cube shadow map, self-shadowed itself every frame as it moved with
-		// the camera -- flickering shadow noise with no obvious source.
-		"dungeonTorchHeld": { "castsShadow": false },
+		// The held torch (SM_Torch_Held_01, "dungeonTorchHeld" in scene.json).
+		// Unlike "dungeonTorch" above, this one DOES occlude -- it's a SEPARATE
+		// model id, so it doesn't inherit that entry, and left on "default"
+		// (castsShadow: true) is exactly what its floor pose wants: lying
+		// unlit on the ground before pickup, it's a static prop like any
+		// other and should darken the stone under it the same way a barrel
+		// would.
+		//
+		// The self-occlusion problem "dungeonTorch" describes doesn't apply
+		// to this one: its own point light only turns on once the player
+		// lights it (flameBurning() gates it out of the light list while
+		// unlit), and once lit, recordCubeSlotFaces excludes ownerInst from
+		// its OWN cube map regardless of this flag. What this flag alone
+		// can't tell apart is the floor pose from the carried one -- that
+		// distinction (and why the carried torch is exempted separately,
+		// pending a player model to explain a floating shadow) lives in
+		// main.cpp's CheatFlags::handTorchModelCastsShadowWhenHeld.
+		"dungeonTorchHeld": { "castsShadow": true },
 
 		// The ghosts, not occluders either -- the only entry here that is a
 		// PERFORMANCE decision rather than a lighting one, so it is worth saying

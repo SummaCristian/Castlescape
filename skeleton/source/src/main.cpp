@@ -951,6 +951,22 @@ class Castlescape : public BaseProject {
 		bool torchShadowsEnabled = true;
 		bool candleShadowsEnabled = true;
 
+		// Whether the held torch's own MESH occludes other lights' shadows
+		// (the cube maps of the wall torches/candles it walks past) while
+		// it's actually in the player's hand. Its floor pose is unaffected --
+		// see the handTorchInst checks in recordCubeSlotFaces and
+		// queueMoverCubeSlotRenders -- and always occludes normally there,
+		// the same as any other static prop, because that pose is static and
+		// nothing about it is camera-anchored.
+		//
+		// Off by default: nothing occupies the hand but the torch itself, so
+		// a shadow it throws while carried would read as the torch floating
+		// in mid-air with no arm or body to explain its shape -- worse than
+		// no shadow at all. A HUD row rather than a compile-time constant so
+		// it's easy to compare against once there's a player model/arm to
+		// anchor the shape, without a recompile.
+		bool handTorchModelCastsShadowWhenHeld = false;
+
 		// Geometry overlays (DebugLines.hpp), independent of the shading
 		// debug views above: crosses/arrows at each active light's position,
 		// and wireframe boxes at each torch's shadow-cube near/far clip
@@ -4583,6 +4599,7 @@ class Castlescape : public BaseProject {
 		hud.addToggle("Shadows", &cheats.shadowsEnabled);
 		hud.addToggle("Torch Shadows", &cheats.torchShadowsEnabled);
 		hud.addToggle("Candle Shadows", &cheats.candleShadowsEnabled);
+		hud.addToggle("Held Torch Casts Shadow", &cheats.handTorchModelCastsShadowWhenHeld);
 		hud.addToggle("Specular", &cheats.specularEnabled);
 		hud.addToggle("Tone Mapping", &cheats.toneMapEnabled);
 		hud.addToggle("Fullbright", &cheats.unlit);
@@ -5006,6 +5023,13 @@ class Castlescape : public BaseProject {
 				if(&inst == ownerInst) {
 					continue;
 				}
+				// The held torch's mesh: an occluder on the floor (static,
+				// like any other prop) but not once it's actually in the
+				// player's hand -- see cheats.handTorchModelCastsShadowWhenHeld.
+				if(&inst == handTorchInst && handTorchCollected && cheats.handTorchEnabled
+				   && !cheats.handTorchModelCastsShadowWhenHeld) {
+					continue;
+				}
 				ShadowCaster sc;
 				sc.inst = &inst;
 				if(cullPerFace) {
@@ -5133,6 +5157,19 @@ class Castlescape : public BaseProject {
 			for(const Door &d : doors) {
 				addMover(d.inst);
 			}
+			// The held torch: static (and a normal occluder, see
+			// materials.json) while it sits on the floor, so this costs
+			// nothing until the pickup jumps its Wm from the floor pose to
+			// the camera-anchored one. That jump is exactly what `moved`
+			// below detects, and the very next line -- faces that held a
+			// mover last capture and don't any more -- is what erases the
+			// stale floor-shadow from whichever wall torch had captured it,
+			// same as a door swinging out of one torch's beam and into
+			// another's. Once held, cheats.handTorchModelCastsShadowWhenHeld
+			// keeps it from being drawn as an occluder again (recordCube-
+			// SlotFaces), so tracking it here doesn't bring the shadow back --
+			// it only ever cleans up after it.
+			addMover(handTorchInst);
 			// Not identity: a mover whose authored pose IS the identity would
 			// otherwise read as "hasn't moved" on the first frame and never get
 			// its first capture. A zero matrix is a pose nothing can have.
@@ -5147,6 +5184,26 @@ class Castlescape : public BaseProject {
 
 		for(size_t m = 0; m < movingOccluders.size(); m++) {
 			const glm::mat4 &wm = movingOccluders[m]->Wm;
+
+			// The held torch once it's actually in the player's hand: it
+			// keeps jumping every frame (walk bob, camera turn) with
+			// cheats.handTorchModelCastsShadowWhenHeld off, so recordCube-
+			// SlotFaces never draws it as an occluder any more -- letting it
+			// through below would mark a face "stale" every single frame
+			// for a redraw that always comes back with the exact same
+			// (torch-less) texels, undoing the whole point of caching these
+			// captures. Skipping it here doesn't lose the cleanup that
+			// actually matters: the frame it's picked up, its Wm jumps off
+			// the floor pose, contributes nothing to facesNow below, and
+			// the very next line -- "held a mover last capture and doesn't
+			// now" -- erases the stale floor shadow on its own, same as any
+			// other mover leaving a face.
+			if(movingOccluders[m] == handTorchInst && handTorchCollected
+			   && cheats.handTorchEnabled && !cheats.handTorchModelCastsShadowWhenHeld) {
+				movingOccluderWm[m] = wm;
+				continue;
+			}
+
 			const bool moved = (wm != movingOccluderWm[m]);
 			// The bounding sphere the cull already knows about, in world space:
 			// the mover's own extent has to be part of the range test, or a
@@ -5747,6 +5804,15 @@ class Castlescape : public BaseProject {
 				// Same forModel() lookup the main pass does for the BRDF, so no
 				// extra per-frame work beyond the branch.
 				if(!materials.forModel(inst.Mid).castsShadow) {
+					continue;
+				}
+				// Same held-torch exemption as recordCubeSlotFaces: this pass
+				// is recorded once per swapchain image and replayed unmodified
+				// (see this function's header comment), so a camera-anchored
+				// occluder here would freeze wherever it stood at record time
+				// -- fine for the static floor pose, wrong for the carried one.
+				if(&inst == handTorchInst && handTorchCollected && cheats.handTorchEnabled
+				   && !cheats.handTorchModelCastsShadowWhenHeld) {
 					continue;
 				}
 
@@ -7868,6 +7934,42 @@ class Castlescape : public BaseProject {
 					std::cout << "[torch] picked up hand torch\n";
 					nearbyHandTorch = false;
 					gazedInstance = nullptr;
+
+					// The floor pose is about to vanish -- GameLogic()
+					// rebuilds handTorchInst->Wm off the camera from here on
+					// -- and with it any shadow it was baked into. Normally
+					// queueMoverCubeSlotRenders() cleans up after a mover
+					// that leaves a face, but that diff only tracks a mover
+					// while it's within its light's practical reach
+					// (torchShadowReach), and a pickup sitting at the dim
+					// edge of a torch's light can be geometrically inside its
+					// cube face while just outside that cutoff -- close
+					// enough to have been baked into the capture, too far to
+					// register in the per-frame diff. So this one-time,
+					// reach-free sweep is the actual guarantee: mark every
+					// face of every occupied slot the FLOOR pose (about to be
+					// left behind) geometrically falls in, straight from its
+					// known authored transform. Fires once per run, so
+					// there's no cost to being unconditional about it.
+					{
+						const glm::vec4 &local = modelSphere(handTorchInst->Mid);
+						const glm::vec3 centre = glm::vec3(handTorchSpawnWm * glm::vec4(glm::vec3(local), 1.0f));
+						const float scale = std::max({glm::length(glm::vec3(handTorchSpawnWm[0])),
+													  glm::length(glm::vec3(handTorchSpawnWm[1])),
+													  glm::length(glm::vec3(handTorchSpawnWm[2]))});
+						const float r = local.w * scale;
+						for(int t = 0; t < HAND_TORCH_SHADOW_INDEX; t++) {
+							if(!cubeSlotOccupied(t)) {
+								continue;
+							}
+							const glm::vec3 rel = centre - torchLightPos[t];
+							for(int face = 0; face < 6; face++) {
+								if(sphereInCubeFace(rel, r, face)) {
+									pendingFaceMask[t] |= (uint8_t)(1u << face);
+								}
+							}
+						}
+					}
 				} else if(nearbyPickup >= 0) {
 					Pickup &p = pickups[nearbyPickup];
 					p.collected = true;
