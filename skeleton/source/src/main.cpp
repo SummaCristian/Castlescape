@@ -2045,22 +2045,40 @@ class Castlescape : public BaseProject {
 	static constexpr float SHADOW_REACH_CUTOFF = 0.02f;
 
 	// How far a torch light still gets uploaded, and how many may be live at
-	// once. CookTorrance.frag loops over every light for every fragment (times
-	// the sample count, since Starter.hpp forces per-sample shading), so an
-	// uploaded light costs a full GGX evaluation across the whole screen
-	// whether or not it can be seen.
+	// once. CookTorrance.frag loops over every light for every fragment
+	// (times the MSAA sample count -- Starter.hpp turns on
+	// sampleShadingEnable with minSampleShading 1.0, i.e. full per-SAMPLE
+	// shading, and this project runs 4x MSAA -- see msaaSamples), so an
+	// uploaded light costs a full GGX evaluation FOUR TIMES per pixel,
+	// whether or not it can be seen. This is the actual dominant per-frame
+	// GPU cost in this renderer, well above anything the geometry visibility
+	// cull below touches (that one only trims draw calls, which were never
+	// the bottleneck at this instance count).
 	//
 	// 25 used to be "generous" back when this was written against a
 	// six-torch scene and a much smaller live-light/shadow-slot budget --
-	// wrong now: the dungeon's own footprint is ~60 units across, so a
-	// 25-unit radius drops any torch in a room the player isn't standing
-	// in, VISIBLY (its flame billboard is unconditional, see Flame.hpp, so
-	// it stays lit-looking on screen while casting zero light and shading
-	// its own surroundings pitch black -- exactly what a purely-numeric
-	// "3% contribution, below what ambient hides" estimate can't catch).
-	// 120 comfortably covers the whole level from any point in it, so this
-	// cull now only ever drops what's actually, truly out of range.
-	static constexpr float TORCH_LIGHT_CULL_DIST = 120.0f;
+	// wrong for a while after that: the dungeon's own footprint is ~60 units
+	// across, so a 25-unit radius dropped any torch in a room the player
+	// wasn't standing in, VISIBLY (its flame billboard is unconditional, see
+	// Flame.hpp, so it stayed lit-looking on screen while casting zero light
+	// and shading its own surroundings pitch black -- exactly what a
+	// purely-numeric "3% contribution, below what ambient hides" estimate
+	// can't catch). 120 fixed that by comfortably covering the whole level
+	// from any point in it, at the cost of uploading nearly every torch in
+	// the dungeon nearly all the time.
+	//
+	// Tied to GEOM_CULL_CONE_DIST below (with a small margin) rather than to
+	// its own flat number now that that geometry cull exists: anything whose
+	// TORCH BRACKET is still being drawn is guaranteed to still be lit, so
+	// the "visibly glowing but dark" case above can't reoccur for anything
+	// with a visible model behind it. The residual case that can still
+	// happen -- a flame's billboard alone, unconditional and undimmed,
+	// rendering past both cutoffs with nothing lighting it -- is far less
+	// noticeable than a fully modelled, clearly-visible dark torch was: a
+	// small/distant glow with no bracket to contrast it against. Kept as a
+	// static_assert right after GEOM_CULL_CONE_DIST is declared, so the two
+	// can't drift out of sync by editing only one of them.
+	static constexpr float TORCH_LIGHT_CULL_DIST = 55.0f;
 	static constexpr int TORCH_LIGHT_MAX_LIVE = 32;
 
 	// Geometry visibility: a radius around the player, plus a longer cone
@@ -2104,6 +2122,12 @@ class Castlescape : public BaseProject {
 	// longest sightline without popping the far wall into view a step at a
 	// time.
 	static constexpr float GEOM_CULL_CONE_DIST = 50.0f;
+	// Keeps TORCH_LIGHT_CULL_DIST (declared above, before this one exists --
+	// see its own comment for why) at least as far as this cone reaches, so
+	// nothing whose torch bracket is still drawn can ever end up unlit.
+	static_assert(TORCH_LIGHT_CULL_DIST >= GEOM_CULL_CONE_DIST,
+				  "a torch light cull shorter than the geometry cone would "
+				  "leave a visible torch model unlit");
 	// GEOM_CULL_CONE_COS: half-angle of that cone, as a cosine (so the test
 	// is a plain dot product, no acos per instance per frame). ~70 degrees
 	// half-angle (140 total), well past the widest diagonal FOV this camera
