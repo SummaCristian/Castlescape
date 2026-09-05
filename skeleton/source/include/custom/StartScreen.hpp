@@ -45,14 +45,17 @@ struct StartScreen {
 	// CheatHud::update and PauseMenu::update (BEFORE getSixAxis).
 	void update(GLFWwindow *window, int screenW, int screenH);
 
-	// True for exactly the frame Play/Quit was clicked or Enter-confirmed.
-	// Neither button's actual effect lives in here -- Play's is closing this
-	// screen (main.cpp calls setOpen), Quit's is closing the window
-	// (main.cpp calls glfwSetWindowShouldClose) -- same division of
-	// responsibility as PauseMenu's resumeClicked()/quitClicked().
+	// True for exactly the frame Play/Settings/Quit was clicked or
+	// Enter-confirmed. None of the three buttons' actual effects live in
+	// here -- Play's is closing this screen (main.cpp calls setOpen),
+	// Settings' is opening SettingsMenu instead (main.cpp remembers to come
+	// back here), Quit's is closing the window (main.cpp calls
+	// glfwSetWindowShouldClose) -- same division of responsibility as
+	// PauseMenu's resumeClicked()/settingsClicked()/quitClicked().
 	bool playClicked() const { return wantsPlay; }
+	bool settingsClicked() const { return wantsSettings; }
 	bool quitClicked() const { return wantsQuit; }
-	void clearRequests() { wantsPlay = false; wantsQuit = false; }
+	void clearRequests() { wantsPlay = false; wantsSettings = false; wantsQuit = false; }
 
 	private:
 	TextMaker *txt = nullptr;
@@ -61,10 +64,11 @@ struct StartScreen {
 
 	bool open = false;
 	bool wantsPlay = false;
+	bool wantsSettings = false;
 	bool wantsQuit = false;
 
-	static constexpr int NUM_BUTTONS = 2;
-	int selectedIndex = 0; // 0 = Play, 1 = Quit
+	static constexpr int NUM_BUTTONS = 3;
+	int selectedIndex = 0; // 0 = Play, 1 = Settings, 2 = Quit
 
 	int lastScreenW = -1;
 	int lastScreenH = -1;
@@ -77,13 +81,14 @@ struct StartScreen {
 	bool dirty = true;
 
 	// Layout, in pixels, centered on screen -- same constants/reasoning as
-	// PauseMenu's own layout section.
+	// PauseMenu's own layout section, including buttonHeight() being
+	// measured rather than a guessed constant (see its own comment there).
 	static constexpr float BUTTON_WIDTH = 240.0f;
-	static constexpr float BUTTON_HEIGHT = 56.0f;
 	static constexpr float BUTTON_GAP = 20.0f;
 	static constexpr float TITLE_GAP = 60.0f;
 	static constexpr float TITLE_SCALE = 2.0f;
 	static constexpr float BUTTON_TEXT_SCALE = 1.0f;
+	static constexpr float BUTTON_LINE_GAP = 16.0f;
 
 	// Text-block ids handed to TextMaker::print/removeText. Start past both
 	// CheatHud's and PauseMenu's own ranges so none of the three can ever
@@ -92,15 +97,17 @@ struct StartScreen {
 	static constexpr int FIRST_BUTTON_TEXT_ID = 301;
 
 	static const std::string &buttonLabel(int i) {
-		static const std::string labels[NUM_BUTTONS] = {"Play", "Quit"};
+		static const std::string labels[NUM_BUTTONS] = {"Play", "Settings", "Quit"};
 		return labels[i];
 	}
 
 	float measureTextHeight(int fontId, float scale) const;
+	// Measured, not guessed -- see PauseMenu::buttonHeight()'s comment.
+	float buttonHeight() const { return measureTextHeight(10, BUTTON_TEXT_SCALE) + BUTTON_LINE_GAP; }
 	float contentTop(int screenH) const;
 	float buttonTop(int i, int screenH) const {
 		return contentTop(screenH) + measureTextHeight(2, TITLE_SCALE) + TITLE_GAP
-			 + i * (BUTTON_HEIGHT + BUTTON_GAP);
+			 + i * (buttonHeight() + BUTTON_GAP);
 	}
 	float buttonLeft(int screenW) const { return (float)screenW / 2.0f - BUTTON_WIDTH / 2.0f; }
 
@@ -132,7 +139,7 @@ float StartScreen::measureTextHeight(int fontId, float scale) const {
 
 float StartScreen::contentTop(int screenH) const {
 	float totalH = measureTextHeight(2, TITLE_SCALE) + TITLE_GAP
-				 + NUM_BUTTONS * BUTTON_HEIGHT + (NUM_BUTTONS - 1) * BUTTON_GAP;
+				 + NUM_BUTTONS * buttonHeight() + (NUM_BUTTONS - 1) * BUTTON_GAP;
 	return (float)screenH / 2.0f - totalH / 2.0f;
 }
 
@@ -142,6 +149,7 @@ void StartScreen::setOpen(bool isOpen, int screenW, int screenH) {
 	}
 	open = isOpen;
 	wantsPlay = false;
+	wantsSettings = false;
 	wantsQuit = false;
 	if(open) {
 		selectedIndex = 0;
@@ -183,6 +191,8 @@ void StartScreen::update(GLFWwindow *window, int screenW, int screenH) {
 	if(enterPressed && !enterKeyWasPressed) {
 		if(selectedIndex == 0) {
 			wantsPlay = true;
+		} else if(selectedIndex == 1) {
+			wantsSettings = true;
 		} else {
 			wantsQuit = true;
 		}
@@ -195,7 +205,7 @@ void StartScreen::update(GLFWwindow *window, int screenW, int screenH) {
 	for(int i = 0; i < NUM_BUTTONS; i++) {
 		float top = buttonTop(i, screenH);
 		float left = buttonLeft(screenW);
-		if(mx >= left && mx <= left + BUTTON_WIDTH && my >= top && my <= top + BUTTON_HEIGHT) {
+		if(mx >= left && mx <= left + BUTTON_WIDTH && my >= top && my <= top + buttonHeight()) {
 			hoveredIndex = i;
 			break;
 		}
@@ -209,6 +219,8 @@ void StartScreen::update(GLFWwindow *window, int screenW, int screenH) {
 	if(leftMousePressed && !leftMouseWasPressed && hoveredIndex != -1) {
 		if(hoveredIndex == 0) {
 			wantsPlay = true;
+		} else if(hoveredIndex == 1) {
+			wantsSettings = true;
 		} else {
 			wantsQuit = true;
 		}
@@ -233,7 +245,7 @@ void StartScreen::render(int screenW, int screenH) {
 		bool selected = (i == selectedIndex);
 		glm::vec4 color = selected ? glm::vec4(1.0f, 1.0f, 1.0f, 0.28f)
 									: glm::vec4(1.0f, 1.0f, 1.0f, 0.14f);
-		rects.push_back({buttonLeft(screenW), buttonTop(i, screenH), BUTTON_WIDTH, BUTTON_HEIGHT, color});
+		rects.push_back({buttonLeft(screenW), buttonTop(i, screenH), BUTTON_WIDTH, buttonHeight(), color});
 	}
 	quads->setQuads(rects);
 
@@ -246,11 +258,15 @@ void StartScreen::render(int screenW, int screenH) {
 	for(int i = 0; i < NUM_BUTTONS; i++) {
 		bool selected = (i == selectedIndex);
 		float top = buttonTop(i, screenH);
-		pixelToAnchor((float)screenW / 2.0f, top + BUTTON_HEIGHT / 2.0f, screenW, screenH, ax, ay);
+		// TRV_TOP, not TRV_MIDDLE -- same reasoning as SettingsMenu's
+		// identical change: anchor at the button's own top edge, matching
+		// CheatHud's rows, rather than trusting TextMaker to center text
+		// around a computed midpoint.
+		pixelToAnchor((float)screenW / 2.0f, top, screenW, screenH, ax, ay);
 		glm::vec4 labelColor = selected ? glm::vec4(1.0f, 1.0f, 0.3f, 1.0f)
 										 : glm::vec4(0.9f, 0.9f, 0.9f, 1.0f);
 		txt->print(ax, ay, buttonLabel(i), FIRST_BUTTON_TEXT_ID + i, "SS", false, selected, false,
-				   TAL_CENTER, TRH_CENTER, TRV_MIDDLE, labelColor,
+				   TAL_CENTER, TRH_CENTER, TRV_TOP, labelColor,
 				   {0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, BUTTON_TEXT_SCALE, BUTTON_TEXT_SCALE);
 	}
 }

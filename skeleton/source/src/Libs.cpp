@@ -27,6 +27,9 @@
 #define STARTSCREEN_IMPLEMENTATION
 #include "custom/StartScreen.hpp"
 
+#define SETTINGSMENU_IMPLEMENTATION
+#include "custom/SettingsMenu.hpp"
+
 #define SCENECOLLIDERS_IMPLEMENTATION
 #include "custom/SceneColliders.hpp"
 

@@ -15,6 +15,7 @@
 #include "custom/CheatHud.hpp"
 #include "custom/PauseMenu.hpp"
 #include "custom/StartScreen.hpp"
+#include "custom/SettingsMenu.hpp"
 #include "custom/SceneColliders.hpp"
 #include "custom/SceneMaterials.hpp"
 #include "custom/SceneLights.hpp"
@@ -689,6 +690,73 @@ class Castlescape : public BaseProject {
 	// that can't do 16x is never offered it.
 	float maxMsaaLevel = 2.0f;
 
+	// Applies a new renderScale (already written into the member by
+	// whichever slider called this -- CheatHud's "Render Scale" row or
+	// SettingsMenu's, both register this same method as onChange) by
+	// replaying the same rebuild path a real window resize already goes
+	// through (see framebufferResizeCallback/onWindowResize in Starter.hpp)
+	// at the CURRENT window size, so only the internal render resolution
+	// changes, nothing about the window itself.
+	//
+	// Skipped while a rebuild (this one, a previous slider press, or an
+	// actual window resize) is still pending -- see framebufferResized's
+	// own comment in Starter.hpp and RebuildPipeline()'s. recreateSwapChain()
+	// only runs once, at the very end of the CURRENT frame's drawFrame();
+	// stacking a second target size on top before that has happened is what
+	// let a render pass get begun against a size newer than the framebuffer
+	// it was actually bound to once (the "renderArea... greater than
+	// framebuffer" validation errors, and the crash that followed them).
+	// This can't fully rule out the same race from resizing the WINDOW
+	// itself very rapidly, since that path lives in the immutable
+	// Starter.hpp and isn't something this guard touches -- but it stops
+	// our own sliders from being an extra source of the same pileup.
+	void applyRenderScaleChange() {
+		if(!framebufferResized) {
+			onWindowResize((int)windowWidth, (int)windowHeight);
+			RebuildPipeline();
+		}
+	}
+
+	// Shows the actual pixel resolution alongside the percentage (e.g.
+	// "< 80% (1536x864) >") rather than switching to fixed presets like
+	// 720p/1080p: those only mean one specific shape (16:9) at one specific
+	// window size, while this scale has to stay meaningful at whatever
+	// size/shape the window is resized to. Reads renderWidth()/
+	// renderHeight() -- which read the LIVE renderScale, not the parameter
+	// -- rather than recomputing from scratch, so this can never drift from
+	// what's actually being rendered. v is unused: always formats the
+	// CURRENT renderScale/window size, since that's genuinely what's live
+	// regardless of which slider control called this mid-adjustment.
+	std::string formatRenderScale(float /*v*/) {
+		char buf[32];
+		snprintf(buf, sizeof(buf), "< %d%% (%dx%d) >",
+				 (int)std::lround(renderScale * 100.0f),
+				 renderWidth((int)windowWidth), renderHeight((int)windowHeight));
+		return std::string(buf);
+	}
+
+	// Applies a new msaaLevel (already written into the member by whichever
+	// slider called this) by converting it back to a real
+	// VkSampleCountFlagBits, then rebuilding the render passes' attachment
+	// properties around it (initRenderPasses() -- a sample-count change,
+	// unlike renderScale's plain width/height change, has to regenerate
+	// hdrAtt itself) before tearing down and recreating the actual GPU
+	// images/pipelines (RebuildPipeline()). Same pending-rebuild guard as
+	// applyRenderScaleChange(), same reason.
+	void applyMsaaChange() {
+		if(!framebufferResized) {
+			msaaSamples = static_cast<VkSampleCountFlagBits>(1 << (int)std::lround(msaaLevel));
+			initRenderPasses();
+			RebuildPipeline();
+		}
+	}
+
+	std::string formatMsaaLevel(float level) {
+		char buf[16];
+		snprintf(buf, sizeof(buf), "< %dx >", 1 << (int)std::lround(level));
+		return std::string(buf);
+	}
+
 	// Bright-pass threshold and knee, in luminance. Set high enough to clear
 	// the SCENE's own peak radiance, not just 1.0: a sunlit wall with a pale
 	// albedo lands a little either side of 1.0 once the sun and the ambient
@@ -756,6 +824,23 @@ class Castlescape : public BaseProject {
 	// current run. Folded into overlayOpen() like hud/pauseMenu, so it
 	// freezes GameLogic() the same way.
 	StartScreen startScreen;
+
+	// Flat-colored quads: opaque backdrop + row backgrounds for the settings
+	// screen. Separate UiQuad instance/named command buffer, same reasoning
+	// as pauseQuad/startScreenQuad/crosshair above.
+	UiQuad settingsQuad;
+	// The settings screen: Render Scale/MSAA today, the same two sliders
+	// CheatHud's own copies control (see applyRenderScaleChange()/
+	// applyMsaaChange(), shared by both). Reachable from either
+	// StartScreen's or PauseMenu's "Settings" button (see their own
+	// settingsClicked()); settingsFromPause below remembers which one to
+	// reopen when its Back is pressed. Folded into overlayOpen() like
+	// hud/pauseMenu/startScreen, so it freezes GameLogic() the same way.
+	SettingsMenu settingsMenu;
+	// True if settingsMenu was opened from PauseMenu (mid-run), false if
+	// from StartScreen (before/after a run). Set wherever settingsClicked()
+	// is handled, read wherever settingsMenu.backClicked() is.
+	bool settingsFromPause = false;
 
 	// Other application parameters
 	float Ar;	// Aspect ratio
@@ -2606,10 +2691,13 @@ class Castlescape : public BaseProject {
 	// instead of closing the window outright (see updateUniformBuffer()).
 	bool escKeyWasPressed = false;
 
-	// True whenever any modal overlay (cheat HUD, pause menu, or the launch
-	// screen) is open. GameLogic() freezes camera/movement/physics/the hunt
-	// clock behind this, same as it always did for hud.isOpen() alone.
-	bool overlayOpen() const { return hud.isOpen() || pauseMenu.isOpen() || startScreen.isOpen(); }
+	// True whenever any modal overlay (cheat HUD, pause menu, the launch
+	// screen, or the settings screen) is open. GameLogic() freezes
+	// camera/movement/physics/the hunt clock behind this, same as it always
+	// did for hud.isOpen() alone.
+	bool overlayOpen() const {
+		return hud.isOpen() || pauseMenu.isOpen() || startScreen.isOpen() || settingsMenu.isOpen();
+	}
 
 	// Where the exit is and whether it's locked, both from gameplay.json's
 	// "exit" block. The box is world-space and axis-aligned: the player wins by
@@ -2870,6 +2958,7 @@ class Castlescape : public BaseProject {
 		crosshair.resizeScreen(w, h);
 		pauseQuad.resizeScreen(w, h);
 		startScreenQuad.resizeScreen(w, h);
+		settingsQuad.resizeScreen(w, h);
 		setCrosshairQuad();
 		// The collider visualizer owns a swapchain-attached render pass too
 		// (Colliders.hpp), and it was never being told about resizes -- its own
@@ -3068,6 +3157,47 @@ class Castlescape : public BaseProject {
 	// Here you load and setup all your Vulkan Models and Textures.
 	// Here you also create your Descriptor set layouts and load the shaders for the pipelines
 	void localInit() {
+		// windowWidth/windowHeight are still whatever setWindowParameters()
+		// requested (800x600) at this point -- that's a size in WINDOW
+		// POINTS, handed to glfwCreateWindow(), not necessarily the real
+		// FRAMEBUFFER size in pixels. On an integer-scale display the two
+		// are the same number; on a HiDPI/Retina one (2x, 3x, ...) the
+		// framebuffer is that many times larger, and nothing has corrected
+		// windowWidth/windowHeight to match it yet -- the actual swapchain
+		// is sized correctly regardless (chooseSwapExtent() in Starter.hpp
+		// queries glfwGetFramebufferSize() itself, independently), which is
+		// why the 3D scene always renders at the right resolution, but every
+		// UI widget below (txt/uiQuad/crosshair/pauseQuad/startScreenQuad/
+		// settingsQuad, and StartScreen's own first setOpen()) is about to
+		// be initialized against whatever windowWidth/windowHeight says NOW
+		// -- the stale, too-small request -- and stays that way until an
+		// actual window resize corrects it (onWindowResize() gets the real
+		// framebuffer size from GLFW's own callback and forces everything to
+		// rebuild against it). That mismatch is what read as "the launch
+		// screen isn't really fullscreen until I resize the window": its own
+		// render pass was built to only cover the smaller, wrong area.
+		//
+		// Corrected here, once, before anything below reads these two
+		// fields, rather than chasing the same fix per-widget.
+		{
+			int realW = 0, realH = 0;
+			glfwGetFramebufferSize(window, &realW, &realH);
+			if(realW > 0 && realH > 0) {
+				windowWidth = (uint32_t)realW;
+				windowHeight = (uint32_t)realH;
+				// Same story as windowWidth/windowHeight above: Ar defaults
+				// to a hardcoded 4/3 guess in setWindowParameters() (matching
+				// the REQUESTED 800x600, not necessarily the real
+				// framebuffer), and is otherwise only ever recomputed by
+				// onWindowResize(). A uniform HiDPI scale factor alone
+				// wouldn't change the ratio, but there's no guarantee the
+				// real framebuffer is 4:3 shaped at all -- correcting it here
+				// on the same real dimensions keeps the very first frame's
+				// 3D projection matrix right regardless.
+				Ar = (float)realW / (float)realH;
+			}
+		}
+
 		// Descriptor Layouts [what will be passed to the shaders]
 		DSLlocal.init(this, {
 					// this array contains the binding:
@@ -4346,6 +4476,10 @@ class Castlescape : public BaseProject {
 		// launch screen; distinct submitOrder/buffer name for the same
 		// reason as crosshair/pauseQuad above
 		startScreenQuad.init(this, windowWidth, windowHeight, 9004, "start_screen_quad");
+		// initializes the flat-quad opaque backdrop/row layer for the
+		// settings screen; distinct submitOrder/buffer name for the same
+		// reason as crosshair/pauseQuad/startScreenQuad above
+		settingsQuad.init(this, windowWidth, windowHeight, 9005, "settings_quad");
 
 		// submits the main command buffer
 		submitCommandBuffer("main", 0, populateCommandBufferAccess, this);
@@ -4373,6 +4507,20 @@ class Castlescape : public BaseProject {
 		// in one place.
 		startScreen.init(&txt, &startScreenQuad, windowTitle);
 		startScreen.setOpen(true, windowWidth, windowHeight);
+		settingsMenu.init(&txt, &settingsQuad);
+		// Same two sliders as the cheat HUD's below, same onChange/format --
+		// see applyRenderScaleChange()/formatRenderScale()/applyMsaaChange()/
+		// formatMsaaLevel()'s own comments for what they do and why. This is
+		// the settings screen a normal player actually reaches (via
+		// StartScreen's or PauseMenu's "Settings" button); the cheat HUD's
+		// copies exist for debugging with the rest of that panel, not as a
+		// second player-facing settings surface.
+		settingsMenu.addSlider("Render Scale", &renderScale, 0.4f, 1.0f, 0.05f,
+							   [this]() { applyRenderScaleChange(); },
+							   [this](float v) { return formatRenderScale(v); });
+		settingsMenu.addSlider("MSAA", &msaaLevel, 0.0f, maxMsaaLevel, 1.0f,
+							   [this]() { applyMsaaChange(); },
+							   [this](float v) { return formatMsaaLevel(v); });
 		hud.addToggle("Collision", &cheats.collisionEnabled);
 		hud.addToggle("Show Coordinates", &cheats.showCoordinates);
 
@@ -4412,78 +4560,19 @@ class Castlescape : public BaseProject {
 		hud.addToggle("Show Colliders", &cheats.showColliders);
 		hud.addToggle("Light Heatmap", &cheats.showLightHeatmap);
 
-		// Render Scale: see renderScale's own declaration/comment above for
-		// what this actually resizes. onChange replays the same rebuild path
-		// a real window resize already goes through (see
-		// framebufferResizeCallback/onWindowResize in Starter.hpp) at the
-		// CURRENT window size, so only the internal render resolution
-		// changes, nothing about the window itself. Floor of 0.4 (40%, i.e.
-		// 16% of the pixel count): below that the upscale reliably reads as
-		// blurry rather than atmospheric even with fog/vignette/bloom all
-		// helping hide it, so there's little reason to let the slider go
-		// lower than the point it stops being a useful comparison. 0.05 per
-		// press (Left/Right on the selected row) gives 12 steps across the
-		// full range -- fine enough to feel the difference between two
-		// adjacent presses without needing dozens of them to cross the range.
-		hud.addSlider("Render Scale", &renderScale, 0.4f, 1.0f, 0.05f, [this]() {
-			// Skipped while a rebuild (this one, a previous slider press, or
-			// an actual window resize) is still pending -- see
-			// framebufferResized's own comment in Starter.hpp and
-			// RebuildPipeline()'s. recreateSwapChain() only runs once, at
-			// the very end of the CURRENT frame's drawFrame(); stacking a
-			// second target size on top before that has happened is what
-			// let a render pass get begun against a size newer than the
-			// framebuffer it was actually bound to, which is what the
-			// "renderArea... greater than framebuffer" validation errors
-			// (and the crash that followed them) were. This can't fully
-			// rule out the same race from resizing the WINDOW itself very
-			// rapidly, since that path lives in the immutable Starter.hpp
-			// and isn't something this guard touches -- but it stops our
-			// own sliders from being an extra source of the same pileup.
-			if(!framebufferResized) {
-				onWindowResize((int)windowWidth, (int)windowHeight);
-				RebuildPipeline();
-			}
-		}, [this](float /*scale*/) {
-			// Shows the actual pixel resolution alongside the percentage
-			// (e.g. "< 80% (1536x864) >") rather than switching to fixed
-			// presets like 720p/1080p: those only mean one specific shape
-			// (16:9) at one specific window size, while this scale has to
-			// stay meaningful at whatever size/shape the window is
-			// resized to. Reads renderWidth()/renderHeight() -- which
-			// read the LIVE renderScale, not the parameter -- rather than
-			// recomputing from scratch, so this can never drift from
-			// what's actually being rendered.
-			char buf[32];
-			snprintf(buf, sizeof(buf), "< %d%% (%dx%d) >",
-					 (int)std::lround(renderScale * 100.0f),
-					 renderWidth((int)windowWidth), renderHeight((int)windowHeight));
-			return std::string(buf);
-		});
-
-		// MSAA: see msaaLevel's own declaration for what the units are and
-		// why (a log2 level, not the raw sample count -- a plain additive
-		// slider step can't land on 1/2/4/8/16 otherwise). onChange converts
-		// the level back to a real VkSampleCountFlagBits, then rebuilds the
-		// render passes' attachment properties around it (initRenderPasses(),
-		// since a sample-count change -- unlike renderScale's plain
-		// width/height change -- has to regenerate hdrAtt itself) before
-		// tearing down and recreating the actual GPU images/pipelines
-		// (RebuildPipeline()). maxMsaaLevel: this device's real cap, set in
-		// localInit() from getMaxUsableSampleCount(). Step 1.0 moves exactly
-		// one power of two per press.
-		hud.addSlider("MSAA", &msaaLevel, 0.0f, maxMsaaLevel, 1.0f, [this]() {
-			// Same guard as Render Scale's onChange above, same reason.
-			if(!framebufferResized) {
-				msaaSamples = static_cast<VkSampleCountFlagBits>(1 << (int)std::lround(msaaLevel));
-				initRenderPasses();
-				RebuildPipeline();
-			}
-		}, [](float level) {
-			char buf[16];
-			snprintf(buf, sizeof(buf), "< %dx >", 1 << (int)std::lround(level));
-			return std::string(buf);
-		});
+		// Render Scale and MSAA: see applyRenderScaleChange()/applyMsaaChange()
+		// and their own comments for what these actually do and why. Also
+		// registered on SettingsMenu (see its own init, further down) with
+		// the exact same three arguments each -- factored into named methods
+		// rather than two copies of the same lambdas, so the cheat HUD's
+		// versions of these sliders and the real settings screen's can never
+		// drift apart.
+		hud.addSlider("Render Scale", &renderScale, 0.4f, 1.0f, 0.05f,
+					  [this]() { applyRenderScaleChange(); },
+					  [this](float v) { return formatRenderScale(v); });
+		hud.addSlider("MSAA", &msaaLevel, 0.0f, maxMsaaLevel, 1.0f,
+					  [this]() { applyMsaaChange(); },
+					  [this](float v) { return formatMsaaLevel(v); });
 	}
 
 	// Six 90-degree perspective faces covering a point light's whole sphere,
@@ -5458,6 +5547,7 @@ class Castlescape : public BaseProject {
 		crosshair.pipelinesAndDescriptorSetsInit();
 		pauseQuad.pipelinesAndDescriptorSetsInit();
 		startScreenQuad.pipelinesAndDescriptorSetsInit();
+		settingsQuad.pipelinesAndDescriptorSetsInit();
 		// Same RP as the scene: the flame draws inside it, right after the
 		// scene geometry, so it shares the depth buffer instead of needing its
 		// own render pass the way UiQuad's 2D overlay does -- and so its
@@ -5512,6 +5602,7 @@ class Castlescape : public BaseProject {
 		crosshair.pipelinesAndDescriptorSetsCleanup();
 		pauseQuad.pipelinesAndDescriptorSetsCleanup();
 		startScreenQuad.pipelinesAndDescriptorSetsCleanup();
+		settingsQuad.pipelinesAndDescriptorSetsCleanup();
 		flame.pipelinesAndDescriptorSetsCleanup();
 		exitGlow.pipelinesAndDescriptorSetsCleanup();
 		debugLines.pipelinesAndDescriptorSetsCleanup();
@@ -5576,6 +5667,7 @@ class Castlescape : public BaseProject {
 		crosshair.localCleanup();
 		pauseQuad.localCleanup();
 		startScreenQuad.localCleanup();
+		settingsQuad.localCleanup();
 		flame.localCleanup();
 		exitGlow.localCleanup();
 		debugLines.localCleanup();
@@ -5712,11 +5804,16 @@ class Castlescape : public BaseProject {
 		// ESC now opens/closes the pause menu instead of closing the window
 		// outright -- Quit is reached through the menu instead (see
 		// PauseMenu.hpp). Edge-triggered so holding ESC down doesn't reopen
-		// the menu the instant Resume closes it. Ignored while the cheat HUD
-		// or the launch screen is open: only one modal overlay at a time,
-		// and L/Play already own closing those.
+		// the menu the instant Resume closes it. Ignored while the cheat HUD,
+		// the launch screen, or the settings screen is open: only one modal
+		// overlay at a time, and L/Play/Back already own closing those (the
+		// settings-screen case matters here specifically: reaching it from
+		// PauseMenu closes that menu, so pauseMenu.isOpen() alone would be
+		// false while settingsMenu is what's actually showing, and ESC would
+		// otherwise reopen the pause menu UNDERNEATH it).
 		bool escPressed = glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS;
-		if(escPressed && !escKeyWasPressed && !hud.isOpen() && !startScreen.isOpen()) {
+		if(escPressed && !escKeyWasPressed && !hud.isOpen() && !startScreen.isOpen()
+		   && !settingsMenu.isOpen()) {
 			pauseMenu.setOpen(!pauseMenu.isOpen(), windowWidth, windowHeight);
 		}
 		escKeyWasPressed = escPressed;
@@ -5724,18 +5821,18 @@ class Castlescape : public BaseProject {
 		// moves the view
 		float deltaT = GameLogic();
 
-		// The pause menu and the launch screen both mean "stop time", full
-		// stop: not just player movement/physics/the hunt clock (which
-		// GameLogic() already gates on overlayOpen(), same as the cheat HUD
-		// always did), but every other deltaT-driven animation below too
-		// (torch flicker, flame UV scroll, shadow reassignment, ...) -- they
-		// all thread through this one deltaT, so zeroing it here freezes all
-		// of them at once instead of gating each site individually. The
-		// cheat HUD deliberately does NOT also zero this: watching torches
-		// keep flickering while flipping a debug flag is fine, only an
-		// actual freeze-frame (paused, or not even started yet) needs to
-		// look like one.
-		if(pauseMenu.isOpen() || startScreen.isOpen()) {
+		// The pause menu, the launch screen, and the settings screen all
+		// mean "stop time", full stop: not just player movement/physics/the
+		// hunt clock (which GameLogic() already gates on overlayOpen(), same
+		// as the cheat HUD always did), but every other deltaT-driven
+		// animation below too (torch flicker, flame UV scroll, shadow
+		// reassignment, ...) -- they all thread through this one deltaT, so
+		// zeroing it here freezes all of them at once instead of gating each
+		// site individually. The cheat HUD deliberately does NOT also zero
+		// this: watching torches keep flickering while flipping a debug flag
+		// is fine, only an actual freeze-frame (paused, not even started
+		// yet, or in the settings screen) needs to look like one.
+		if(pauseMenu.isOpen() || startScreen.isOpen() || settingsMenu.isOpen()) {
 			deltaT = 0.0f;
 		}
 
@@ -6744,7 +6841,7 @@ class Castlescape : public BaseProject {
 			countedFrames = 0;
 		}
 
-		if(!startScreen.isOpen()) {
+		if(!startScreen.isOpen() && !settingsMenu.isOpen()) {
 			// Coordinates debug overlay (Show Coordinates cheat). Sits just above
 			// the FPS line, bottom-right. Throttled to 10Hz rather than every
 			// frame: print() unconditionally marks the text command buffer
@@ -6922,6 +7019,7 @@ class Castlescape : public BaseProject {
 		crosshair.updateCommandBuffer();
 		pauseQuad.updateCommandBuffer();
 		startScreenQuad.updateCommandBuffer();
+		settingsQuad.updateCommandBuffer();
 	}
 	
 	// --- Ghost navigation ---------------------------------------------------
@@ -7265,17 +7363,25 @@ class Castlescape : public BaseProject {
 		// guarantees they get that one authoritative read of a click, not
 		// getSixAxis's drag-look check.
 		//
-		// The HUD only gets to react while neither the pause menu nor the
-		// launch screen is open -- one modal overlay at a time, and ESC
-		// (updateUniformBuffer()) is the pause menu's own equivalent guard
-		// against L while paused.
-		if(!pauseMenu.isOpen() && !startScreen.isOpen()) {
+		// The HUD only gets to react while neither the pause menu, the
+		// launch screen, nor the settings screen is open -- one modal
+		// overlay at a time, and ESC (updateUniformBuffer()) is the pause
+		// menu's own equivalent guard against L while paused.
+		if(!pauseMenu.isOpen() && !startScreen.isOpen() && !settingsMenu.isOpen()) {
 			hud.update(window, windowWidth, windowHeight);
 		}
 
 		startScreen.update(window, windowWidth, windowHeight);
 		if(startScreen.playClicked()) {
 			startScreen.setOpen(false, windowWidth, windowHeight);
+		}
+		if(startScreen.settingsClicked()) {
+			// Reached Settings from the launch screen (before/after a run):
+			// close this, open settingsMenu, remember to come back HERE
+			// (not to PauseMenu) when its Back is pressed.
+			startScreen.setOpen(false, windowWidth, windowHeight);
+			settingsFromPause = false;
+			settingsMenu.setOpen(true, windowWidth, windowHeight);
 		}
 		if(startScreen.quitClicked()) {
 			glfwSetWindowShouldClose(window, GL_TRUE);
@@ -7285,6 +7391,13 @@ class Castlescape : public BaseProject {
 		if(pauseMenu.resumeClicked()) {
 			pauseMenu.setOpen(false, windowWidth, windowHeight);
 		}
+		if(pauseMenu.settingsClicked()) {
+			// Same as StartScreen's above, but remembering to come back to
+			// PauseMenu (mid-run) instead.
+			pauseMenu.setOpen(false, windowWidth, windowHeight);
+			settingsFromPause = true;
+			settingsMenu.setOpen(true, windowWidth, windowHeight);
+		}
 		if(pauseMenu.quitClicked()) {
 			// Abandon the current run and drop back to the launch screen --
 			// restartRun() puts every piece of world state (camera, doors,
@@ -7293,6 +7406,19 @@ class Castlescape : public BaseProject {
 			pauseMenu.setOpen(false, windowWidth, windowHeight);
 			restartRun();
 			startScreen.setOpen(true, windowWidth, windowHeight);
+		}
+
+		settingsMenu.update(window, windowWidth, windowHeight);
+		if(settingsMenu.backClicked()) {
+			// Reopen whichever of PauseMenu/StartScreen sent the player here
+			// -- settingsFromPause, set at the two settingsClicked() sites
+			// above, is the only thing that remembers which.
+			settingsMenu.setOpen(false, windowWidth, windowHeight);
+			if(settingsFromPause) {
+				pauseMenu.setOpen(true, windowWidth, windowHeight);
+			} else {
+				startScreen.setOpen(true, windowWidth, windowHeight);
+			}
 		}
 
 		getSixAxis(deltaT, m, r, fire);
