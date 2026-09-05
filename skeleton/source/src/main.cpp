@@ -677,6 +677,18 @@ class Castlescape : public BaseProject {
 		return std::max(1, (int)std::lround(windowH * renderScale));
 	}
 
+	// The MSAA sample count as a log2 "level" (0 -> 1x, 1 -> 2x, 2 -> 4x, ...)
+	// rather than the raw VkSampleCountFlagBits value, so the "MSAA" cheat
+	// slider's fixed +/-1-per-press step (see CheatHud::addSlider) lands
+	// exactly on the powers of two Vulkan sample counts have to be, instead
+	// of needing a doubling step a plain additive slider can't express.
+	// Starts at 2 (4x), matching msaaSamples' own initial value below.
+	float msaaLevel = 2.0f;
+	// The slider's upper bound, in the same units: set from
+	// getMaxUsableSampleCount() once at startup (see localInit()) so a GPU
+	// that can't do 16x is never offered it.
+	float maxMsaaLevel = 2.0f;
+
 	// Bright-pass threshold and knee, in luminance. Set high enough to clear
 	// the SCENE's own peak radiance, not just 1.0: a sunlit wall with a pale
 	// albedo lands a little either side of 1.0 once the sun and the ambient
@@ -2986,6 +2998,56 @@ class Castlescape : public BaseProject {
 		};
 	}
 
+	// (Re)builds the attachment property lists via buildPostAttachments()
+	// above, then (re)initializes the five render passes from them -- the
+	// scene at renderWidth()/renderHeight(), the bloom chain at
+	// bloomWidth()/bloomHeight() (which read the scene's own just-set
+	// width/height), the composite at the window's real size.
+	//
+	// Called once from localInit(), and again whenever something that
+	// changes what buildPostAttachments() produces needs to take effect at
+	// runtime -- today, msaaSamples (see the "MSAA" slider below): unlike
+	// renderScale, which only changes the WIDTH/HEIGHT each RenderPass is
+	// initialized with (onWindowResize() pokes RP.width/height directly,
+	// exactly like a real resize would), a new sample count changes the
+	// hdrAtt COLOR/DEPTH ATTACHMENT PROPERTIES themselves, which only
+	// buildPostAttachments() knows how to regenerate and only .init() (not
+	// a direct member poke) re-copies into each RenderPass. Either way, the
+	// caller still has to follow this with RebuildPipeline() to actually
+	// tear down and recreate the underlying images/pipelines around the
+	// new properties -- this only updates the C++-side description of what
+	// they should look like.
+	void initRenderPasses() {
+		// initializes the render passes. The scene one no longer draws to the
+		// screen: it renders into an offscreen floating-point target which the
+		// bloom chain and the composite then read back. See
+		// buildPostAttachments() for what each attachment is and why.
+		buildPostAttachments();
+
+		// ATDEP_SIMPLE rather than the default ATDEP_SURFACE_ONLY: the scene's
+		// output is now sampled by a later pass, so it needs the dependency
+		// pair that orders a colour write against a subsequent shader read
+		// (and, in the other direction, against the NEXT frame overwriting it).
+		//
+		// renderWidth()/renderHeight() rather than -1,-1 (which would mean
+		// "match the swapchain" -- see RenderPass::init): this is renderScale
+		// above, the actual point of it being able to differ from the
+		// window's own resolution at all.
+		RP.init(this, renderWidth(swapChainExtent.width), renderHeight(swapChainExtent.height), -1, &hdrAtt,
+				RenderPass::getStandardDependencies(ATDEP_SIMPLE), true);
+
+		RPbright.init(this, bloomWidth(), bloomHeight(), -1, &brightAtt,
+					  RenderPass::getStandardDependencies(ATDEP_SIMPLE), true);
+		RPblurH.init(this, bloomWidth(), bloomHeight(), -1, &blurHAtt,
+					 RenderPass::getStandardDependencies(ATDEP_SIMPLE), true);
+		RPblurV.init(this, bloomWidth(), bloomHeight(), -1, &blurVAtt,
+					 RenderPass::getStandardDependencies(ATDEP_SIMPLE), true);
+		// The composite writes the swapchain and is read by nobody, so the
+		// plain surface dependency the main pass always used is right here.
+		RPcomposite.init(this, -1, -1, -1, &compositeAtt,
+						 RenderPass::getStandardDependencies(ATDEP_SURFACE_ONLY), false);
+	}
+
 	// Width/height of the bloom chain's targets, derived from the SCENE pass's
 	// own current resolution (RP.width/height, already scaled by
 	// renderScale) rather than the swapchain's -- bloom reads the scene's
@@ -4338,6 +4400,27 @@ class Castlescape : public BaseProject {
 		hud.addSlider("Render Scale", &renderScale, 0.4f, 1.0f, 0.05f, [this]() {
 			onWindowResize((int)windowWidth, (int)windowHeight);
 			RebuildPipeline();
+		});
+
+		// MSAA: see msaaLevel's own declaration for what the units are and
+		// why (a log2 level, not the raw sample count -- a plain additive
+		// slider step can't land on 1/2/4/8/16 otherwise). onChange converts
+		// the level back to a real VkSampleCountFlagBits, then rebuilds the
+		// render passes' attachment properties around it (initRenderPasses(),
+		// since a sample-count change -- unlike renderScale's plain
+		// width/height change -- has to regenerate hdrAtt itself) before
+		// tearing down and recreating the actual GPU images/pipelines
+		// (RebuildPipeline()). maxMsaaLevel: this device's real cap, set in
+		// localInit() from getMaxUsableSampleCount(). Step 1.0 moves exactly
+		// one power of two per press.
+		hud.addSlider("MSAA", &msaaLevel, 0.0f, maxMsaaLevel, 1.0f, [this]() {
+			msaaSamples = static_cast<VkSampleCountFlagBits>(1 << (int)std::lround(msaaLevel));
+			initRenderPasses();
+			RebuildPipeline();
+		}, [](float level) {
+			char buf[16];
+			snprintf(buf, sizeof(buf), "< %dx >", 1 << (int)std::lround(level));
+			return std::string(buf);
 		});
 	}
 

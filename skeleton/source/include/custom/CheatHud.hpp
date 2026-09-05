@@ -40,6 +40,12 @@ struct CheatRow {
 	// not spam. Unused for a toggle row: the caller already reads
 	// *toggleValue live every frame.
 	std::function<void()> onChange;
+	// How *sliderValue is turned into the text shown on the right of the
+	// row. Defaults (nullptr) to "<  NN% >" of value*100, which only reads
+	// sensibly for a slider whose range is meant as a 0..1 fraction (like
+	// renderScale) -- anything else (main.cpp's MSAA level, an exponent
+	// rather than a fraction) passes its own, e.g. "<  4x >".
+	std::function<std::string(float)> format;
 };
 
 struct CheatHud {
@@ -48,9 +54,12 @@ struct CheatHud {
 	// step: how much one Left/Right press changes *value by. Clamped to
 	// [min, max] after every change. onChange, if set, fires after the
 	// clamp, once per press that actually moved the value (not at the
-	// clamped ends when already there) -- see CheatRow::onChange.
+	// clamped ends when already there) -- see CheatRow::onChange. format,
+	// if set, overrides the default "<  NN% >" display -- see
+	// CheatRow::format.
 	void addSlider(const std::string &label, float *value, float min, float max,
-				   float step, std::function<void()> onChange = nullptr);
+				   float step, std::function<void()> onChange = nullptr,
+				   std::function<std::string(float)> format = nullptr);
 	bool isOpen() const { return open; }
 
 	// Reads keyboard/mouse input, updates the open/selected/toggled state,
@@ -182,7 +191,8 @@ void CheatHud::addToggle(const std::string &label, bool *value) {
 }
 
 void CheatHud::addSlider(const std::string &label, float *value, float min, float max,
-						 float step, std::function<void()> onChange) {
+						 float step, std::function<void()> onChange,
+						 std::function<std::string(float)> format) {
 	CheatRow row;
 	row.label = label;
 	row.sliderValue = value;
@@ -190,6 +200,7 @@ void CheatHud::addSlider(const std::string &label, float *value, float min, floa
 	row.sliderMax = max;
 	row.sliderStep = step;
 	row.onChange = std::move(onChange);
+	row.format = std::move(format);
 	options.push_back(row);
 }
 
@@ -426,16 +437,18 @@ void CheatHud::renderRows(int screenW, int screenH) {
 				   {0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, rowScale, rowScale);
 
 		// State/value, right-aligned to the panel's (padded) right edge --
-		// [ON]/[OFF] for a toggle row, "< NN% >" for a slider row. The
-		// percentage assumes the slider's own range is meant to read as a
-		// fraction (0..1, as RENDER_SCALE's is); a slider over some other
-		// kind of range would want its own display, not this one.
+		// [ON]/[OFF] for a toggle row, the slider's own formatted value (or
+		// the default "< NN% >" percentage) for a slider row -- see
+		// CheatRow::format.
 		std::string stateText;
 		glm::vec4 stateColor;
 		if(row.toggleValue != nullptr) {
 			bool enabled = *row.toggleValue;
 			stateText = enabled ? "[ON]" : "[OFF]";
 			stateColor = enabled ? glm::vec4(0.3f, 1.0f, 0.3f, 1.0f) : glm::vec4(1.0f, 0.3f, 0.3f, 1.0f);
+		} else if(row.format) {
+			stateText = row.format(*row.sliderValue);
+			stateColor = glm::vec4(0.4f, 0.8f, 1.0f, 1.0f);
 		} else {
 			char buf[16];
 			snprintf(buf, sizeof(buf), "< %d%% >", (int)std::lround(*row.sliderValue * 100.0f));
