@@ -382,14 +382,17 @@ void CheatHud::computeLayout(int screenH) {
 	// Width is measured at the fitted scales, so a shrunk panel is narrower
 	// too rather than a short list of tiny text in a full-width box.
 	float maxContentWidth = measureTextWidth("CHEATS (L to close)", titleFontId, titleScale);
-	// "< 100% >" stands in for a slider row's value text: fixed at the
-	// widest a percentage display can ever be (0..100, see renderRows()),
-	// independent of any row's actual current value -- so the panel's width
-	// doesn't shift as a slider is adjusted, matching how it already doesn't
-	// shift as a toggle flips between its two fixed-width strings.
+	// "< 100% (9999x9999) >" stands in for a slider row's value text: a
+	// generously wide reference (comfortably past any real window
+	// resolution) rather than the exact current text, independent of any
+	// row's actual current value -- so the panel's width doesn't shift as a
+	// slider is adjusted (matching how it already doesn't shift as a toggle
+	// flips between its two fixed-width strings), and doesn't need
+	// recomputing every time a row's custom format() text changes length,
+	// only layoutComputed's usual resize-triggered invalidation.
 	float stateWidth = std::max({measureTextWidth("[ON]", stateFontId, rowScale),
 								  measureTextWidth("[OFF]", stateFontId, rowScale),
-								  measureTextWidth("< 100% >", stateFontId, rowScale)});
+								  measureTextWidth("< 100% (9999x9999) >", stateFontId, rowScale)});
 	for(const auto &opt : options) {
 		float rowWidth = measureTextWidth(opt.label, rowFontId, rowScale) + LABEL_STATE_GAP + stateWidth;
 		maxContentWidth = std::max(maxContentWidth, rowWidth);

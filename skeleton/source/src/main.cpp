@@ -4398,8 +4398,39 @@ class Castlescape : public BaseProject {
 		// full range -- fine enough to feel the difference between two
 		// adjacent presses without needing dozens of them to cross the range.
 		hud.addSlider("Render Scale", &renderScale, 0.4f, 1.0f, 0.05f, [this]() {
-			onWindowResize((int)windowWidth, (int)windowHeight);
-			RebuildPipeline();
+			// Skipped while a rebuild (this one, a previous slider press, or
+			// an actual window resize) is still pending -- see
+			// framebufferResized's own comment in Starter.hpp and
+			// RebuildPipeline()'s. recreateSwapChain() only runs once, at
+			// the very end of the CURRENT frame's drawFrame(); stacking a
+			// second target size on top before that has happened is what
+			// let a render pass get begun against a size newer than the
+			// framebuffer it was actually bound to, which is what the
+			// "renderArea... greater than framebuffer" validation errors
+			// (and the crash that followed them) were. This can't fully
+			// rule out the same race from resizing the WINDOW itself very
+			// rapidly, since that path lives in the immutable Starter.hpp
+			// and isn't something this guard touches -- but it stops our
+			// own sliders from being an extra source of the same pileup.
+			if(!framebufferResized) {
+				onWindowResize((int)windowWidth, (int)windowHeight);
+				RebuildPipeline();
+			}
+		}, [this](float /*scale*/) {
+			// Shows the actual pixel resolution alongside the percentage
+			// (e.g. "< 80% (1536x864) >") rather than switching to fixed
+			// presets like 720p/1080p: those only mean one specific shape
+			// (16:9) at one specific window size, while this scale has to
+			// stay meaningful at whatever size/shape the window is
+			// resized to. Reads renderWidth()/renderHeight() -- which
+			// read the LIVE renderScale, not the parameter -- rather than
+			// recomputing from scratch, so this can never drift from
+			// what's actually being rendered.
+			char buf[32];
+			snprintf(buf, sizeof(buf), "< %d%% (%dx%d) >",
+					 (int)std::lround(renderScale * 100.0f),
+					 renderWidth((int)windowWidth), renderHeight((int)windowHeight));
+			return std::string(buf);
 		});
 
 		// MSAA: see msaaLevel's own declaration for what the units are and
@@ -4414,9 +4445,12 @@ class Castlescape : public BaseProject {
 		// localInit() from getMaxUsableSampleCount(). Step 1.0 moves exactly
 		// one power of two per press.
 		hud.addSlider("MSAA", &msaaLevel, 0.0f, maxMsaaLevel, 1.0f, [this]() {
-			msaaSamples = static_cast<VkSampleCountFlagBits>(1 << (int)std::lround(msaaLevel));
-			initRenderPasses();
-			RebuildPipeline();
+			// Same guard as Render Scale's onChange above, same reason.
+			if(!framebufferResized) {
+				msaaSamples = static_cast<VkSampleCountFlagBits>(1 << (int)std::lround(msaaLevel));
+				initRenderPasses();
+				RebuildPipeline();
+			}
 		}, [](float level) {
 			char buf[16];
 			snprintf(buf, sizeof(buf), "< %dx >", 1 << (int)std::lround(level));
