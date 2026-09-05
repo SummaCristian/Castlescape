@@ -5,6 +5,8 @@
 #include <limits>
 #include <array>
 #include <algorithm>
+#include <cstdlib>
+#include <cstdio>
 
 #include <json.hpp>
 
@@ -827,7 +829,7 @@ class Castlescape : public BaseProject {
 	// Spawns inside the dungeon hall (dh), clear of the table and both torches,
 	// now that the castle courtyard is gone -- there's no outdoor approach
 	// to walk in from anymore.
-	glm::vec3 camPos = glm::vec3(-33.5f, 1.8f, 29.0f);
+	glm::vec3 camPos = glm::vec3(-27.4f, 1.8f, 25.2f);
 	// Yaw: rotation around world up axis, in degrees.
 	// yaw=0 faces +X; increasing yaw turns right, decreasing turns left.
 	// Faces +X so spawning looks straight down the hall toward the far door.
@@ -2775,7 +2777,7 @@ class Castlescape : public BaseProject {
 
 	// --- The way out, as a door ------------------------------------------
 	//
-	// Index into `doors` of the exit leaf (dvDoorPanel), or -1 if the scene
+	// Index into `doors` of the exit leaf (hbDoorE), or -1 if the scene
 	// didn't have it. Everything below rides on how far THAT door has swung,
 	// rather than on the exit box or on the run state: the light outside is a
 	// fact about the door being open, so it has to arrive while the leaf is
@@ -2814,7 +2816,7 @@ class Castlescape : public BaseProject {
 	// something that merely covers the opening head-on. Everything past the
 	// arch is masked by the wall's own depth, and the part below y 0 is buried
 	// under the ground plane outside.
-	static constexpr glm::vec3 EXIT_GLOW_CENTER = glm::vec3(22.0f, 2.8f, 29.99f);
+	static constexpr glm::vec3 EXIT_GLOW_CENTER = glm::vec3(30.8f, 2.8f, 10.79f);
 	static constexpr float EXIT_GLOW_HALF_WIDTH = 4.4f;		// along world Z
 	static constexpr float EXIT_GLOW_HALF_HEIGHT = 4.6f;	// along world Y
 	// Faces back into the castle, i.e. west, so the player looking out through
@@ -2829,7 +2831,7 @@ class Castlescape : public BaseProject {
 	// 6cm above the ground plane: far enough not to z-fight it, low enough
 	// that the door -- whose own bottom edge is at y 0.2 -- always sweeps
 	// above it rather than through it.
-	static constexpr glm::vec3 EXIT_GLOW_FLOOR_CENTER = glm::vec3(21.1f, 0.06f, 29.99f);
+	static constexpr glm::vec3 EXIT_GLOW_FLOOR_CENTER = glm::vec3(29.9f, 0.06f, 10.79f);
 	static constexpr float EXIT_GLOW_FLOOR_HALF_X = 1.6f;
 	static constexpr float EXIT_GLOW_FLOOR_HALF_Z = 3.6f;
 	static constexpr glm::vec3 EXIT_GLOW_FLOOR_NORMAL = glm::vec3(0.0f, 1.0f, 0.0f);
@@ -2856,7 +2858,7 @@ class Castlescape : public BaseProject {
 	// near end runs back under the wall so its border fade never shows, and
 	// the far end passes behind the upright quad rather than meeting it at a
 	// seam.
-	static constexpr glm::vec3 EXIT_GLOW_CEILING_CENTER = glm::vec3(21.1f, 4.90f, 29.99f);
+	static constexpr glm::vec3 EXIT_GLOW_CEILING_CENTER = glm::vec3(29.9f, 4.90f, 10.79f);
 	static constexpr float EXIT_GLOW_CEILING_HALF_X = 1.6f;
 	static constexpr float EXIT_GLOW_CEILING_HALF_Z = 3.6f;
 	static constexpr glm::vec3 EXIT_GLOW_CEILING_NORMAL = glm::vec3(0.0f, -1.0f, 0.0f);
@@ -2886,7 +2888,7 @@ class Castlescape : public BaseProject {
 	// point because the light has to come through the opening -- a point light
 	// out there would wrap round and light the outside face of the east wall
 	// as brightly as the floor inside.
-	static constexpr glm::vec3 EXIT_SPILL_POS = glm::vec3(20.7f, 2.6f, 29.99f);
+	static constexpr glm::vec3 EXIT_SPILL_POS = glm::vec3(29.5f, 2.6f, 10.79f);
 	// Well over 1: this is a doorway onto open daylight standing in a room lit
 	// by torches, and a spill light that merely matched them would leave the
 	// stone around the opening looking like it was lit by another torch. The
@@ -3785,117 +3787,58 @@ class Castlescape : public BaseProject {
 			d->promptBlocked = blocked;
 			d->secret = true;
 		};
-		// The door at the player's back. They spawn at x = -33.5 facing +X and
-		// this leaf sits at x = -36.883 in the hall's west wall, so it is the
-		// first thing they see if they turn around and the only lock they can
-		// meet before finding anything -- which is exactly why the chains go
-		// here: a padlock teaches what a padlock is far better where the
-		// player has no key yet and cannot try it.
+		// The level's doors, west to east along the intended route. All leaves
+		// share the same asset, hinge geometry and doorway centre, so the same
+		// promptOffset/openAngleDeg apply to every one -- the only things that
+		// differ per door are which wall it stands in (its yaw, carried from
+		// scene.json) and what key, if any, it wants. See tools/build_scene.py
+		// for the layout these ids come from.
 		//
-		// The models were built for the dl doors, which are approached from
-		// the other side; the `true` on its addLockProp lines below is what
-		// turns them round. See there.
-		addDoor("dhDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f, "iron", "iron key");
-		// Second and third doors, gating the two new rooms (dl, dv) added east
-		// of the antechamber. The full dc/dl boundary is two tiles wide, so it
-		// took two hole-wall + leaf pairs, not one wall tile left solid next
-		// to it -- a plain wall there would have blocked half the doorway
-		// with no way through. Same leaf asset, same hinge geometry as the
-		// first door, so the same promptOffset/openAngleDeg apply unchanged.
-		addDoor("dlDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f);
-		// The other padlocked door. The northern of the pair, i.e.
-		// the one the player walks straight into: they spawn at z = 29 facing
-		// +X and this leaf sits at z = 28.779, while its twin is seven units
-		// south. Which also means the lock costs them nothing if they'd rather
-		// not look for the key -- the other doorway is open, and a chained
-		// door with a way around it is the only kind that can't strand anyone.
-		//
-		// It takes "iron" like the hall door, and so do both pickups -- keys
-		// in this level are interchangeable, which is the only honest rule
-		// when both of them are the same mesh: nothing on screen could tell
-		// the player which padlock wanted which, so no padlock is allowed to
-		// care. What stays scarce is the COUNT: two keys, two chained doors
-		// and the exit, and only the exit gives its key back.
-		addDoor("dlDoorPanel2", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f, "iron", "iron key");
-		// The way out, in the dv room's east wall -- the only door in the
-		// castle that opens onto the outside, and the last thing between the
-		// player and the win box (see gameplay.json's "exit", which no longer
-		// checks a key of its own now that this door does).
-		//
-		// Where its wall came from, since scene.json can't carry a comment
-		// saying so (Scene.hpp parses it strictly): that corner used to be
-		// closed by dvCornSE, and a corner mesh has no hole to cut a doorway
-		// into. So it is replaced by the two pieces that reproduce its two
-		// arms exactly, one of which is a hole wall -- the same substitution
-		// the dc/dl boundary already makes with dlDoor2 + dcWallS2 at one
-		// shared translate. The two meshes do NOT share an origin convention
-		// (a corner's arms run to local -Z, the straight and hole walls from
-		// local 0 to +Z), so the numbers differ while the geometry doesn't:
-		//   dvDoor  at [20.0, 26.4] rot 0    -> x 18.758..20,  z 26.4..33.6
-		//   dvWallS at [20.0, 33.6] rot 270  -> x 12.8..20,    z 32.358..33.6
-		// which is arm 1 and arm 2 of the old dvCornSE, unmoved. The leaf then
-		// sits at the same offset from its hole wall that dlDoorPanel2 has
-		// from dlDoor2, carried across through the two walls' differing yaw,
-		// which puts the hinge on the jamb and the doorway centre at z 29.99
-		// -- the middle of the arch, whose hole spans local z 2.47..4.71, i.e.
-		// world z 28.87..31.11.
-		//
-		// Its hole wall carries no yaw, because it stands in an EAST wall
-		// rather than a west-facing one, so the leaf carries none either --
-		// and that flips which way its local +X points: outward, here, where
-		// every other leaf in the castle has it pointing into the room. Hence
-		// the flipped lock props below, which is what puts the chains on the
-		// inside face and, with them, the side E works from. The promptOffset
-		// is unchanged: the doorway centre sits at the same place in the
-		// leaf's own frame no matter which way the frame points.
-		//
-		// It opens OUTWARD, into the daylight -- which is not a special case
-		// any more but just what "away from the player" means for a leaf the
-		// player can only reach from inside. For this leaf's mirrored frame
-		// that is the NEGATIVE angle, which is what the sign below records.
-		// The swing reaches x 21.78 at its widest, which is what sets where
-		// the light behind it can stand: see EXIT_GLOW_CENTER, and the
-		// second, ground-level quad it costs.
-		addDoor("dvDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), -100.0f, "iron", "iron key");
-		// The secret passage: a bookcase standing in the dl room's north wall,
-		// where a plain wall tile (dlWallN2) used to be. It is a Door and
-		// nothing else -- same hinge convention, same swing, same padlock rule
-		// -- because it wants to behave exactly like one and the only thing
-		// that differs is what it is paid with and what it says about itself.
+		// iaDoorPanel -- the threshold between the intro corridor and the hub.
+		// Unlocked: it exists to be a door the player opens once (learning [E])
+		// before any lock is in play, the same teaching role the hall door's
+		// padlock used to have but without the dead end.
+		addDoor("iaDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f);
+		// hbDoorN -- hub north wall, gates branch 1 / room A (the book). Opened
+		// with the "iron" key that sits on the hub table.
+		addDoor("hbDoorNPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f, "iron", "iron key");
+		// hbDoorS -- hub south wall, gates branch 3 / room C (the final key).
+		// Opened with "bronze", found in the dark of room B once the player has
+		// the torch to see it by.
+		addDoor("hbDoorSPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f, "bronze", "bronze key");
+		// hbDoorE -- hub east wall, the way out. The only door that opens onto
+		// the outside and the last thing between the player and the win box
+		// (see gameplay.json's "exit", which does not check a key of its own --
+		// this door does). Its hole wall carries no yaw (it stands in an EAST
+		// wall), so the leaf's local +X points OUTWARD, unlike every other leaf
+		// here -- hence the flipped lock props below and the NEGATIVE open
+		// angle, which is what "swing away from the player, into the daylight"
+		// means for this mirrored frame. Opened with "gold", the reward for
+		// room C's jump puzzle.
+		addDoor("hbDoorEPanel", glm::vec3(0.0f, 2.52f, -1.231f), -100.0f, "gold", "gold key");
+		// hbShelfPanel -- the secret passage: a bookcase standing in the hub's
+		// west wall (tile (0,0)), gating branch 2 / room B (the torch). It is a
+		// Door and nothing else -- same hinge convention, same swing, same
+		// padlock rule -- differing only in what pays it and what it says.
 		//
 		// tools/make_bookshelf.py builds SM_Bookshelf_01 in SM_Door_01's own
-		// local frame for that reason: origin on the hinge, panel hanging to
-		// local -Z, and a silhouette that follows the hole wall's arch (the
-		// carcass is rectangular to y 4.12, then an arched cap over it). A
-		// rectangular case would have poked through the arch; a short one would
-		// have left the lunette open and the secret room visible above the
-		// books. It sits INSIDE the wall's thickness like every other leaf here
-		// rather than in front of it, which is also what lets it swing either
-		// way: a bookcase standing proud of the wall could only ever open into
-		// the player's face.
+		// local frame: origin on the hinge, panel hanging to local -Z, a
+		// silhouette that follows the hole wall's arch. It sits INSIDE the
+		// wall's thickness like every other leaf, which is what lets it swing
+		// either way. promptOffset X is 0.25, not 0: the range check should
+		// measure from the shelf FACE, not the hinge plane behind it.
 		//
-		// promptOffset X is 0.25 and not 0: the point the range check measures
-		// from should be the shelf FACE the player is looking at, not the plane
-		// of the hinge two thirds of the case's depth behind it.
-		//
-		// Locked with "book", which no other lock in the castle takes and which
-		// the exit does not accept (gameplay.json's exit.keyId is "iron"), so
-		// the one book in the level can only ever be spent here -- there is no
-		// way to waste it and no way to strand a run on it.
-		addDoor("dsShelfPanel", glm::vec3(0.25f, 2.20f, -1.231f), 100.0f, "book", "old book");
-		// What the bookcase says, and when it says anything at all. Marking it
-		// secret means both prompts below only ever appear with the book in
-		// hand -- until then the shelf is furniture and does not glow (see
-		// Door::secret), so "A book is missing from this shelf" is not a hint
-		// that leads the player to the gap, it is the game agreeing with them
-		// once they have already worked the gap out and gone and found the
-		// book. Nothing here uses the word "locked" or names a key: a padlock
-		// can afford to, because the player can see the padlock.
-		//
-		// No blocked line: it would be unreachable. The only way to stand on
-		// the far side is to have opened the thing, and it never re-locks
-		// within a run.
-		setSecretDoor("dsShelfPanel",
+		// Locked with "book", which no other lock takes and which the exit
+		// does not accept (gameplay.json's exit.keyId is "gold"), so the one
+		// book in the level can only ever be spent here.
+		addDoor("hbShelfPanel", glm::vec3(0.25f, 2.20f, -1.231f), 100.0f, "book", "old book");
+		// What the bookcase says, and only ever with the book in hand (see
+		// Door::secret): until then the shelf is furniture and does not glow,
+		// so "A book is missing from this shelf" agrees with the player once
+		// they have worked the gap out, it does not lead them to it. No blocked
+		// line: the far side is unreachable without having opened it, and it
+		// never re-locks within a run.
+		setSecretDoor("hbShelfPanel",
 					  "[E] Slide the book into the gap",
 					  "A book is missing from this shelf");
 		// Hangs a scene instance on a door as lock hardware. Separate from
@@ -3969,47 +3912,44 @@ class Castlescape : public BaseProject {
 			d->lockFaceSign = flip ? -1.0f : 1.0f;
 		};
 		// Both instances carry the SAME translate/eulerAngles as the leaf in
-		// scene.json, which is all the placement they need: the models live in
-		// its local frame.
-		addLockProp("dlDoorPanel2", "dlDoorChains2");
-		addLockProp("dlDoorPanel2", "dlDoorPadlock2");
-		// The hall door's set, flipped: the dl leaves are reached from the
-		// west and this one from the east, and all three carry the same
-		// eulerAngles, so the models as exported would hang on the side the
-		// player never stands on.
-		addLockProp("dhDoorPanel", "dhDoorChains", true);
-		addLockProp("dhDoorPanel", "dhDoorPadlock", true);
-		// The exit door's set, also flipped, but for the opposite reason to
-		// dhDoorPanel's: that leaf is yawed 180 and approached from the east,
-		// this one is yawed 0 and approached from the west. Either way the
-		// models as exported end up on the face the player never stands on,
-		// and either way the half turn is what fixes it. See the addDoor call
-		// for this leaf above.
-		addLockProp("dvDoorPanel", "dvDoorChains", true);
-		addLockProp("dvDoorPanel", "dvDoorPadlock", true);
+		// scene.json (build_scene.py places them there), which is all the
+		// placement they need: the models live in its local frame.
+		//
+		// All three locked leaves take flip=true. The hardware is exported on
+		// the leaf's local +X face, and for each of these the player stands on
+		// the OTHER side of that: hbDoorN (yaw 90) is approached from the hub
+		// to its south, hbDoorS (yaw 270) from the hub to its north, hbDoorE
+		// (yaw 0) from the hub to its west while its +X points outward. The
+		// half turn lands the chains and lock on the face the player actually
+		// sees, and sets the side [E] works from with them.
+		addLockProp("hbDoorNPanel", "hbDoorNChains", true);
+		addLockProp("hbDoorNPanel", "hbDoorNPadlock", true);
+		addLockProp("hbDoorSPanel", "hbDoorSChains", true);
+		addLockProp("hbDoorSPanel", "hbDoorSPadlock", true);
+		addLockProp("hbDoorEPanel", "hbDoorEChains", true);
+		addLockProp("hbDoorEPanel", "hbDoorEPadlock", true);
 
 		// Cache which door is the way out, so the light outside can be driven
 		// from its swing without a string compare every frame. Done here
 		// rather than in the addDoor lambda because "which door is the exit"
 		// is a property of the level, not of doors in general.
 		for(size_t i = 0; i < doors.size(); i++) {
-			if(doors[i].instanceId == "dvDoorPanel") {
+			if(doors[i].instanceId == "hbDoorEPanel") {
 				exitDoorIndex = (int)i;
 				break;
 			}
 		}
 		if(exitDoorIndex < 0) {
-			std::cout << "Exit door 'dvDoorPanel' not found: no daylight outside it\n";
+			std::cout << "Exit door 'hbDoorEPanel' not found: no daylight outside it\n";
 		}
 
-		// dlDoorPanel, the southern leaf of the pair, is left unlocked on
-		// purpose: it is the way around its chained twin. Two keys exist, both
-		// are consumed on use and the exit needs one still on the ring, so
-		// exactly one of the two padlocks can be paid for -- leaving the pair
-		// half open is what keeps that from being a trap.
+		// The key graph is strictly linear and every key opens exactly one
+		// lock: iron -> hbDoorN -> book -> hbShelfPanel -> bronze -> hbDoorS
+		// -> gold -> hbDoorE -> win. No spares, no soft-lock: each key is found
+		// in the room the previous lock opens onto.
 
 		// World pickups. worldPos is read from the instance's own Wm, since
-		// dhKey's position already lives in scene.json and shouldn't be
+		// each key's position already lives in scene.json and shouldn't be
 		// repeated here.
 		// Passing a keyId makes the pickup a key: it goes on the ring when
 		// collected and opens any Door whose lockKeyId matches (and the exit,
@@ -4045,26 +3985,17 @@ class Castlescape : public BaseProject {
 			p.worldScale = glm::length(glm::vec3(p.inst->Wm[0]));
 			pickups.push_back(p);
 		};
-		// Three keys, and deliberately the SAME id: all three are the one key
-		// mesh in the level, so a lock that accepted one and refused another
-		// would read as a bug no matter how correct the rule was. Sharing an
-		// id is what keyRing is built for (see its declaration) -- the ring
-		// stores instances, not ids, so three "iron" keys are still three
-		// distinct objects to pick up, drop and spend.
-		// The scarcity is therefore arithmetic, not matching: three keys
-		// against three padlocks, all of them consuming what they are paid
-		// with (the exit no longer checks a key of its own -- its door does).
-		// Two of those padlocks are optional, so the budget survives a player
-		// spending both spares, and only just: waste all three and the way out
-		// stays shut.
-		addPickup("dhKey", "iron");
-		addPickup("dcKey", "iron");
-		// The third, in the coloured-torch room, added when the exit stopped
-		// being a free box and became a chained door. See scene.json's dlKey.
-		addPickup("dlKey", "iron");
-		// The fourth pickup is not a key, or rather it is a key that does not
-		// look like one: the book on the hall table, which opens the bookcase
-		// three rooms east and nothing else. It rides the SAME machinery as the
+		// Three keys, three distinct ids -- iron, bronze, gold -- one per
+		// locked door, each found in the room the previous door opens onto.
+		// They are the same mesh but NOT interchangeable ids, because here the
+		// player always has exactly the key the next lock wants and never a
+		// choice of which to try: there is no spare to mismatch. The scarcity
+		// is the route, not the count.
+		addPickup("hbKeyIron", "iron");     // on the hub table
+		addPickup("rbKeyBronze", "bronze"); // dark NW corner of room B
+		addPickup("rcKeyGold", "gold");     // atop the barrels in room C
+		// The book on the hub table, which opens the bookcase and nothing
+		// else. It rides the SAME machinery as the
 		// keys (keyRing, findKeyInRing, consumeKey) on purpose -- "carry a
 		// thing to the lock that wants it, and spend it there" is already the
 		// rule of this level, and a second parallel system for one object would
@@ -4088,7 +4019,7 @@ class Castlescape : public BaseProject {
 		// of its page height (local Z is -0.170..0.170, symmetric) so the book
 		// straddles it and half of it hangs below. Same number, lower object.
 		// The lift puts the two at roughly the same height on screen.
-		addPickup("dhBook", "book", glm::vec3(84.0f, -24.0f, 0.0f),
+		addPickup("raBook", "book", glm::vec3(84.0f, -24.0f, 0.0f),
 				  HAND_KEY_OFFSET + glm::vec3(0.0f, 0.16f, 0.0f));
 
 		// Where the book ends up once it has been spent: standing in the gap on
@@ -4142,7 +4073,7 @@ class Castlescape : public BaseProject {
 									local * glm::scale(glm::mat4(1.0f), glm::vec3(p->worldScale)),
 									true});
 		};
-		addSlotProp("dsShelfPanel", "dhBook",
+		addSlotProp("hbShelfPanel", "raBook",
 					glm::translate(glm::mat4(1.0f), glm::vec3(0.454f, 1.730f, -1.266f))
 				  * glm::rotate(glm::mat4(1.0f), glm::radians(180.0f), glm::vec3(0.0f, 1.0f, 0.0f))
 				  * glm::rotate(glm::mat4(1.0f), glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f)));
@@ -4582,6 +4513,22 @@ class Castlescape : public BaseProject {
 		// in one place.
 		startScreen.init(&txt, &startScreenQuad, windowTitle);
 		startScreen.setOpen(true, windowWidth, windowHeight);
+		// Offscreen capture hook (level-building only): with CS_DEBUG_CAM set to
+		// "x,y,z,yaw,pitch" the launch screen is skipped and the camera is
+		// parked at that pose, so a headless run (Xvfb + a screenshot tool) can
+		// frame a specific spot. Unset in every normal launch, so this is inert.
+		if(const char *dbg = std::getenv("CS_DEBUG_CAM")) {
+			float dx, dy, dz, dyaw, dpitch;
+			if(std::sscanf(dbg, "%f,%f,%f,%f,%f", &dx, &dy, &dz, &dyaw, &dpitch) == 5) {
+				startScreen.setOpen(false, windowWidth, windowHeight);
+				camPos = glm::vec3(dx, dy, dz);
+				camYaw = dyaw;
+				camPitch = dpitch;
+				spawnPos = camPos;
+				spawnYaw = camYaw;
+				spawnPitch = camPitch;
+			}
+		}
 		settingsMenu.init(&txt, &settingsQuad);
 		// Same two sliders as the cheat HUD's below, same onChange/format --
 		// see applyRenderScaleChange()/formatRenderScale()/applyMsaaChange()/
