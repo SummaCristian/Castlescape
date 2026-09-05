@@ -13,20 +13,44 @@
 // "custom/UiQuad.hpp" are already included by whoever includes this one.
 
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <functional>
 #include <string>
 #include <vector>
 
-// Binds a display label to a live boolean flag owned by the caller (e.g. one
-// of main.cpp's CheatFlags members). The HUD never copies/owns the value, it
-// just flips the real flag in place, so there's nothing to keep in sync.
-struct CheatToggle {
+// One row of the panel: either an on/off toggle bound to a live bool, or a
+// Left/Right-adjustable slider bound to a live float. Exactly one of
+// toggleValue/sliderValue is set, deciding which. The HUD never copies/owns
+// the value, it just changes the real one in place, so there's nothing to
+// keep in sync -- except for a slider whose effect needs more than "read
+// this value" to take hold (RENDER_SCALE's render-target rebuild in
+// main.cpp, say), which is what onChange is for.
+struct CheatRow {
 	std::string label;
-	bool *value;
+	bool *toggleValue = nullptr;
+	float *sliderValue = nullptr;
+	float sliderMin = 0.0f;
+	float sliderMax = 1.0f;
+	float sliderStep = 0.05f;
+	// Fires once per Left/Right press that actually changed the slider's
+	// value -- edge-triggered the same way Up/Down/Enter below are, not
+	// once per frame the key is held, since this can be an expensive
+	// operation (a swapchain/render-target rebuild) that a held key must
+	// not spam. Unused for a toggle row: the caller already reads
+	// *toggleValue live every frame.
+	std::function<void()> onChange;
 };
 
 struct CheatHud {
 	void init(TextMaker *txt, UiQuad *quads);
 	void addToggle(const std::string &label, bool *value);
+	// step: how much one Left/Right press changes *value by. Clamped to
+	// [min, max] after every change. onChange, if set, fires after the
+	// clamp, once per press that actually moved the value (not at the
+	// clamped ends when already there) -- see CheatRow::onChange.
+	void addSlider(const std::string &label, float *value, float min, float max,
+				   float step, std::function<void()> onChange = nullptr);
 	bool isOpen() const { return open; }
 
 	// Reads keyboard/mouse input, updates the open/selected/toggled state,
@@ -40,7 +64,7 @@ struct CheatHud {
 	TextMaker *txt = nullptr;
 	UiQuad *quads = nullptr;
 
-	std::vector<CheatToggle> options;
+	std::vector<CheatRow> options;
 	int selectedIndex = 0;
 	bool open = false;
 
@@ -62,6 +86,9 @@ struct CheatHud {
 	bool downKeyWasPressed = false;
 	bool enterKeyWasPressed = false;
 	bool leftMouseWasPressed = false;
+	// Adjust the selected row's slider (no-op on a toggle row).
+	bool leftArrowKeyWasPressed = false;
+	bool rightArrowKeyWasPressed = false;
 
 	// True whenever the panel needs to be re-printed (just opened/closed,
 	// selection or hover moved, a toggle flipped). Avoids rebuilding
@@ -148,7 +175,22 @@ void CheatHud::init(TextMaker *_txt, UiQuad *_quads) {
 }
 
 void CheatHud::addToggle(const std::string &label, bool *value) {
-	options.push_back({label, value});
+	CheatRow row;
+	row.label = label;
+	row.toggleValue = value;
+	options.push_back(row);
+}
+
+void CheatHud::addSlider(const std::string &label, float *value, float min, float max,
+						 float step, std::function<void()> onChange) {
+	CheatRow row;
+	row.label = label;
+	row.sliderValue = value;
+	row.sliderMin = min;
+	row.sliderMax = max;
+	row.sliderStep = step;
+	row.onChange = std::move(onChange);
+	options.push_back(row);
 }
 
 void CheatHud::pixelToAnchor(float px, float py, int screenW, int screenH, float &ax, float &ay) {
@@ -204,12 +246,42 @@ void CheatHud::update(GLFWwindow *window, int screenW, int screenH) {
 	downKeyWasPressed = downPressed;
 
 	bool enterPressed = glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS;
-	if(enterPressed && !enterKeyWasPressed) {
-		bool *v = options[selectedIndex].value;
+	if(enterPressed && !enterKeyWasPressed && options[selectedIndex].toggleValue != nullptr) {
+		bool *v = options[selectedIndex].toggleValue;
 		*v = !(*v);
 		dirty = true;
 	}
 	enterKeyWasPressed = enterPressed;
+
+	// Left/Right: adjust the selected row's slider, if it is one. No-op on
+	// a toggle row (Enter/click cover those).
+	auto adjustSelectedSlider = [&](float sign) {
+		CheatRow &row = options[selectedIndex];
+		if(row.sliderValue == nullptr) {
+			return;
+		}
+		float before = *row.sliderValue;
+		float after = std::clamp(before + sign * row.sliderStep, row.sliderMin, row.sliderMax);
+		if(after != before) {
+			*row.sliderValue = after;
+			dirty = true;
+			if(row.onChange) {
+				row.onChange();
+			}
+		}
+	};
+
+	bool leftArrowPressed = glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS;
+	if(leftArrowPressed && !leftArrowKeyWasPressed) {
+		adjustSelectedSlider(-1.0f);
+	}
+	leftArrowKeyWasPressed = leftArrowPressed;
+
+	bool rightArrowPressed = glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS;
+	if(rightArrowPressed && !rightArrowKeyWasPressed) {
+		adjustSelectedSlider(1.0f);
+	}
+	rightArrowKeyWasPressed = rightArrowPressed;
 
 	// Mouse: hovering a row selects it (hover and keyboard selection share
 	// the same "selectedIndex", there's only one highlighted concept), and
@@ -230,8 +302,9 @@ void CheatHud::update(GLFWwindow *window, int screenW, int screenH) {
 	}
 
 	bool leftMousePressed = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
-	if(leftMousePressed && !leftMouseWasPressed && hoveredIndex != -1) {
-		bool *v = options[hoveredIndex].value;
+	if(leftMousePressed && !leftMouseWasPressed && hoveredIndex != -1
+	   && options[hoveredIndex].toggleValue != nullptr) {
+		bool *v = options[hoveredIndex].toggleValue;
 		*v = !(*v);
 		dirty = true;
 	}
@@ -298,8 +371,14 @@ void CheatHud::computeLayout(int screenH) {
 	// Width is measured at the fitted scales, so a shrunk panel is narrower
 	// too rather than a short list of tiny text in a full-width box.
 	float maxContentWidth = measureTextWidth("CHEATS (L to close)", titleFontId, titleScale);
-	float stateWidth = std::max(measureTextWidth("[ON]", stateFontId, rowScale),
-								 measureTextWidth("[OFF]", stateFontId, rowScale));
+	// "< 100% >" stands in for a slider row's value text: fixed at the
+	// widest a percentage display can ever be (0..100, see renderRows()),
+	// independent of any row's actual current value -- so the panel's width
+	// doesn't shift as a slider is adjusted, matching how it already doesn't
+	// shift as a toggle flips between its two fixed-width strings.
+	float stateWidth = std::max({measureTextWidth("[ON]", stateFontId, rowScale),
+								  measureTextWidth("[OFF]", stateFontId, rowScale),
+								  measureTextWidth("< 100% >", stateFontId, rowScale)});
 	for(const auto &opt : options) {
 		float rowWidth = measureTextWidth(opt.label, rowFontId, rowScale) + LABEL_STATE_GAP + stateWidth;
 		maxContentWidth = std::max(maxContentWidth, rowWidth);
@@ -334,22 +413,37 @@ void CheatHud::renderRows(int screenW, int screenH) {
 			   titleScale, titleScale);
 
 	for(int i = 0; i < (int)options.size(); i++) {
+		const CheatRow &row = options[i];
 		bool selected = (i == selectedIndex);
-		bool enabled = *options[i].value;
 		float top = rowTop(i);
 
 		// Label, left-aligned.
 		pixelToAnchor(PANEL_X + PADDING, top, screenW, screenH, ax, ay);
 		glm::vec4 labelColor = selected ? glm::vec4(1.0f, 1.0f, 0.3f, 1.0f)
 										 : glm::vec4(0.85f, 0.85f, 0.85f, 1.0f);
-		txt->print(ax, ay, options[i].label, FIRST_ROW_TEXT_ID + i, "SS", false, selected, false,
+		txt->print(ax, ay, row.label, FIRST_ROW_TEXT_ID + i, "SS", false, selected, false,
 				   TAL_LEFT, TRH_LEFT, TRV_TOP, labelColor,
 				   {0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, rowScale, rowScale);
 
-		// ON/OFF state, right-aligned to the panel's (padded) right edge.
+		// State/value, right-aligned to the panel's (padded) right edge --
+		// [ON]/[OFF] for a toggle row, "< NN% >" for a slider row. The
+		// percentage assumes the slider's own range is meant to read as a
+		// fraction (0..1, as RENDER_SCALE's is); a slider over some other
+		// kind of range would want its own display, not this one.
+		std::string stateText;
+		glm::vec4 stateColor;
+		if(row.toggleValue != nullptr) {
+			bool enabled = *row.toggleValue;
+			stateText = enabled ? "[ON]" : "[OFF]";
+			stateColor = enabled ? glm::vec4(0.3f, 1.0f, 0.3f, 1.0f) : glm::vec4(1.0f, 0.3f, 0.3f, 1.0f);
+		} else {
+			char buf[16];
+			snprintf(buf, sizeof(buf), "< %d%% >", (int)std::lround(*row.sliderValue * 100.0f));
+			stateText = buf;
+			stateColor = glm::vec4(0.4f, 0.8f, 1.0f, 1.0f);
+		}
 		pixelToAnchor(PANEL_X + panelWidth - PADDING, top, screenW, screenH, ax, ay);
-		glm::vec4 stateColor = enabled ? glm::vec4(0.3f, 1.0f, 0.3f, 1.0f) : glm::vec4(1.0f, 0.3f, 0.3f, 1.0f);
-		txt->print(ax, ay, enabled ? "[ON]" : "[OFF]", FIRST_ROW_TEXT_ID + (int)options.size() + i,
+		txt->print(ax, ay, stateText, FIRST_ROW_TEXT_ID + (int)options.size() + i,
 				   "SS", false, false, false,
 				   TAL_RIGHT, TRH_RIGHT, TRV_TOP, stateColor,
 				   {0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, rowScale, rowScale);

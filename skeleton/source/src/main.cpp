@@ -130,12 +130,18 @@ struct GlobalUniformBufferObject {
 	// How much of a point/spot light's radiance comes back as indirect light.
 	// See AmbientLight::bounce in SceneLights.hpp.
 	//
-	// The last scalar that fits for free: ambientDir ends at 60, debugFlags
-	// fills that slot, and time/ambientWeight/this take 64, 68 and 72. The
-	// array's own alignas(16) starts it at 80 either way, so this costs
-	// nothing. A second one would still fit at 76; a third moves lights[] and
-	// every offset in four shaders with it.
+	// ambientDir ends at 60, debugFlags fills that slot, and
+	// time/ambientWeight/this take 64, 68 and 72.
 	float ambientBounce;
+	// Exponential-squared distance fog (fogFactor = exp(-(fogDensity*dist)^2)
+	// in CookTorrance.frag), meant to fade geometry toward black before the
+	// GEOM_CULL_* visibility cull above stops drawing it, rather than let it
+	// pop out of view -- see updateUniformBuffer() for how this is derived
+	// from GEOM_CULL_CONE_DIST. The one scalar that still fits here for
+	// free: ambientBounce ends at 76, and the array's own alignas(16) starts
+	// it at 80 either way. A second one here would move lights[] and every
+	// offset in four shaders with it.
+	float fogDensity;
 	LightData lights[MAX_LIGHTS];
 };
 
@@ -625,6 +631,51 @@ class Castlescape : public BaseProject {
 	// downsampling is how you get a WIDE soft halo out of a cheap 9-tap kernel
 	// instead of a tight one.
 	static constexpr int BLOOM_DIV = 4;
+
+	// The 3D scene (RP, the hdrAtt chain CookTorrance.frag draws into) renders
+	// at this fraction of the window's actual resolution in each axis, i.e.
+	// renderScale^2 of its pixel count -- 0.8 is ~64%. Composite.frag then
+	// upsamples it back up to the real window size through the same
+	// bilinear sampler it already reads srcTex with, so the OUTPUT still
+	// fills the window at full resolution; only the scene's own detail is
+	// computed at fewer pixels. Free performance-wise in proportion to that
+	// pixel-count cut (every fragment invocation this saves is one this
+	// project's forced per-sample shading -- see msaaSamples' comment above
+	// -- would otherwise have run the full light loop for), paid for in a
+	// slightly softer scene, which fog/vignette/bloom/the general darkness of
+	// a dungeon already hide well.
+	//
+	// The UI (txt/uiQuad/crosshair/hud/pauseMenu/startScreen) is NOT part of
+	// this: those all render in their own separate command buffers/passes,
+	// submitted after RPcomposite (see populateCommandBuffer()'s comment),
+	// which stays at the window's real resolution unconditionally -- so text
+	// and prompts stay perfectly sharp regardless of this value.
+	//
+	// A runtime member, not a compile-time constant: the "Render Scale"
+	// slider in the cheat HUD (see its addSlider() call below) changes this
+	// live, then replays the same rebuild path a real window resize already
+	// uses -- onWindowResize(windowWidth, windowHeight) to recompute
+	// RP/bloom sizes at the new scale, then RebuildPipeline() to actually
+	// tear down and recreate the render targets at those sizes. Everything
+	// that used to read the old compile-time constant (renderWidth()/
+	// renderHeight(), bloomWidth()/bloomHeight(), and both call sites below)
+	// reads this member instead, so nothing needed to change but this
+	// declaration and its initial value.
+	float renderScale = 0.8f;
+
+	// The scene's own render resolution, some window dimension scaled by
+	// renderScale and clamped to at least 1 (a minimised or absurdly narrow
+	// window can't ask for a zero-sized image). Takes the window dimension
+	// as a parameter rather than reading swapChainExtent directly, since
+	// onWindowResize() needs to compute this from the NEW size it was just
+	// handed, before swapChainExtent itself has necessarily been updated to
+	// match.
+	int renderWidth(int windowW) const {
+		return std::max(1, (int)std::lround(windowW * renderScale));
+	}
+	int renderHeight(int windowH) const {
+		return std::max(1, (int)std::lround(windowH * renderScale));
+	}
 
 	// Bright-pass threshold and knee, in luminance. Set high enough to clear
 	// the SCENE's own peak radiance, not just 1.0: a sunlit wall with a pale
@@ -2774,17 +2825,22 @@ class Castlescape : public BaseProject {
 	void onWindowResize(int w, int h) {
 		std::cout << "Window resized to: " << w << " x " << h << "\n";
 		Ar = (float)w / (float)h;
-		// Update Render Passes. Every one of them: the scene and the composite
-		// follow the window, the three bloom targets follow it divided down.
-		// Their attachment images are torn down and rebuilt around this by
-		// pipelinesAndDescriptorSetsCleanup()/Init(), which Starter.hpp calls
-		// on either side of a resize.
-		RP.width = w;
-		RP.height = h;
+		// Update Render Passes. The composite follows the window exactly (the
+		// final image always fills it); the scene follows it scaled down by
+		// renderScale; the three bloom targets follow THAT, divided down
+		// again by BLOOM_DIV -- see bloomWidth()/bloomHeight() and
+		// renderScale's own comment for why each of those reads what it
+		// reads. Their attachment images are torn down and rebuilt around
+		// this by pipelinesAndDescriptorSetsCleanup()/Init(), which
+		// Starter.hpp calls on either side of a resize.
+		RP.width = renderWidth(w);
+		RP.height = renderHeight(h);
 		RPcomposite.width = w;
 		RPcomposite.height = h;
-		RPbright.width = RPblurH.width = RPblurV.width = std::max(1, w / BLOOM_DIV);
-		RPbright.height = RPblurH.height = RPblurV.height = std::max(1, h / BLOOM_DIV);
+		// After RP.width/height above, not before: bloomWidth()/bloomHeight()
+		// read those, so they only see the new scene size once it's set.
+		RPbright.width = RPblurH.width = RPblurV.width = bloomWidth();
+		RPbright.height = RPblurH.height = RPblurV.height = bloomHeight();
 
 		// windowWidth/windowHeight are otherwise only set once in
 		// setWindowParameters() and never refreshed here; the cheat HUD
@@ -2930,14 +2986,17 @@ class Castlescape : public BaseProject {
 		};
 	}
 
-	// Width/height of the bloom chain's targets, derived from the swapchain.
-	// Clamped at 1 so a minimised or absurdly narrow window can't ask for a
-	// zero-sized image.
+	// Width/height of the bloom chain's targets, derived from the SCENE pass's
+	// own current resolution (RP.width/height, already scaled by
+	// renderScale) rather than the swapchain's -- bloom reads the scene's
+	// resolve target, so its size should track what that target actually is,
+	// not the window's. Clamped at 1 so a minimised or absurdly narrow window
+	// can't ask for a zero-sized image.
 	int bloomWidth() const {
-		return std::max(1, (int)swapChainExtent.width / BLOOM_DIV);
+		return std::max(1, RP.width / BLOOM_DIV);
 	}
 	int bloomHeight() const {
-		return std::max(1, (int)swapChainExtent.height / BLOOM_DIV);
+		return std::max(1, RP.height / BLOOM_DIV);
 	}
 
 	// Here you load and setup all your Vulkan Models and Textures.
@@ -3000,7 +3059,8 @@ class Castlescape : public BaseProject {
 				         sizeof(glm::vec2), UV}
 				});
 
-		// Anti-aliasing level, set BEFORE RP.init() below reads it.
+		// Anti-aliasing level, set BEFORE initRenderPasses() below reads it
+		// (via buildPostAttachments()).
 		//
 		// Starter.hpp's default is getMaxUsableSampleCount(), i.e. as many
 		// samples as the GPU will admit to supporting -- 16 on this machine.
@@ -3019,31 +3079,20 @@ class Castlescape : public BaseProject {
 		// Assigning it here is legal without touching Starter.hpp: msaaSamples
 		// is a protected member of BaseProject, and pickPhysicalDevice() (which
 		// sets the default) runs earlier in initVulkan() than localInit() does.
+		//
+		// Now also changeable live via the "MSAA" slider (see its addSlider()
+		// call below) for the same reason renderScale's is: rather than
+		// guessing at this compromise, try it on the actual machine it's
+		// running on.
 		msaaSamples = VK_SAMPLE_COUNT_4_BIT;
+		// The slider's own upper bound: the device's real cap
+		// (getMaxUsableSampleCount(), queried once at startup by
+		// pickPhysicalDevice()), not an assumed 16 -- a GPU that tops out
+		// lower must not be offered a sample count it can't actually create
+		// an image at.
+		maxMsaaLevel = std::log2((float)getMaxUsableSampleCount());
 
-		// initializes the render passes. The scene one no longer draws to the
-		// screen: it renders into an offscreen floating-point target which the
-		// bloom chain and the composite then read back. See
-		// buildPostAttachments() for what each attachment is and why.
-		buildPostAttachments();
-
-		// ATDEP_SIMPLE rather than the default ATDEP_SURFACE_ONLY: the scene's
-		// output is now sampled by a later pass, so it needs the dependency
-		// pair that orders a colour write against a subsequent shader read
-		// (and, in the other direction, against the NEXT frame overwriting it).
-		RP.init(this, -1, -1, -1, &hdrAtt,
-				RenderPass::getStandardDependencies(ATDEP_SIMPLE), true);
-
-		RPbright.init(this, bloomWidth(), bloomHeight(), -1, &brightAtt,
-					  RenderPass::getStandardDependencies(ATDEP_SIMPLE), true);
-		RPblurH.init(this, bloomWidth(), bloomHeight(), -1, &blurHAtt,
-					 RenderPass::getStandardDependencies(ATDEP_SIMPLE), true);
-		RPblurV.init(this, bloomWidth(), bloomHeight(), -1, &blurVAtt,
-					 RenderPass::getStandardDependencies(ATDEP_SIMPLE), true);
-		// The composite writes the swapchain and is read by nobody, so the
-		// plain surface dependency the main pass always used is right here.
-		RPcomposite.init(this, -1, -1, -1, &compositeAtt,
-						 RenderPass::getStandardDependencies(ATDEP_SURFACE_ONLY), false);
+		initRenderPasses();
 
 		// The 2D shadow render passes -- the sun's today, in
 		// LightData::shadowIndex order (see SceneLights::init). AT_DEPTH_ONLY
@@ -4272,6 +4321,24 @@ class Castlescape : public BaseProject {
 		hud.addToggle("Shadow Frustums", &cheats.showShadowFrustums);
 		hud.addToggle("Show Colliders", &cheats.showColliders);
 		hud.addToggle("Light Heatmap", &cheats.showLightHeatmap);
+
+		// Render Scale: see renderScale's own declaration/comment above for
+		// what this actually resizes. onChange replays the same rebuild path
+		// a real window resize already goes through (see
+		// framebufferResizeCallback/onWindowResize in Starter.hpp) at the
+		// CURRENT window size, so only the internal render resolution
+		// changes, nothing about the window itself. Floor of 0.4 (40%, i.e.
+		// 16% of the pixel count): below that the upscale reliably reads as
+		// blurry rather than atmospheric even with fog/vignette/bloom all
+		// helping hide it, so there's little reason to let the slider go
+		// lower than the point it stops being a useful comparison. 0.05 per
+		// press (Left/Right on the selected row) gives 12 steps across the
+		// full range -- fine enough to feel the difference between two
+		// adjacent presses without needing dozens of them to cross the range.
+		hud.addSlider("Render Scale", &renderScale, 0.4f, 1.0f, 0.05f, [this]() {
+			onWindowResize((int)windowWidth, (int)windowHeight);
+			RebuildPipeline();
+		});
 	}
 
 	// Six 90-degree perspective faces covering a point light's whole sphere,
@@ -5936,6 +6003,36 @@ class Castlescape : public BaseProject {
 		// Same bucket, so the same gate covers it. See CookTorrance.frag's blend.
 		gubo.ambientBounce = amb.bounce;
 
+		// Distance fog density: derived from GEOM_CULL_CONE_DIST rather than
+		// its own hand-picked number, so the two can't drift apart the way
+		// TORCH_LIGHT_CULL_DIST and GEOM_CULL_CONE_DIST would have without
+		// their static_assert above. Solves exp(-(density*dist)^2) =
+		// FOG_RESIDUAL_AT_CULL_DIST for dist == GEOM_CULL_CONE_DIST *
+		// FOG_REFERENCE_DIST_SCALE, i.e. fog reaches (in this case) 1% of
+		// unfogged brightness only some distance PAST where the geometry
+		// cull would stop drawing something, rather than exactly at it --
+		// the single knob to turn if the fog still reads as too heavy or too
+		// light close up:
+		//   1.0   the first version: fully faded right at the cull distance,
+		//         which read as noticeably dark well before that (~60% by
+		//         the middle of the cull's own range) -- an exponential
+		//         curve's brightness already drops fast long before it
+		//         visually "arrives" at its target residual.
+		//   >1.0  gentler up close, and fully faded only somewhat past the
+		//         cull distance instead of exactly at it -- some genuine
+		//         geometry pop can peek through right at the true cull edge
+		//         as a result, softened by the vignette below and by fog and
+		//         background sharing the same black. 2.5 keeps close-up
+		//         brightness within a few percent of unfogged out to the
+		//         GEOM_CULL_RADIUS "always visible" ring, and still reaches
+		//         roughly half brightness by the cull's own farthest reach.
+		//   <1.0  the opposite tradeoff: fully hides the pop with room to
+		//         spare, at the cost of a noticeably darker foreground.
+		constexpr float FOG_RESIDUAL_AT_CULL_DIST = 0.01f;
+		constexpr float FOG_REFERENCE_DIST_SCALE = 2.5f;
+		gubo.fogDensity = std::sqrt(-std::log(FOG_RESIDUAL_AT_CULL_DIST))
+						/ (GEOM_CULL_CONE_DIST * FOG_REFERENCE_DIST_SCALE);
+
 		// The lighting debug cheats, packed into the one int the shader reads.
 		// Note the two inversions: the cheat says what the frame should still
 		// have, the flag says what the shader should drop.
@@ -6009,8 +6106,12 @@ class Castlescape : public BaseProject {
 		// texture it READS, not the one it writes, since it is used to step
 		// from one source texel to the next.
 		{
-			const glm::vec2 fullTexel = glm::vec2(1.0f / (float)swapChainExtent.width,
-												  1.0f / (float)swapChainExtent.height);
+			// RP.width/height, not swapChainExtent: the scene's resolve
+			// target (what the bright pass below actually reads) is sized to
+			// renderScale's scaled-down resolution, which can now differ
+			// from the swapchain/window's.
+			const glm::vec2 fullTexel = glm::vec2(1.0f / (float)RP.width,
+												  1.0f / (float)RP.height);
 			const glm::vec2 bloomTexel = glm::vec2(1.0f / (float)bloomWidth(),
 												   1.0f / (float)bloomHeight());
 
