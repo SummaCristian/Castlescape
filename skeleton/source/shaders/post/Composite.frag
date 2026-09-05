@@ -30,6 +30,7 @@ layout(binding = 0, set = 0) uniform PostUniformBufferObject {
 	int   debugFlags;
 	float time;
 	float escapeFlash;
+	float spectralVeil;
 } post;
 
 layout(binding = 1, set = 0) uniform sampler2D srcTex;
@@ -127,6 +128,41 @@ void main() {
 	// the scene blows out first, blooming and losing its detail, and only then
 	// does the last of it wash away. Doing this alone would be a fade to
 	// white, which is a screen transition and not being blinded.
+	// THE SPECTRAL VEIL: what standing inside a ghost looks like now that
+	// spectralFade() has taken the ghost itself away. Ramped by main.cpp over
+	// the same range the mesh dissolves on, so the presence moves off the model
+	// and onto the frame instead of just vanishing.
+	//
+	// After the tone map, like the whiteout below: this is the room seen
+	// through something, not more light in the room.
+	if(post.spectralVeil > 0.0) {
+		// Desaturated first, then tinted. Blue straight over the torchlight
+		// leaves the flames orange under a film and reads as a bad filter;
+		// taking the colour out first is what makes the room go cold.
+		const vec3  VEIL_TINT = vec3(0.62, 0.86, 1.10);
+		// A floor under the blacks -- nothing is fully dark seen through
+		// something translucent. Small: the dungeon's darkness is its
+		// atmosphere.
+		const vec3  VEIL_LIFT = vec3(0.014, 0.030, 0.050);
+		// Strength at the centre and at the edges. Flat, the wash reads as a
+		// colour grade; weighted outwards it reads as something wrapped around
+		// the player, and the middle stays readable enough to walk out of.
+		// Lower the centre figure if players lose their bearings.
+		const float VEIL_CENTRE = 0.42;
+		const float VEIL_EDGE   = 0.92;
+
+		float veil = clamp(post.spectralVeil, 0.0, 1.0);
+		// Squared radius, normalised so the middle of an edge is 1. Squared
+		// because the falloff wanted is quadratic anyway -- a length() here
+		// would only be undone.
+		vec2  d = uv - 0.5;
+		float r = clamp(dot(d, d) * 4.0, 0.0, 1.0);
+		float w = veil * mix(VEIL_CENTRE, VEIL_EDGE, r);
+
+		float Y = dot(color, vec3(0.2126, 0.7152, 0.0722));
+		color = mix(color, vec3(Y) * VEIL_TINT + VEIL_LIFT * veil, w);
+	}
+
 	color = mix(color, vec3(1.0), clamp(post.escapeFlash, 0.0, 1.0));
 
 	// Written linear, not gamma-encoded: the swapchain is B8G8R8A8_SRGB, so

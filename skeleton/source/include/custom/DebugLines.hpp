@@ -141,7 +141,7 @@ void DebugLines::init(BaseProject *_BP) {
 	BP->DPSZs.uniformBlocksInPool += 3;
 	BP->DPSZs.setsInPool += 1;
 
-	P.init(BP, &VD, "shaders/DebugLines.vert.spv", "shaders/DebugLines.frag.spv", {&DSL});
+	P.init(BP, &VD, "shaders/debug/DebugLines.vert.spv", "shaders/debug/DebugLines.frag.spv", {&DSL});
 	P.setTopology(VK_PRIMITIVE_TOPOLOGY_LINE_LIST);
 	P.setCullMode(VK_CULL_MODE_NONE);	// lines have no facing to cull
 	// LESS_OR_EQUAL, not the default LESS: a gizmo/box edge that lands exactly

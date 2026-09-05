@@ -44,8 +44,9 @@
 //   gameplay.json   the hunt cycle's timings, the ghosts' patrols, and where
 //                   the run is won (see custom/HuntCycle.hpp)
 //
-// The shaders are in source/shaders/. PosNormUV.vert and CookTorrance.frag are
-// the pair that draws the scene; the other two draw the HUD.
+// The shaders are in source/shaders/, one folder per job: scene/ (PosNormUV.vert
+// and CookTorrance.frag, the pair that draws the scene), spectral/ (the ghosts),
+// shadow/, post/, fire/, exit/, ui/, debug/, and framework/ for the Starter's own.
 //
 // notes.md at the repo root explains the reasoning behind all of it.
 
@@ -146,31 +147,20 @@ struct GlobalUniformBufferObject {
 	LightData lights[MAX_LIGHTS];
 };
 
-// Set 2: the shadow-sampling data, bound once and read by CookTorrance.frag.
-// One matrix per 2D-shadow light (NUM_SHADOW_MAPS_2D, LightConstants.glsl --
-// just the sun today), the SAME view-projection its own shadow pass rendered
-// with (see computeShadowMatrices()). The torches don't need a matrix here
-// any more: a cube map is sampled by direction, not by transforming into its
-// clip space, so their light-space math never leaves computeShadowMatrices()/
-// populateCommandBuffer(). Static for the life of the program, since the sun
-// doesn't move, but still re-mapped every frame in updateUniformBuffer()
-// rather than once at startup: map() writes into a per-swapchain-image
-// buffer slot, and mapping only slot 0 would leave the others holding
-// whatever was there at allocation time.
+// Set 2: the shadow-sampling data, read by CookTorrance.frag. One matrix per
+// 2D-shadow light (NUM_SHADOW_MAPS_2D -- just the sun today), the SAME
+// view-projection its own shadow pass rendered with (computeShadowMatrices()).
+// Torches need no matrix here: a cube map is sampled by direction, not by
+// transforming into its clip space.
 struct ShadowUniformBufferObject {
 	alignas(16) glm::mat4 lightSpace[NUM_SHADOW_MAPS_2D];
 };
 
 // One torch's cube shadow CAPTURE data (ShadowCube.vert/frag, PShadowCube),
-// set 1 there. Field-for-field the same layout those two shader stages
-// declare. A uniform buffer, not a push constant, and re-mapped every frame
-// in updateUniformBuffer() for every torch, including the six static ones --
-// see ShadowCube.vert's header for why a push constant can't do this job:
-// the "main" command buffer is recorded once per swapchain image and reused
-// every frame after that (Starter.hpp's submitCommandBuffer()/
-// updateCommandBuffers()), so a push constant's value would be frozen at
-// whatever it was the moment that recording happened and never updated
-// again -- fatal for the held torch, which moves every frame.
+// set 1 there. A uniform buffer and not a push constant, re-mapped every frame
+// for every torch including the static ones: the main command buffer is
+// recorded once per swapchain image and reused, so a push constant would stay
+// frozen at recording time -- fatal for the held torch, which moves each frame.
 struct ShadowCubeUniformBufferObject {
 	alignas(16) glm::mat4 lightViewProj[6];
 	alignas(16) glm::vec4 lightPos;	// xyz used, w is padding
@@ -193,13 +183,12 @@ struct Vertex {
 };
 
 // Shared by all four post-processing passes (bright pass, the two blur
-// directions, composite), matching PostUniformBufferObject in BloomBright.frag
-// / BloomBlur.frag / Composite.frag field for field. Each pass gets its own
-// copy with the fields it cares about filled in; the rest are simply unread,
-// which is cheaper than maintaining four nearly identical blocks.
+// directions, composite). Each gets its own copy with the fields it cares about
+// filled in and the rest simply unread, which is cheaper than maintaining four
+// nearly identical blocks.
 //
-// No alignas() needed anywhere here: two vec2s then six 4-byte scalars is
-// already exactly what std140 lays out, with nothing to pad.
+// No alignas() needed: two vec2s then six 4-byte scalars is already exactly
+// what std140 lays out, with nothing to pad.
 struct PostUniformBufferObject {
 	glm::vec2 texelSize;	// 1/width, 1/height of the SOURCE texture
 	glm::vec2 blurDir;		// (1,0) or (0,1); read by BloomBlur.frag only
@@ -221,6 +210,9 @@ struct PostUniformBufferObject {
 	// exposure ramp is still there and still doing the work of blowing the
 	// scene out; this is what finishes the job.
 	float escapeFlash;
+	// composite: 0 normally, ramping to 1 as the camera sinks into a ghost.
+	// See SPECTRAL_VEIL_OUTER.
+	float spectralVeil;
 };
 
 // A full-screen quad vertex for those passes. Only a position: Post.vert
@@ -297,19 +289,15 @@ class Castlescape : public BaseProject {
 	// blend (see ubo.F0 there).
 	Pipeline Pspectral;
 
-	// The ghosts' DEPTH PREPASS (shaders/SpectralDepth.frag), drawn over the
-	// same instances immediately before Pspectral is. It writes the depth of
-	// the nearest ghost surface and returns the colour attachment untouched, so
-	// that the colour pass behind it can reject the ghost's own interior --
-	// the feet inside the robe -- instead of blending it under the body. See
-	// that shader's header for the mechanism and populateCommandBuffer() for
-	// why THIS one is the pipeline registered with the technique while
-	// Pspectral is the one issued by hand.
+	// The ghosts' DEPTH PREPASS (SpectralDepth.frag), drawn over the same
+	// instances immediately before Pspectral. It writes the depth of the nearest
+	// ghost surface and leaves the colour attachment untouched, so the colour
+	// pass can reject the ghost's own interior -- the feet inside the robe --
+	// instead of blending it under the body.
 	//
-	// Same DSLs as Pspectral (nothing here reads them, but the layout has to
-	// match the sets Scene binds), same back-face culling, and the default
-	// VK_COMPARE_OP_LESS rather than Pspectral's LESS_OR_EQUAL, which is the
-	// whole point: LESS is what leaves the minimum in the depth buffer.
+	// Same DSLs as Pspectral, and the default VK_COMPARE_OP_LESS rather than
+	// Pspectral's LESS_OR_EQUAL, which is the whole point: LESS is what leaves
+	// the minimum in the depth buffer.
 	Pipeline PspectralDepth;
 
 	// Shadow mapping, 2D branch: one depth-only render pass per 2D
@@ -335,20 +323,15 @@ class Castlescape : public BaseProject {
 	// point light instead of the old two-perspective-map workaround -- see
 	// CubeShadowMap.hpp for why (linear-distance storage, one flat bias).
 	//
-	// RPShadowCubeCompat exists ONLY to mint a VkRenderPass compatible with
-	// every face framebuffer below: RenderPass::createRenderPass() is
-	// private, so the sole way to obtain a spec-compatible VkRenderPass
-	// through this class's public surface is to let a full RenderPass build
-	// one for itself and read its .renderPass back out. Its own attachment
-	// image/framebuffer (1-layer, SHADOW_MAP_RES sized) are never rendered
-	// into or read -- unavoidable bookkeeping to stay inside RenderPass's
-	// public API instead of duplicating vkCreateRenderPass by hand.
+	// RPShadowCubeCompat exists ONLY to mint a VkRenderPass compatible with the
+	// per-face framebuffers: RenderPass::createRenderPass() is private, so the
+	// only way to get one through the public API is to let a full RenderPass
+	// build its own and read .renderPass back out. Its own attachment and
+	// framebuffer are never rendered into or read.
 	//
-	// The 36 real per-face framebuffers (one per torch per cube face) are
-	// built manually in createCubeShadowMaps() against
-	// RPShadowCubeCompat.renderPass, because they attach single-layer views
-	// into a 6-layer cube image -- something FrameBufferAttachment has no
-	// support for (it always creates a plain VK_IMAGE_VIEW_TYPE_2D, 1 layer).
+	// Those per-face framebuffers (one per torch per cube face) are built by
+	// hand in createCubeShadowMaps(), because they attach single-layer views
+	// into a 6-layer cube image -- which FrameBufferAttachment cannot do.
 	RenderPass RPShadowCubeCompat;
 	Pipeline PShadowCube;
 	CubeShadowMap torchCube[NUM_SHADOW_CUBES];
@@ -359,14 +342,10 @@ class Castlescape : public BaseProject {
 	// hand-roll vkCreateSampler.
 	TextureSampler cubeShadowSampler;
 
-	// set 1 for the cube shadow CAPTURE pass (PShadowCube) -- one uniform
-	// buffer per torch cube slot, holding that torch's 6 current face
-	// view-projection matrices plus its world position. A DescriptorSet
-	// member of its own, same reasoning as DSglobal (not per scene
-	// instance), created/destroyed alongside it in
-	// pipelinesAndDescriptorSetsInit()/Cleanup(). See ShadowCube.vert's
-	// header for why this has to be a uniform buffer, re-mapped every frame,
-	// rather than the push constant it replaced.
+	// set 1 for the cube shadow CAPTURE pass (PShadowCube) -- one uniform buffer
+	// per torch cube slot, holding that torch's 6 current face view-projection
+	// matrices plus its world position. A DescriptorSet member of its own, same
+	// reasoning as DSglobal: it is per slot, not per scene instance.
 	DescriptorSetLayout DSLshadowCubeCapture;
 	DescriptorSet DSshadowCube[NUM_SHADOW_CUBES];
 
@@ -374,14 +353,10 @@ class Castlescape : public BaseProject {
 	// matrices) plus one sampler binding per shadow map (2D then cube), read
 	// by CookTorrance.frag's shadowFactor(). DSLlocal/DSLglobal stay set 1/0.
 	//
-	// No DescriptorSet member of its own: unlike DSglobal, this one goes
-	// through Scene's ordinary per-instance machinery instead (P is given
-	// this as a third layout below, so every CookTorrance instance gets its
-	// own copy, same as its DSLlocal one). That means
-	// NUM_SHADOW_MAPS_2D+NUM_SHADOW_CUBES+1 redundant, identical descriptor
-	// sets per instance -- wasteful, but cheap at this instance count, and it
-	// avoids hand-rolling a THIRD way to bind a descriptor set alongside
-	// Scene's existing one.
+	// No DescriptorSet member of its own: this one rides Scene's ordinary
+	// per-instance machinery, so every CookTorrance instance gets an identical,
+	// redundant copy. Wasteful but cheap at this instance count, and it avoids
+	// hand-rolling a THIRD way to bind a descriptor set.
 	DescriptorSetLayout DSLshadowSample;
 	// View-projection matrix each 2D shadow pass rendered with, index-matched
 	// to LightData::shadowIndex for a direct/spot light. Computed once in
@@ -2459,7 +2434,7 @@ class Castlescape : public BaseProject {
 	// coordinate -- same idea as the torch's flame envelope, just applied to
 	// world position instead of brightness.
 	//
-	// Drawn with the "Spectral" technique (Pspectral / shaders/Spectral.frag),
+	// Drawn with the "Spectral" technique (Pspectral / shaders/spectral/Spectral.frag),
 	// NOT with the CookTorrance one every other prop uses. It used to be the
 	// latter, which bought it shadows in the sun's 2D map and the torches' cube
 	// maps for free -- until the sun was removed (88e019e) and the cube
@@ -2656,6 +2631,19 @@ class Castlescape : public BaseProject {
 	// test would need a radius big enough to be unfair horizontally.
 	static constexpr float GHOST_CATCH_RADIUS = 0.85f;
 	static constexpr float GHOST_CATCH_VERTICAL = 2.5f;
+
+	// THE SPECTRAL VEIL, the screen half of the ghost fade in
+	// include/custom/SpectralFade.glsl. Walking through a ghost is a thing the
+	// player does -- the catch above only fires while they are hunting -- and a
+	// ghost that simply disappears when you reach it says it was never a body.
+	// So Composite.frag washes the frame cold instead, and these numbers MUST
+	// match SPECTRAL_INSIDE_* in that file: a gap between the two ramps is a
+	// moment with no ghost and no wash.
+	static constexpr float SPECTRAL_VEIL_OUTER = 2.00f;
+	static constexpr float SPECTRAL_VEIL_INNER = 1.05f;
+	// Margin above and below the model's Y bounds (ghostBodyBottom/Top), so the
+	// bob doesn't blink the wash on and off from the edge of its reach.
+	static constexpr float SPECTRAL_VEIL_FADE_Y = 0.60f;
 	// Breadcrumb spacing, and the radius within which a new breadcrumb counts
 	// as revisiting an old one (and prunes the loop between them). The prune
 	// radius has to be comfortably larger than the spacing, or consecutive
@@ -3375,8 +3363,8 @@ class Castlescape : public BaseProject {
 		// The last array, is a vector of pointer to the layouts of the sets that will
 		// be used in this pipeline. The first element will be set 0, and so on..
 
-		P.init(this, &VD, "shaders/PosNormUV.vert.spv",
-						  "shaders/CookTorrance.frag.spv",
+		P.init(this, &VD, "shaders/scene/PosNormUV.vert.spv",
+						  "shaders/scene/CookTorrance.frag.spv",
 						  {&DSLglobal, &DSLlocal, &DSLshadowSample});
 
 		// The ghosts. Two sets, not three: Spectral.frag samples no shadow map
@@ -3384,8 +3372,8 @@ class Castlescape : public BaseProject {
 		// layout entirely rather than bound and ignored. updateUniformBuffer()
 		// already keys the shadow-set mapping off inst.NDs[0] >= 3, so the
 		// shorter layout needs no special case there.
-		Pspectral.init(this, &VD, "shaders/PosNormUV.vert.spv",
-							  "shaders/Spectral.frag.spv",
+		Pspectral.init(this, &VD, "shaders/scene/PosNormUV.vert.spv",
+							  "shaders/spectral/Spectral.frag.spv",
 							  {&DSLglobal, &DSLlocal});
 		// Alpha blending: srcAlpha * src + (1 - srcAlpha) * dst, which is what
 		// Starter.hpp's transparent path sets up. This is the flag the whole
@@ -3416,8 +3404,8 @@ class Castlescape : public BaseProject {
 		// SpectralDepth.frag for what it is for. Transparency on for the blend,
 		// which is how it avoids writing colour: it emits alpha 0, so
 		// srcAlpha * src + (1 - srcAlpha) * dst returns dst.
-		PspectralDepth.init(this, &VD, "shaders/PosNormUV.vert.spv",
-								   "shaders/SpectralDepth.frag.spv",
+		PspectralDepth.init(this, &VD, "shaders/scene/PosNormUV.vert.spv",
+								   "shaders/spectral/SpectralDepth.frag.spv",
 								   {&DSLglobal, &DSLlocal});
 		PspectralDepth.setTransparency(true);
 
@@ -3450,13 +3438,13 @@ class Castlescape : public BaseProject {
 
 		// All four share Post.vert, which is nothing but a pass-through of the
 		// quad's own corners; only the fragment stage differs.
-		Pbright.init(this, &VDpost, "shaders/Post.vert.spv", "shaders/BloomBright.frag.spv",
+		Pbright.init(this, &VDpost, "shaders/post/Post.vert.spv", "shaders/post/BloomBright.frag.spv",
 					 {&DSLpost1});
-		PblurH.init(this, &VDpost, "shaders/Post.vert.spv", "shaders/BloomBlur.frag.spv",
+		PblurH.init(this, &VDpost, "shaders/post/Post.vert.spv", "shaders/post/BloomBlur.frag.spv",
 					{&DSLpost1});
-		PblurV.init(this, &VDpost, "shaders/Post.vert.spv", "shaders/BloomBlur.frag.spv",
+		PblurV.init(this, &VDpost, "shaders/post/Post.vert.spv", "shaders/post/BloomBlur.frag.spv",
 					{&DSLpost1});
-		Pcomposite.init(this, &VDpost, "shaders/Post.vert.spv", "shaders/Composite.frag.spv",
+		Pcomposite.init(this, &VDpost, "shaders/post/Post.vert.spv", "shaders/post/Composite.frag.spv",
 						{&DSLpost2});
 		// A screen-filling quad has no meaningful facing and nothing to depth
 		// test against, so culling it is one more way to end up with a black
@@ -3488,8 +3476,8 @@ class Castlescape : public BaseProject {
 		shadowPushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 		shadowPushConstant.offset = 0;
 		shadowPushConstant.size = sizeof(glm::mat4);
-		PShadow.init(this, &VD, "shaders/Shadow.vert.spv",
-								"shaders/Shadow.frag.spv",
+		PShadow.init(this, &VD, "shaders/shadow/Shadow.vert.spv",
+								"shaders/shadow/Shadow.frag.spv",
 								{&DSLlocal}, {shadowPushConstant});
 		// Created against RPShadow2D[0], but usable with all of them: they share
 		// the identical AT_DEPTH_ONLY attachment layout, and Vulkan only requires
@@ -3516,8 +3504,8 @@ class Castlescape : public BaseProject {
 		shadowCubeFacePushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 		shadowCubeFacePushConstant.offset = 0;
 		shadowCubeFacePushConstant.size = sizeof(ShadowCubeFacePushConstant);
-		PShadowCube.init(this, &VD, "shaders/ShadowCube.vert.spv",
-								"shaders/ShadowCube.frag.spv",
+		PShadowCube.init(this, &VD, "shaders/shadow/ShadowCube.vert.spv",
+								"shaders/shadow/ShadowCube.frag.spv",
 								{&DSLlocal, &DSLshadowCubeCapture}, {shadowCubeFacePushConstant});
 		// FRONT faces culled, so each occluder records the side turned AWAY
 		// from the torch. This is what lets the depth slack in
@@ -6388,6 +6376,40 @@ class Castlescape : public BaseProject {
 			// the frame is already blowing out by the time the white arrives
 			// rather than being painted over while it is still readable.
 			post.escapeFlash = glm::smoothstep(0.45f, 1.0f, escapeFlash);
+
+			// The spectral veil's ramp -- see SPECTRAL_VEIL_OUTER. Here rather
+			// than in the ghost loop because that loop runs on the game clock:
+			// pausing inside a ghost would freeze the wash while the camera
+			// kept moving. max() over the ghosts, not a sum; two ghosts on the
+			// same square is still one player inside a ghost. Reads the drawn
+			// matrix so the bob counts, which at this range is the difference
+			// between being inside the body and under it.
+			{
+				float veil = 0.0f;
+				for(const Ghost &g : ghosts) {
+					if(g.inst == nullptr) continue;
+					const glm::vec3 gp = glm::vec3(g.inst->Wm[3]);
+
+					// Vertical first: one subtraction rejects most ghosts, and
+					// the horizontal test costs a square root.
+					const float dy = eyePos.y - gp.y;
+					const float below = ghostBodyBottom - SPECTRAL_VEIL_FADE_Y;
+					const float above = ghostBodyTop + SPECTRAL_VEIL_FADE_Y;
+					if(dy <= below || dy >= above) continue;
+					const float vy = glm::smoothstep(below, ghostBodyBottom, dy) *
+									 (1.0f - glm::smoothstep(ghostBodyTop, above, dy));
+
+					const float dx = eyePos.x - gp.x;
+					const float dz = eyePos.z - gp.z;
+					const float horiz = std::sqrt(dx * dx + dz * dz);
+					const float vxz = 1.0f - glm::smoothstep(SPECTRAL_VEIL_INNER,
+															 SPECTRAL_VEIL_OUTER, horiz);
+
+					veil = std::max(veil, vxz * vy);
+				}
+				post.spectralVeil = veil;
+			}
+
 			post.debugFlags = gubo.debugFlags;
 
 			// Bright pass: reads the full-resolution scene and writes the

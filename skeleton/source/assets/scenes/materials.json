@@ -288,7 +288,7 @@
 		// That last sentence used to be an excuse, because the ghosts were not
 		// translucent -- they were opaque grey props, and an opaque prop with no
 		// shadow is a bug you can see. They have since been moved to the
-		// "Spectral" technique (shaders/Spectral.frag), which draws them
+		// "Spectral" technique (shaders/spectral/Spectral.frag), which draws them
 		// alpha-blended, unlit and emissive. Now the flag below and the way they
 		// look agree with each other: you can see the wall through a ghost, so
 		// there is nothing there to stop a torch.

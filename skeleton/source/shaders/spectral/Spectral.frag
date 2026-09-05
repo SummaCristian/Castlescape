@@ -66,6 +66,11 @@
 
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
+#extension GL_GOOGLE_include_directive : require
+
+// The camera-proximity fade, shared with SpectralDepth.frag. Found via
+// glslc -I; see the file for what it does and why it is not per-fragment only.
+#include "custom/SpectralFade.glsl"
 
 layout(location = 0) in vec3 fragPos;
 layout(location = 1) in vec3 fragNorm;
@@ -244,6 +249,11 @@ void main() {
     float texLum = dot(texture(albedoMap, fragUV).rgb, vec3(0.299, 0.587, 0.114));
     float faceMask = 1.0 - smoothstep(0.16, 0.46, texLum);
     alpha = mix(alpha, max(alpha, 0.94), faceMask);
+
+    // LAST of the alpha terms: the face mask above forces its marks to 0.94
+    // with a max(), so anything before it would be thrown away on exactly the
+    // eyes and mouth.
+    alpha *= spectralFade(fragPos, gubo.eyePos, ubo.mMat[3].xyz);
 
     alpha = clamp(alpha, 0.0, 1.0);
     if(alpha < ALPHA_CUTOFF) {
