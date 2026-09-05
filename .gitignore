@@ -41,6 +41,9 @@ graphify-out/*
 !graphify-out/cache/
 graphify-out/cache/*
 !graphify-out/cache/*.json
+# ...except the incremental-scan index: it is keyed by absolute path and mtime of
+# this machine, so it is neither shareable nor reusable by a teammate.
+graphify-out/cache/stat-index.json
 
 # Live workspace behind graphify-lectures/lectures/: the text extracted from the
 # professor's slide PDFs, plus the graphify working directory that queries it.

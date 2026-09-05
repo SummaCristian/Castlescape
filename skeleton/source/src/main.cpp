@@ -1375,6 +1375,199 @@ class Skeleton26ReplaceName : public BaseProject {
 			 * glm::rotate(glm::mat4(1.0f), glm::radians(tiltDeg.y), glm::vec3(0.0f, 1.0f, 0.0f))
 			 * glm::rotate(glm::mat4(1.0f), glm::radians(tiltDeg.z + bobRollDeg), glm::vec3(0.0f, 0.0f, 1.0f));
 	}
+
+	// ---- Held-item wall tuck -------------------------------------------------
+	//
+	// Both hands are welded rigidly to the camera (camWm, built in GameLogic),
+	// and both hold their item roughly a unit out from the eye -- far past the
+	// PLAYER_RADIUS of 0.3 the body itself is pushed out of walls by. Walk up to
+	// a wall and the far end of whatever you're carrying is simply inside it.
+	//
+	// For the key that is merely ugly. For the torch it is a lighting bug: its
+	// point light AND its cube shadow both sit on the flame anchor at the torch's
+	// head (see updateHandTorchShadow), so a head that crosses a wall takes the
+	// light through with it. The wall in front of you loses its N.L and goes
+	// black at the exact moment you are closest to the flame, and the room on the
+	// far side gets lit through solid geometry. The stock FPS fix -- draw the
+	// viewmodel in a second pass over cleared depth -- would repair the pixels
+	// and none of that, because the light doesn't live in the depth buffer. The
+	// item itself has to move.
+	//
+	// It moves the way a person moves it: not yanked back into the face, which
+	// drags the light onto the eye and flattens everything ahead of it, but
+	// lowered and turned across the body, with only a modest pull. Most of the
+	// tuck is rotation, and rotation costs the light almost no travel.
+
+	// The tuck is driven GEOMETRICALLY, not by blending toward an authored
+	// "tucked" pose. A fixed pose was the first attempt and it doesn't hold up:
+	// whatever pull you bake into it is the same pull whether the wall is at
+	// arm's length or at the wrist, so anything closer than that one distance
+	// still ends up inside. What the probe measures is how far out the item may
+	// reach RIGHT NOW, and the pose is then built to reach exactly that far --
+	// so the fix scales with the obstacle instead of hoping one number covers
+	// every case. Looking down at a table is the case that proves it: the
+	// surface is barely half an arm away, far closer than any pose constant
+	// tuned against a wall would ever have retracted.
+	//
+	// Everything below is expressed as a REACH FRACTION: 1 fully extended, down
+	// to HAND_TUCK_MIN_REACH pressed in against the chest.
+
+	// How far the item's own body reaches past the grip point, in camera-space
+	// units, so the probe stops at the item's leading edge rather than at the
+	// hand. Rough on purpose -- HAND_TUCK_SKIN below dwarfs the error.
+	static constexpr float HAND_TUCK_TORCH_PAD = 0.30f;
+	static constexpr float HAND_TUCK_KEY_PAD = 0.15f;
+
+	// Colliders are grown by this much for the probe (and ONLY for the probe --
+	// the body still walks into the real boxes). Two jobs, one constant:
+	//
+	//  - The collision geometry is a deliberately coarse shell. Walls are thin
+	//    authored plates (see colliders.json: 1.242 through the wall and nothing
+	//    else), so every jamb, pilaster and buttress that stands proud of that
+	//    plate is invisible to any probe that trusts the boxes -- the exact
+	//    "wall pieces with no collider" the item was still entering. The skin
+	//    stops the item at a stand-off from the collision plane instead of at
+	//    it, which covers protrusions up to roughly this deep without anyone
+	//    having to author a box per moulding.
+	//  - It doubles as the safety margin for the drop and rotation the pose adds
+	//    AFTER the radial retraction, which push the item slightly off the line
+	//    the probe measured along.
+	//
+	// It cannot simply be made large: it is a stand-off from every surface, and
+	// past a point the item folds away in rooms that are merely narrow. This is
+	// the number to raise if something still clips, and to lower if the item
+	// tucks in open space.
+	static constexpr float HAND_TUCK_SKIN = 0.30f;
+
+	// The reach the item is never retracted past, even pressed into a corner.
+	// This is a LIGHTING limit, not a comfort one: the torch's point light rides
+	// on its head, and a light at the eye lights every surface head-on, flattens
+	// all the shading and blows out whatever is closest. Better a few visible
+	// centimetres of a torch in a wall than the whole room going flat.
+	//
+	// It doubles as the start of the probe. Everything nearer than this is taken
+	// as clear without testing, which is not a shortcut but a correction: the
+	// skin above inflates walls by 0.30, PLAYER_RADIUS only holds the body 0.30
+	// off them, so a sample right at the eye reads "blocked" whenever you brush
+	// a wall -- and the item would fold up every time you squeezed past one,
+	// facing anywhere. The body's own clearance already guarantees this stretch.
+	static constexpr float HAND_TUCK_MIN_REACH = 0.35f;
+
+	// Samples across the probed stretch. Ten over ~1 unit resolves to ~0.1,
+	// which is the granularity the retraction snaps to -- fine enough that the
+	// smoothing below hides the steps completely.
+	static constexpr int HAND_TUCK_SAMPLES = 10;
+
+	// Tuck in fast, come back out slow. One shared time constant can't do both:
+	// slow enough not to strobe the torchlight on a collider boundary is slow
+	// enough to let the item dip into the wall when you walk at it, so the two
+	// directions get their own.
+	static constexpr float HAND_TUCK_TAU_IN = 0.05f;
+	static constexpr float HAND_TUCK_TAU_OUT = 0.18f;
+
+	// Retracting radially -- scaling the whole offset toward the eye -- shortens
+	// its Y along with everything else, so the item drifts UP toward the middle
+	// of the screen as it comes in, which reads like it is being raised to the
+	// face rather than tucked away. This puts it back down. It is sized to
+	// roughly cancel that lift at full retraction, not to be a motion of its own.
+	static constexpr float HAND_TUCK_DROP = 0.28f;
+	// Extra grip rotation on top of the item's own tilt: nose down (X) and swung
+	// across the body (Y). This is the part that sells the tuck as a gesture,
+	// and it is free -- rotating about the grip barely moves the torch's light
+	// at all, unlike any amount of translation. Signs are the same kind of guess
+	// HAND_KEY_TILT_DEG's are (they depend on which way each mesh's local axes
+	// run), so if an item rotates the wrong way on a render, negate the offending
+	// component rather than reworking the motion.
+	static constexpr glm::vec3 HAND_TUCK_TILT_DEG = glm::vec3(40.0f, 30.0f, 0.0f);
+
+	// Live reach fraction per hand, 1 (extended) down to HAND_TUCK_MIN_REACH,
+	// advanced by advanceReach() every frame in GameLogic. Two independent
+	// values, not one: the hands are on opposite sides of the eye and a wall to
+	// your right reaches the torch long before it reaches the key.
+	float handTorchReach = 1.0f;
+	float handKeyReach = 1.0f;
+
+	// ghostPointBlocked's test with a stand-off (see HAND_TUCK_SKIN). Separate
+	// rather than a defaulted argument on that one: it answers a sightline
+	// question where growing the world would be plainly wrong, and the two
+	// should not be able to drift into each other.
+	bool handPointBlocked(const glm::vec3 &p, float skin) const {
+		for(Collider *C : allColliders) {
+			AABBextents E = C->getExtents();
+			if(p.x < E.xMin - skin || p.x > E.xMax + skin) continue;
+			if(p.z < E.zMin - skin || p.z > E.zMax + skin) continue;
+			if(p.y < E.yMin - skin || p.y > E.yMax + skin) continue;
+			return true;
+		}
+		return false;
+	}
+
+	// How far out the item held at `camOffset` may reach this frame, as a
+	// fraction of its authored offset: 1 nothing in the way, HAND_TUCK_MIN_REACH
+	// something right at the hand.
+	//
+	// Marches outward from HAND_TUCK_MIN_REACH along the eye->item line and
+	// stops at the first solid sample; the last clear one is where the item's
+	// leading edge has to end up. Because the answer is a distance rather than a
+	// severity, the caller can place the item AT it and know it is out -- which
+	// is the whole difference from the fixed-pose version this replaced.
+	float handFreeReach(const glm::mat4 &camWm, const glm::vec3 &camOffset, float pad) const {
+		float reach = glm::length(camOffset);
+		if(reach < 1e-4f) {
+			return 1.0f;
+		}
+		// The grip point pushed out to the item's leading edge, still in camera
+		// space: same direction from the eye, `pad` further along it. Fractions
+		// below are of THIS, so 1 leaves the edge exactly where it was authored.
+		glm::vec3 tip = camOffset * ((reach + pad) / reach);
+
+		const float span = 1.0f - HAND_TUCK_MIN_REACH;
+		for(int i = 1; i <= HAND_TUCK_SAMPLES; i++) {
+			float t = HAND_TUCK_MIN_REACH + span * (float)i / (float)HAND_TUCK_SAMPLES;
+			if(handPointBlocked(glm::vec3(camWm * glm::vec4(tip * t, 1.0f)), HAND_TUCK_SKIN)) {
+				return HAND_TUCK_MIN_REACH + span * (float)(i - 1) / (float)HAND_TUCK_SAMPLES;
+			}
+		}
+		return 1.0f;
+	}
+
+	// One asymmetric smoothing step of a reach fraction toward `target`.
+	// Exponential like every other easing here (walkBobBlend, eyeStepOffset): it
+	// cannot overshoot, and it needs no "am I still tucking" state. Note the
+	// comparison is inverted against the tau names -- tucking IN means the reach
+	// going DOWN.
+	static void advanceReach(float &state, float target, float deltaT) {
+		float tau = (target < state) ? HAND_TUCK_TAU_IN : HAND_TUCK_TAU_OUT;
+		state += (target - state) * (1.0f - std::exp(-deltaT / tau));
+	}
+
+	// Builds the tucked pose for a reach fraction, in place, so callers keep
+	// composing the walk bob on top exactly as before -- the tuck moves the POSE
+	// the bob swings around, it doesn't fight it.
+	//
+	// The retraction is radial, along the same line handFreeReach measured, so
+	// the item lands exactly where that said it could. Everything after is the
+	// gesture: a drop to cancel the lift radial scaling causes, and rotation.
+	//
+	// Which way "inward" points is read off the offset's own sign rather than
+	// passed in: the torch is the right hand (+X) and the key the left (-X), and
+	// deriving it means neither hand carries a mirrored copy of these constants
+	// that could drift from the other.
+	static void applyTuck(float reachFrac, glm::vec3 &offset, glm::vec3 &tiltDeg) {
+		if(reachFrac >= 1.0f) {
+			return;
+		}
+		float inward = (offset.x >= 0.0f) ? -1.0f : 1.0f;
+		// How far into the tuck we are, 0..1, independent of where the floor on
+		// reach happens to sit -- so retuning HAND_TUCK_MIN_REACH doesn't
+		// silently rescale the drop and the rotation with it.
+		float tuck = (1.0f - reachFrac) / (1.0f - HAND_TUCK_MIN_REACH);
+
+		offset *= reachFrac;
+		offset.y -= HAND_TUCK_DROP * tuck;
+		tiltDeg.x += HAND_TUCK_TILT_DEG.x * tuck;
+		tiltDeg.y += inward * HAND_TUCK_TILT_DEG.y * tuck;
+	}
 	// Pick-up animation: the key doesn't snap into the hand, it rises into
 	// frame from below over KEY_RAISE_DURATION seconds. Purely a translation
 	// along camera-local Y added to HAND_KEY_OFFSET, so it composes with the
@@ -7611,6 +7804,38 @@ class Skeleton26ReplaceName : public BaseProject {
 			walkBobPhase += WALK_BOB_SPEED * (sprinting ? 1.4f : 1.0f) * deltaT;
 		}
 
+		// Wall tuck for both hands (see applyTuck and the block of constants
+		// around it). Resolved here rather than inside each hand's own block
+		// below for two reasons: both targets get probed against the same camWm
+		// on the same frame, and both factors have to advance on EVERY frame --
+		// including the ones where a hand is empty. Left un-advanced, a factor
+		// would stay pinned at whatever it read when the item left the hand, and
+		// the next pickup would appear already folded into a wall pose.
+		//
+		// No-clip is the one case with no sensible answer: with
+		// cheats.collisionEnabled off the player walks through walls deliberately,
+		// so there is nothing to rest an item against and both hands stay out.
+		{
+			bool tuckActive = cheats.collisionEnabled;
+
+			float torchTarget = 1.0f;
+			if(tuckActive && handTorchInst != nullptr && handTorchCollected && cheats.handTorchEnabled) {
+				torchTarget = handFreeReach(camWm, HAND_TORCH_OFFSET, HAND_TUCK_TORCH_PAD);
+			}
+			advanceReach(handTorchReach, torchTarget, deltaT);
+
+			// Whichever key is actually drawn in the left hand drives it: the
+			// held one, or -- while that animation runs -- the one sinking out
+			// of frame after a lock took it. One factor for both, since they are
+			// never in frame together and it is the same hand regardless.
+			int tuckKeyIdx = heldKeyIdx() >= 0 ? heldKeyIdx() : keyLowerIdx;
+			float keyTarget = 1.0f;
+			if(tuckActive && tuckKeyIdx >= 0) {
+				keyTarget = handFreeReach(camWm, pickups[tuckKeyIdx].handOffset, HAND_TUCK_KEY_PAD);
+			}
+			advanceReach(handKeyReach, keyTarget, deltaT);
+		}
+
 		// Held torch: sits at a fixed offset from the eye, in that camera-local space --
 		// but only once the player has picked it up (handTorchCollected). Before
 		// that it's left exactly where localInit captured it, lying on the floor
@@ -7633,10 +7858,23 @@ class Skeleton26ReplaceName : public BaseProject {
 			float bobVertical = sinf(walkBobPhase * 2.0f) * WALK_BOB_VERTICAL * walkBobBlend;
 			float bobRollDeg = bobLateral * 90.0f;
 
-			glm::mat4 grip = glm::rotate(glm::mat4(1.0f), glm::radians(HAND_TORCH_TILT_DEG.x), glm::vec3(1.0f, 0.0f, 0.0f))
-							* glm::rotate(glm::mat4(1.0f), glm::radians(HAND_TORCH_TILT_DEG.y), glm::vec3(0.0f, 1.0f, 0.0f))
-							* glm::rotate(glm::mat4(1.0f), glm::radians(HAND_TORCH_TILT_DEG.z + bobRollDeg), glm::vec3(0.0f, 0.0f, 1.0f));
-			glm::vec3 bobbedOffset = HAND_TORCH_OFFSET + glm::vec3(bobLateral, bobVertical, 0.0f);
+			// Wall tuck first, walk bob on top: the tuck decides the pose, the
+			// bob swings around whatever pose that is. Folding it into a copy of
+			// the constants (rather than into the finished matrix) is what lets
+			// the two compose without either one knowing about the other.
+			//
+			// This is also the whole fix for the held torch's light: the flame
+			// anchor rides on this very Wm, so pulling the model out of the wall
+			// pulls the point light and its shadow cube out with it. Nothing
+			// downstream in updateUniformBuffer needs to change.
+			glm::vec3 tuckedOffset = HAND_TORCH_OFFSET;
+			glm::vec3 tuckedTilt = HAND_TORCH_TILT_DEG;
+			applyTuck(handTorchReach, tuckedOffset, tuckedTilt);
+
+			// Was an inline copy of handGrip's three rotations; it is the same
+			// expression, and sharing it keeps the two hands tilting alike.
+			glm::mat4 grip = handGrip(tuckedTilt, bobRollDeg);
+			glm::vec3 bobbedOffset = tuckedOffset + glm::vec3(bobLateral, bobVertical, 0.0f);
 
 			handTorchInst->Wm = camWm
 				* glm::translate(glm::mat4(1.0f), bobbedOffset)
@@ -7667,7 +7905,17 @@ class Skeleton26ReplaceName : public BaseProject {
 			// Tilt and offset off the item itself, not off one pair of
 			// constants: the ring can hold a key and a book, and they are two
 			// different shapes carrying their origins in two different places.
-			glm::mat4 grip = handGrip(held.handTiltDeg, bobRollDeg);
+			// Same wall tuck the torch gets, on the item's OWN offset and tilt
+			// rather than on one pair of constants -- for the same reason the
+			// grip already reads them off the pickup: the ring can hold a key or
+			// a book, and they are different shapes in different hands' worth of
+			// space. applyTuck reads the offset's sign to work out which way
+			// "inward" is, so the left hand tucks toward the centre unaided.
+			glm::vec3 tuckedOffset = held.handOffset;
+			glm::vec3 tuckedTilt = held.handTiltDeg;
+			applyTuck(handKeyReach, tuckedOffset, tuckedTilt);
+
+			glm::mat4 grip = handGrip(tuckedTilt, bobRollDeg);
 
 			// Pick-up rise: only the Y offset moves, so the grip and the bob
 			// above are untouched and the key simply slides up into the pose
@@ -7680,7 +7928,7 @@ class Skeleton26ReplaceName : public BaseProject {
 			float eased = 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t);
 			float raiseY = -KEY_RAISE_DROP * (1.0f - eased);
 
-			glm::vec3 bobbedOffset = held.handOffset + glm::vec3(bobLateral, bobVertical + raiseY, 0.0f);
+			glm::vec3 bobbedOffset = tuckedOffset + glm::vec3(bobLateral, bobVertical + raiseY, 0.0f);
 
 			held.inst->Wm = camWm
 				* glm::translate(glm::mat4(1.0f), bobbedOffset)
@@ -7708,8 +7956,18 @@ class Skeleton26ReplaceName : public BaseProject {
 			float bobRollDeg = bobLateral * 90.0f;
 
 			Pickup &sinking = pickups[keyLowerIdx];
-			glm::mat4 grip = handGrip(sinking.handTiltDeg, bobRollDeg);
-			glm::vec3 bobbedOffset = sinking.handOffset + glm::vec3(bobLateral, bobVertical + lowerY, 0.0f);
+
+			// Tucked too, off the same handKeyReach the held key uses (the block
+			// above feeds it from whichever key is in frame). Without this the
+			// key would snap back out to the extended pose on the single frame
+			// the lock takes it -- straight through the door it was just used
+			// on, which is by definition the wall you are standing against.
+			glm::vec3 tuckedOffset = sinking.handOffset;
+			glm::vec3 tuckedTilt = sinking.handTiltDeg;
+			applyTuck(handKeyReach, tuckedOffset, tuckedTilt);
+
+			glm::mat4 grip = handGrip(tuckedTilt, bobRollDeg);
+			glm::vec3 bobbedOffset = tuckedOffset + glm::vec3(bobLateral, bobVertical + lowerY, 0.0f);
 
 			sinking.inst->Wm = camWm
 				* glm::translate(glm::mat4(1.0f), bobbedOffset)
