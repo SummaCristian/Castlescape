@@ -193,7 +193,7 @@ void Flame::init(BaseProject *_BP, DescriptorSetLayout *_DSLglobal, DescriptorSe
 	BP->DPSZs.uniformBlocksInPool += maxInstances;
 	BP->DPSZs.setsInPool += maxInstances;
 
-	P.init(BP, &VD, "shaders/Flame.vert.spv", "shaders/Flame.frag.spv",
+	P.init(BP, &VD, "shaders/fire/Flame.vert.spv", "shaders/fire/Flame.frag.spv",
 					{_DSLglobal, &DSLflame});
 	// The quads face the camera, so their winding flips as it swings around:
 	// neither face may be culled.
@@ -203,7 +203,7 @@ void Flame::init(BaseProject *_BP, DescriptorSetLayout *_DSLglobal, DescriptorSe
 	// second one drawn would silently fail the depth test.
 	P.setCompareOp(VK_COMPARE_OP_LESS_OR_EQUAL);
 
-	Pspark.init(BP, &VDspark, "shaders/Spark.vert.spv", "shaders/Spark.frag.spv",
+	Pspark.init(BP, &VDspark, "shaders/fire/Spark.vert.spv", "shaders/fire/Spark.frag.spv",
 					{_DSLglobal, &DSLflame});
 	Pspark.setCullMode(VK_CULL_MODE_NONE);
 	Pspark.setTransparency(true);

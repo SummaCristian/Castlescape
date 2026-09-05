@@ -43,8 +43,9 @@
 //   gameplay.json   the hunt cycle's timings, the ghosts' patrols, and where
 //                   the run is won (see custom/HuntCycle.hpp)
 //
-// The shaders are in source/shaders/. PosNormUV.vert and CookTorrance.frag are
-// the pair that draws the scene; the other two draw the HUD.
+// The shaders are in source/shaders/, one folder per job: scene/ (PosNormUV.vert
+// and CookTorrance.frag, the pair that draws the scene), spectral/ (the ghosts),
+// shadow/, post/, fire/, exit/, ui/, debug/, and framework/ for the Starter's own.
 //
 // notes.md at the repo root explains the reasoning behind all of it.
 
@@ -299,7 +300,7 @@ class Castlescape : public BaseProject {
 	// blend (see ubo.F0 there).
 	Pipeline Pspectral;
 
-	// The ghosts' DEPTH PREPASS (shaders/SpectralDepth.frag), drawn over the
+	// The ghosts' DEPTH PREPASS (shaders/spectral/SpectralDepth.frag), drawn over the
 	// same instances immediately before Pspectral is. It writes the depth of
 	// the nearest ghost surface and returns the colour attachment untouched, so
 	// that the colour pass behind it can reject the ghost's own interior --
@@ -2377,7 +2378,7 @@ class Castlescape : public BaseProject {
 	// coordinate -- same idea as the torch's flame envelope, just applied to
 	// world position instead of brightness.
 	//
-	// Drawn with the "Spectral" technique (Pspectral / shaders/Spectral.frag),
+	// Drawn with the "Spectral" technique (Pspectral / shaders/spectral/Spectral.frag),
 	// NOT with the CookTorrance one every other prop uses. It used to be the
 	// latter, which bought it shadows in the sun's 2D map and the torches' cube
 	// maps for free -- until the sun was removed (88e019e) and the cube
@@ -3261,8 +3262,8 @@ class Castlescape : public BaseProject {
 		// The last array, is a vector of pointer to the layouts of the sets that will
 		// be used in this pipeline. The first element will be set 0, and so on..
 
-		P.init(this, &VD, "shaders/PosNormUV.vert.spv",
-						  "shaders/CookTorrance.frag.spv",
+		P.init(this, &VD, "shaders/scene/PosNormUV.vert.spv",
+						  "shaders/scene/CookTorrance.frag.spv",
 						  {&DSLglobal, &DSLlocal, &DSLshadowSample});
 
 		// The ghosts. Two sets, not three: Spectral.frag samples no shadow map
@@ -3270,8 +3271,8 @@ class Castlescape : public BaseProject {
 		// layout entirely rather than bound and ignored. updateUniformBuffer()
 		// already keys the shadow-set mapping off inst.NDs[0] >= 3, so the
 		// shorter layout needs no special case there.
-		Pspectral.init(this, &VD, "shaders/PosNormUV.vert.spv",
-							  "shaders/Spectral.frag.spv",
+		Pspectral.init(this, &VD, "shaders/scene/PosNormUV.vert.spv",
+							  "shaders/spectral/Spectral.frag.spv",
 							  {&DSLglobal, &DSLlocal});
 		// Alpha blending: srcAlpha * src + (1 - srcAlpha) * dst, which is what
 		// Starter.hpp's transparent path sets up. This is the flag the whole
@@ -3302,8 +3303,8 @@ class Castlescape : public BaseProject {
 		// SpectralDepth.frag for what it is for. Transparency on for the blend,
 		// which is how it avoids writing colour: it emits alpha 0, so
 		// srcAlpha * src + (1 - srcAlpha) * dst returns dst.
-		PspectralDepth.init(this, &VD, "shaders/PosNormUV.vert.spv",
-								   "shaders/SpectralDepth.frag.spv",
+		PspectralDepth.init(this, &VD, "shaders/scene/PosNormUV.vert.spv",
+								   "shaders/spectral/SpectralDepth.frag.spv",
 								   {&DSLglobal, &DSLlocal});
 		PspectralDepth.setTransparency(true);
 
@@ -3336,13 +3337,13 @@ class Castlescape : public BaseProject {
 
 		// All four share Post.vert, which is nothing but a pass-through of the
 		// quad's own corners; only the fragment stage differs.
-		Pbright.init(this, &VDpost, "shaders/Post.vert.spv", "shaders/BloomBright.frag.spv",
+		Pbright.init(this, &VDpost, "shaders/post/Post.vert.spv", "shaders/post/BloomBright.frag.spv",
 					 {&DSLpost1});
-		PblurH.init(this, &VDpost, "shaders/Post.vert.spv", "shaders/BloomBlur.frag.spv",
+		PblurH.init(this, &VDpost, "shaders/post/Post.vert.spv", "shaders/post/BloomBlur.frag.spv",
 					{&DSLpost1});
-		PblurV.init(this, &VDpost, "shaders/Post.vert.spv", "shaders/BloomBlur.frag.spv",
+		PblurV.init(this, &VDpost, "shaders/post/Post.vert.spv", "shaders/post/BloomBlur.frag.spv",
 					{&DSLpost1});
-		Pcomposite.init(this, &VDpost, "shaders/Post.vert.spv", "shaders/Composite.frag.spv",
+		Pcomposite.init(this, &VDpost, "shaders/post/Post.vert.spv", "shaders/post/Composite.frag.spv",
 						{&DSLpost2});
 		// A screen-filling quad has no meaningful facing and nothing to depth
 		// test against, so culling it is one more way to end up with a black
@@ -3374,8 +3375,8 @@ class Castlescape : public BaseProject {
 		shadowPushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 		shadowPushConstant.offset = 0;
 		shadowPushConstant.size = sizeof(glm::mat4);
-		PShadow.init(this, &VD, "shaders/Shadow.vert.spv",
-								"shaders/Shadow.frag.spv",
+		PShadow.init(this, &VD, "shaders/shadow/Shadow.vert.spv",
+								"shaders/shadow/Shadow.frag.spv",
 								{&DSLlocal}, {shadowPushConstant});
 		// Created against RPShadow2D[0], but usable with all of them: they share
 		// the identical AT_DEPTH_ONLY attachment layout, and Vulkan only requires
@@ -3402,8 +3403,8 @@ class Castlescape : public BaseProject {
 		shadowCubeFacePushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 		shadowCubeFacePushConstant.offset = 0;
 		shadowCubeFacePushConstant.size = sizeof(ShadowCubeFacePushConstant);
-		PShadowCube.init(this, &VD, "shaders/ShadowCube.vert.spv",
-								"shaders/ShadowCube.frag.spv",
+		PShadowCube.init(this, &VD, "shaders/shadow/ShadowCube.vert.spv",
+								"shaders/shadow/ShadowCube.frag.spv",
 								{&DSLlocal, &DSLshadowCubeCapture}, {shadowCubeFacePushConstant});
 		// FRONT faces culled, so each occluder records the side turned AWAY
 		// from the torch. This is what lets the depth slack in

@@ -17,7 +17,7 @@ Dove sta il codice, tutto sotto `skeleton/source/`:
 - `src/Libs.cpp` — definisce le macro `*_IMPLEMENTATION` una volta sola (i moduli in `custom/` sono header-only: dichiarazione e implementazione nello stesso file, e serve un solo punto in cui l'implementazione viene davvero compilata).
 - `include/modules/` — il framework del professore (`Starter.hpp`, `Scene.hpp`, `TextMaker.hpp`, `Animations.hpp`, `Colliders.hpp`). Non lo tocchiamo: il prof valuta usando la sua copia, quindi ogni nostra modifica lì sparirebbe.
 - `include/custom/` — i moduli scritti da noi.
-- `shaders/` — codice GLSL, compilato in SPIR-V da CMake al momento della build.
+- `shaders/` — codice GLSL, compilato in SPIR-V da CMake al momento della build. Una cartella per lavoro: `scene/` (la coppia che disegna la scena), `spectral/` (i fantasmi), `shadow/`, `post/` (bloom e composite), `fire/` (fiamme e scintille), `exit/` (il bagliore dell'uscita), `ui/`, `debug/`, `framework/` (gli shader del framework del prof).
 - `assets/scenes/*.json` — i dati: scena, materiali, luci, fiamme, collider, gameplay.
 
 ---

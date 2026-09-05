@@ -178,7 +178,7 @@ void ExitGlow::init(BaseProject *_BP, int count) {
 	BP->DPSZs.uniformBlocksInPool += instanceCount;
 	BP->DPSZs.setsInPool += instanceCount;
 
-	P.init(BP, &VD, "shaders/ExitGlow.vert.spv", "shaders/ExitGlow.frag.spv",
+	P.init(BP, &VD, "shaders/exit/ExitGlow.vert.spv", "shaders/exit/ExitGlow.frag.spv",
 					{&DSLglow});
 	// The door swings out past the plane of this quad, so the player can end
 	// up looking at its back face through the open doorway. Culling nothing
