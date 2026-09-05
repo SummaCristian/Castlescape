@@ -146,31 +146,20 @@ struct GlobalUniformBufferObject {
 	LightData lights[MAX_LIGHTS];
 };
 
-// Set 2: the shadow-sampling data, bound once and read by CookTorrance.frag.
-// One matrix per 2D-shadow light (NUM_SHADOW_MAPS_2D, LightConstants.glsl --
-// just the sun today), the SAME view-projection its own shadow pass rendered
-// with (see computeShadowMatrices()). The torches don't need a matrix here
-// any more: a cube map is sampled by direction, not by transforming into its
-// clip space, so their light-space math never leaves computeShadowMatrices()/
-// populateCommandBuffer(). Static for the life of the program, since the sun
-// doesn't move, but still re-mapped every frame in updateUniformBuffer()
-// rather than once at startup: map() writes into a per-swapchain-image
-// buffer slot, and mapping only slot 0 would leave the others holding
-// whatever was there at allocation time.
+// Set 2: the shadow-sampling data, read by CookTorrance.frag. One matrix per
+// 2D-shadow light (NUM_SHADOW_MAPS_2D -- just the sun today), the SAME
+// view-projection its own shadow pass rendered with (computeShadowMatrices()).
+// Torches need no matrix here: a cube map is sampled by direction, not by
+// transforming into its clip space.
 struct ShadowUniformBufferObject {
 	alignas(16) glm::mat4 lightSpace[NUM_SHADOW_MAPS_2D];
 };
 
 // One torch's cube shadow CAPTURE data (ShadowCube.vert/frag, PShadowCube),
-// set 1 there. Field-for-field the same layout those two shader stages
-// declare. A uniform buffer, not a push constant, and re-mapped every frame
-// in updateUniformBuffer() for every torch, including the six static ones --
-// see ShadowCube.vert's header for why a push constant can't do this job:
-// the "main" command buffer is recorded once per swapchain image and reused
-// every frame after that (Starter.hpp's submitCommandBuffer()/
-// updateCommandBuffers()), so a push constant's value would be frozen at
-// whatever it was the moment that recording happened and never updated
-// again -- fatal for the held torch, which moves every frame.
+// set 1 there. A uniform buffer and not a push constant, re-mapped every frame
+// for every torch including the static ones: the main command buffer is
+// recorded once per swapchain image and reused, so a push constant would stay
+// frozen at recording time -- fatal for the held torch, which moves each frame.
 struct ShadowCubeUniformBufferObject {
 	alignas(16) glm::mat4 lightViewProj[6];
 	alignas(16) glm::vec4 lightPos;	// xyz used, w is padding
@@ -193,13 +182,12 @@ struct Vertex {
 };
 
 // Shared by all four post-processing passes (bright pass, the two blur
-// directions, composite), matching PostUniformBufferObject in BloomBright.frag
-// / BloomBlur.frag / Composite.frag field for field. Each pass gets its own
-// copy with the fields it cares about filled in; the rest are simply unread,
-// which is cheaper than maintaining four nearly identical blocks.
+// directions, composite). Each gets its own copy with the fields it cares about
+// filled in and the rest simply unread, which is cheaper than maintaining four
+// nearly identical blocks.
 //
-// No alignas() needed anywhere here: two vec2s then six 4-byte scalars is
-// already exactly what std140 lays out, with nothing to pad.
+// No alignas() needed: two vec2s then six 4-byte scalars is already exactly
+// what std140 lays out, with nothing to pad.
 struct PostUniformBufferObject {
 	glm::vec2 texelSize;	// 1/width, 1/height of the SOURCE texture
 	glm::vec2 blurDir;		// (1,0) or (0,1); read by BloomBlur.frag only
@@ -300,19 +288,15 @@ class Castlescape : public BaseProject {
 	// blend (see ubo.F0 there).
 	Pipeline Pspectral;
 
-	// The ghosts' DEPTH PREPASS (shaders/spectral/SpectralDepth.frag), drawn over the
-	// same instances immediately before Pspectral is. It writes the depth of
-	// the nearest ghost surface and returns the colour attachment untouched, so
-	// that the colour pass behind it can reject the ghost's own interior --
-	// the feet inside the robe -- instead of blending it under the body. See
-	// that shader's header for the mechanism and populateCommandBuffer() for
-	// why THIS one is the pipeline registered with the technique while
-	// Pspectral is the one issued by hand.
+	// The ghosts' DEPTH PREPASS (SpectralDepth.frag), drawn over the same
+	// instances immediately before Pspectral. It writes the depth of the nearest
+	// ghost surface and leaves the colour attachment untouched, so the colour
+	// pass can reject the ghost's own interior -- the feet inside the robe --
+	// instead of blending it under the body.
 	//
-	// Same DSLs as Pspectral (nothing here reads them, but the layout has to
-	// match the sets Scene binds), same back-face culling, and the default
-	// VK_COMPARE_OP_LESS rather than Pspectral's LESS_OR_EQUAL, which is the
-	// whole point: LESS is what leaves the minimum in the depth buffer.
+	// Same DSLs as Pspectral, and the default VK_COMPARE_OP_LESS rather than
+	// Pspectral's LESS_OR_EQUAL, which is the whole point: LESS is what leaves
+	// the minimum in the depth buffer.
 	Pipeline PspectralDepth;
 
 	// Shadow mapping, 2D branch: one depth-only render pass per 2D
@@ -338,20 +322,15 @@ class Castlescape : public BaseProject {
 	// point light instead of the old two-perspective-map workaround -- see
 	// CubeShadowMap.hpp for why (linear-distance storage, one flat bias).
 	//
-	// RPShadowCubeCompat exists ONLY to mint a VkRenderPass compatible with
-	// every face framebuffer below: RenderPass::createRenderPass() is
-	// private, so the sole way to obtain a spec-compatible VkRenderPass
-	// through this class's public surface is to let a full RenderPass build
-	// one for itself and read its .renderPass back out. Its own attachment
-	// image/framebuffer (1-layer, SHADOW_MAP_RES sized) are never rendered
-	// into or read -- unavoidable bookkeeping to stay inside RenderPass's
-	// public API instead of duplicating vkCreateRenderPass by hand.
+	// RPShadowCubeCompat exists ONLY to mint a VkRenderPass compatible with the
+	// per-face framebuffers: RenderPass::createRenderPass() is private, so the
+	// only way to get one through the public API is to let a full RenderPass
+	// build its own and read .renderPass back out. Its own attachment and
+	// framebuffer are never rendered into or read.
 	//
-	// The 36 real per-face framebuffers (one per torch per cube face) are
-	// built manually in createCubeShadowMaps() against
-	// RPShadowCubeCompat.renderPass, because they attach single-layer views
-	// into a 6-layer cube image -- something FrameBufferAttachment has no
-	// support for (it always creates a plain VK_IMAGE_VIEW_TYPE_2D, 1 layer).
+	// Those per-face framebuffers (one per torch per cube face) are built by
+	// hand in createCubeShadowMaps(), because they attach single-layer views
+	// into a 6-layer cube image -- which FrameBufferAttachment cannot do.
 	RenderPass RPShadowCubeCompat;
 	Pipeline PShadowCube;
 	CubeShadowMap torchCube[NUM_SHADOW_CUBES];
@@ -362,14 +341,10 @@ class Castlescape : public BaseProject {
 	// hand-roll vkCreateSampler.
 	TextureSampler cubeShadowSampler;
 
-	// set 1 for the cube shadow CAPTURE pass (PShadowCube) -- one uniform
-	// buffer per torch cube slot, holding that torch's 6 current face
-	// view-projection matrices plus its world position. A DescriptorSet
-	// member of its own, same reasoning as DSglobal (not per scene
-	// instance), created/destroyed alongside it in
-	// pipelinesAndDescriptorSetsInit()/Cleanup(). See ShadowCube.vert's
-	// header for why this has to be a uniform buffer, re-mapped every frame,
-	// rather than the push constant it replaced.
+	// set 1 for the cube shadow CAPTURE pass (PShadowCube) -- one uniform buffer
+	// per torch cube slot, holding that torch's 6 current face view-projection
+	// matrices plus its world position. A DescriptorSet member of its own, same
+	// reasoning as DSglobal: it is per slot, not per scene instance.
 	DescriptorSetLayout DSLshadowCubeCapture;
 	DescriptorSet DSshadowCube[NUM_SHADOW_CUBES];
 
@@ -377,14 +352,10 @@ class Castlescape : public BaseProject {
 	// matrices) plus one sampler binding per shadow map (2D then cube), read
 	// by CookTorrance.frag's shadowFactor(). DSLlocal/DSLglobal stay set 1/0.
 	//
-	// No DescriptorSet member of its own: unlike DSglobal, this one goes
-	// through Scene's ordinary per-instance machinery instead (P is given
-	// this as a third layout below, so every CookTorrance instance gets its
-	// own copy, same as its DSLlocal one). That means
-	// NUM_SHADOW_MAPS_2D+NUM_SHADOW_CUBES+1 redundant, identical descriptor
-	// sets per instance -- wasteful, but cheap at this instance count, and it
-	// avoids hand-rolling a THIRD way to bind a descriptor set alongside
-	// Scene's existing one.
+	// No DescriptorSet member of its own: this one rides Scene's ordinary
+	// per-instance machinery, so every CookTorrance instance gets an identical,
+	// redundant copy. Wasteful but cheap at this instance count, and it avoids
+	// hand-rolling a THIRD way to bind a descriptor set.
 	DescriptorSetLayout DSLshadowSample;
 	// View-projection matrix each 2D shadow pass rendered with, index-matched
 	// to LightData::shadowIndex for a direct/spot light. Computed once in
