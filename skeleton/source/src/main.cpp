@@ -296,7 +296,7 @@ class Castlescape : public BaseProject {
 	// ghost surface and leaves the colour attachment untouched, so the colour
 	// pass can reject the ghost's own interior -- the feet inside the robe --
 	// instead of blending it under the body.
-	//
+	//w
 	// Same DSLs as Pspectral, and the default VK_COMPARE_OP_LESS rather than
 	// Pspectral's LESS_OR_EQUAL, which is the whole point: LESS is what leaves
 	// the minimum in the depth buffer.
@@ -4248,12 +4248,14 @@ class Castlescape : public BaseProject {
 		// now and reading through it later is safe -- same reasoning as
 		// handTorchInst above.
 		//
-		// maxInstances raised past the default 8: held torch + 6 wall
-		// torches + 4 colored dl torches + 2 candles is already 13, and
-		// spawn() past this cap fails silently (see addTorchFlame below),
-		// leaving a torch/candle mesh with no fire and no light instead of
-		// an error.
-		flame.init(this, &DSLglobal, &DSglobal, 16);
+		// maxInstances covers every torch AND candle mesh in the level (each
+		// dungeonCandle instance gets a TorchFlame too, burning or not -- see
+		// flames.json). The rebuilt level runs ~13 wall torches + the held
+		// torch + ~8 candles, so this is set well above that; spawn() past the
+		// cap fails silently (see addTorchFlame below), leaving a torch/candle
+		// with no fire and no light instead of an error. Still under MAX_LIGHTS
+		// (32) and NUM_SHADOW_CUBES (32), which the dynamic pool arbitrates.
+		flame.init(this, &DSLglobal, &DSglobal, 28);
 
 		// No DSLglobal/DSglobal here: the daylight quads aren't shaded and read
 		// nothing the app-wide uniform carries, so they bind sets of their
@@ -8802,6 +8804,15 @@ class Castlescape : public BaseProject {
 
 // This is the main: probably you do not need to touch this!
 int main() {
+    // Offscreen-capture aid (level-building only): CS_FORCE_X11 makes GLFW use
+    // the X11 backend so the game can run under Xvfb and be screenshotted.
+    // glfwInitHint must precede the first glfwInit; Starter's later glfwInit()
+    // then no-ops. Unset in every normal launch, so this is inert.
+    if(std::getenv("CS_FORCE_X11")) {
+        glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
+        glfwInit();
+    }
+
     Castlescape app;
 
     try {
