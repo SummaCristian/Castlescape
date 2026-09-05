@@ -260,7 +260,7 @@ static float fireFbm(float x) {
 
 // MAIN !
 
-class Skeleton26ReplaceName : public BaseProject {
+class Castlescape : public BaseProject {
 	protected:
 	// Here you list all the Vulkan objects you need:
 	
@@ -2644,7 +2644,7 @@ class Skeleton26ReplaceName : public BaseProject {
 		// window size, title and initial background
 		windowWidth = 800;
 		windowHeight = 600;
-		windowTitle = "Skeleton: place the name of your app here";
+		windowTitle = "Castlescape";
     	windowResizable = GLFW_TRUE;
 		
 		// Initial aspect ratio
@@ -5246,7 +5246,7 @@ class Skeleton26ReplaceName : public BaseProject {
 	static void populateCommandBufferAccess(VkCommandBuffer commandBuffer, int currentImage, void *Params) {
 		// Simple trick to avoid having always 'T->'
 		// in che code that populates the command buffer!
-		Skeleton26ReplaceName *T = (Skeleton26ReplaceName *)Params;
+		Castlescape *T = (Castlescape *)Params;
 		T->populateCommandBuffer(commandBuffer, currentImage);
 	}
 
@@ -7987,7 +7987,7 @@ class Skeleton26ReplaceName : public BaseProject {
 
 // This is the main: probably you do not need to touch this!
 int main() {
-    Skeleton26ReplaceName app;
+    Castlescape app;
 
     try {
         app.run(false);

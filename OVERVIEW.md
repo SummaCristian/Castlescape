@@ -13,7 +13,7 @@ funziona adesso*.
 
 Dove sta il codice, tutto sotto `skeleton/source/`:
 
-- `src/main.cpp` — la classe `Skeleton26ReplaceName : BaseProject`, ~6500 righe: le struct degli uniform buffer, lo stato di gioco, il grafo di rendering, la logica.
+- `src/main.cpp` — la classe `Castlescape : BaseProject`, ~6500 righe: le struct degli uniform buffer, lo stato di gioco, il grafo di rendering, la logica.
 - `src/Libs.cpp` — definisce le macro `*_IMPLEMENTATION` una volta sola (i moduli in `custom/` sono header-only: dichiarazione e implementazione nello stesso file, e serve un solo punto in cui l'implementazione viene davvero compilata).
 - `include/modules/` — il framework del professore (`Starter.hpp`, `Scene.hpp`, `TextMaker.hpp`, `Animations.hpp`, `Colliders.hpp`). Non lo tocchiamo: il prof valuta usando la sua copia, quindi ogni nostra modifica lì sparirebbe.
 - `include/custom/` — i moduli scritti da noi.
