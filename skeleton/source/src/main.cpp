@@ -8414,6 +8414,27 @@ class Castlescape : public BaseProject {
 						std::cout << "[run] caught by '" << g.instanceId << "'\n";
 					}
 				}
+
+				// Non-hunt encounter: walking bodily into a ghost that isn't
+				// hunting doesn't end the run, but the chill of passing through
+				// it snuffs the held torch. Flipping `burning` false is all it
+				// takes -- the catching-fire spring (FLAME_IGNITION_*) plays the
+				// same envelope in reverse, so the flame and its point light
+				// shrink out rather than snapping dark. Same slab as the catch
+				// test above; gated on the torch actually being lit so it only
+				// fires once per walk-through.
+				if(!ghostsHunting && handTorchCollected && handFlameIdx >= 0 &&
+				   torchFlames[handFlameIdx].burning) {
+					float dx = camPos.x - g.pos.x;
+					float dz = camPos.z - g.pos.z;
+					float dy = std::abs((camPos.y - 0.9f) - g.pos.y);
+					if(dx * dx + dz * dz < GHOST_CATCH_RADIUS * GHOST_CATCH_RADIUS &&
+					   dy < GHOST_CATCH_VERTICAL) {
+						torchFlames[handFlameIdx].burning = false;
+						std::cout << "[torch] hand torch snuffed by ghost '"
+								  << g.instanceId << "'\n";
+					}
+				}
 			}
 
 			// The way out. Standing in the exit box wins the run -- unless it's
