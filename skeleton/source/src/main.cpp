@@ -2700,6 +2700,15 @@ class Castlescape : public BaseProject {
 	// Margin above and below the model's Y bounds (ghostBodyBottom/Top), so the
 	// bob doesn't blink the wash on and off from the edge of its reach.
 	static constexpr float SPECTRAL_VEIL_FADE_Y = 0.60f;
+	// How far up the spectral veil's own ramp the player has to be before a
+	// non-hunting ghost snuffs the held torch. The snuff used to key off
+	// GHOST_CATCH_RADIUS (0.85), which is well inside SPECTRAL_VEIL_INNER
+	// (1.05) -- so the torch only went out at the dead centre, long after the
+	// screen had already washed cold. Sharing the veil's ramp (see the snuff
+	// block in the ghost loop and post.spectralVeil in updateUniformBuffer)
+	// ties the two together: the flame goes out roughly when the wash reaches
+	// half strength, i.e. when "inside the ghost" first plainly reads.
+	static constexpr float SPECTRAL_VEIL_SNUFF_AT = 0.5f;
 	// Breadcrumb spacing, and the radius within which a new breadcrumb counts
 	// as revisiting an old one (and prunes the loop between them). The prune
 	// radius has to be comfortably larger than the spacing, or consecutive
@@ -3652,16 +3661,18 @@ class Castlescape : public BaseProject {
 		// ghost's map, which Spectral.frag reads as a density mask rather than
 		// as a colour.
 		//
-		// The pipeline named here is the DEPTH PREPASS, not Pspectral, and that
-		// is the only way to get one pass between the walls and the ghosts:
-		// Scene draws its techniques back to back with nothing to hook between
-		// them, and the prepass must land after the dungeon (a ghost's depth
-		// written before a wall behind it would reject that wall and leave a
-		// ghost-shaped hole) and before the ghosts' own colour. So the slot
-		// Scene owns goes to the prepass, and populateCommandBuffer() issues
-		// the colour draws by hand right after SC.populateCommandBuffer()
-		// returns. The descriptor sets Scene builds here serve both pipelines
-		// unchanged -- they are built against the DSLs, which are identical.
+		// The pipeline named here is the DEPTH PREPASS, not Pspectral. Naming it
+		// (rather than nullptr) is what makes SC.init() build this technique's
+		// descriptor sets -- those sets then serve BOTH the prepass and Pspectral
+		// unchanged, since the two share DSLs. Right after SC.init() the pipeline
+		// is nulled out (SC.TI[1].T->PT[0].P = nullptr) so Scene's own technique
+		// walk skips it: the prepass and the colour pass are BOTH issued by hand
+		// in populateCommandBuffer(), with the flames drawn between the dungeon
+		// and the prepass. Scene draws its techniques back to back with nothing
+		// to hook between them, and three things must fall in this order --
+		// dungeon (so a ghost's depth can't reject a wall behind it and leave a
+		// ghost-shaped hole), then flames (so a ghost can't erase a flame poking
+		// into its body), then the ghost prepass, then the ghost colour.
 		PRs[1].init("Spectral", {
 							{&PspectralDepth, {
 							 /*DSLglobal*/{},
@@ -3676,6 +3687,21 @@ class Castlescape : public BaseProject {
 			std::cout << "ERROR LOADING THE SCENE\n";
 			exit(0);
 		}
+
+		// Unhook the ghost depth prepass from Scene's own walk. Scene draws its
+		// techniques back to back, but the flames now have to be drawn BETWEEN
+		// the dungeon and that prepass: a ghost that writes its occluding depth
+		// before the flames erases any flame poking into its body -- the held
+		// torch vanishing as the player walks up to a patrolling ghost, then
+		// popping back the instant the prepass's near-fade (SpectralFade.glsl)
+		// starts eating the shell. With the pipeline nulled here Scene skips it
+		// (see Scene::populateCommandBuffer's `if(P != nullptr)`), and
+		// populateCommandBuffer() issues it by hand after the flames, alongside
+		// the colour pass that was already manual for the same ordering reason.
+		// The descriptor sets Scene built for it stay valid -- they were built
+		// against the DSLs during SC.init(), above, while the pipeline was still
+		// set. Technique 1 is the "Spectral" block in scene.json.
+		SC.TI[1].T->PT[0].P = nullptr;
 
 		// Cache the floor's top Y once, for the no-clip under-the-map safety clamp below.
 		// Falls back to 0.0f (this scene's actual floor height) if the scene has no
@@ -5844,15 +5870,43 @@ class Castlescape : public BaseProject {
 		// begin standard pass
 		// 1. The scene, into the offscreen HDR target.
 		RP.begin(commandBuffer, currentImage);
+		// The dungeon only: the "Spectral" technique's depth prepass was
+		// unhooked from this walk in localInit() (SC.TI[1].T->PT[0].P = nullptr)
+		// so the flames can slot in ahead of it.
 		SC.populateCommandBuffer(commandBuffer, 0, currentImage);
 
-		// The ghosts' COLOUR pass, by hand, because Scene has already spent the
-		// technique's own slot on the depth prepass that has to come between
-		// the dungeon and this -- see PRs[1] in localInit() and
-		// SpectralDepth.frag. Everything the prepass just wrote depth for is
-		// now drawn again through Pspectral, and only its nearest layer per
-		// pixel survives the LESS_OR_EQUAL test, which is what keeps the feet
-		// inside the robe from glowing through the body.
+		// Flames BEFORE the ghosts. They depth-test against the dungeon just
+		// drawn (a wall still hides a torch behind it) but land before any
+		// ghost depth exists, so a flame poking into a ghost's body is no
+		// longer erased by it -- the whole point of "the torch snuffs when you
+		// step inside a ghost" is that you SEE it lit right up until it goes
+		// out. A ghost drawn over a flame still blends in front of it; the
+		// flame just glows faintly through the translucent shell instead of
+		// being cut to its silhouette.
+		flame.populateCommandBuffer(commandBuffer, currentImage);
+
+		// The ghost DEPTH PREPASS, by hand now (see localInit()). Writes only
+		// the nearest ghost-surface depth per pixel (VK_COMPARE_OP_LESS, no
+		// colour) so the colour pass right after can keep just that layer.
+		// SpectralDepth.frag's near-fade discards the shell close to the eye,
+		// which is what lets the flames and exit glow show through a ghost the
+		// player is standing in.
+		PspectralDepth.bind(commandBuffer);
+		for(int i = 0; i < SC.TI[1].InstanceCount; i++) {
+			Instance &inst = SC.TI[1].I[i];
+			SC.M[inst.Mid]->bind(commandBuffer);
+			for(int j = 0; j < inst.NDs[0]; j++) {
+				inst.DS[0][j]->bind(commandBuffer, PspectralDepth, j, currentImage);
+			}
+			vkCmdDrawIndexed(commandBuffer,
+							 static_cast<uint32_t>(SC.M[inst.Mid]->indices.size()), 1, 0, 0, 0);
+		}
+
+		// The ghosts' COLOUR pass, by hand for the same reason the prepass now
+		// is. Everything the prepass just wrote depth for is drawn again through
+		// Pspectral, and only its nearest layer per pixel survives the
+		// LESS_OR_EQUAL test, which is what keeps the feet inside the robe from
+		// glowing through the body.
 		//
 		// Technique 1 is the "Spectral" block in scene.json; the shadow loop
 		// above indexes TI[0] the same way and for the same reason. Same
@@ -5869,7 +5923,6 @@ class Castlescape : public BaseProject {
 							 static_cast<uint32_t>(SC.M[inst.Mid]->indices.size()), 1, 0, 0, 0);
 		}
 
-		flame.populateCommandBuffer(commandBuffer, currentImage);
 		// After the scene, so the castle has already written the depth that
 		// masks this quad down to the shape of the doorway's arch, and after
 		// the flames, which are the only other thing it can blend against.
@@ -6136,9 +6189,20 @@ class Castlescape : public BaseProject {
 			// FLAME_IGNITION_OMEGA/ZETA. Advanced unconditionally (not just
 			// while flameBurning(tf)) so a flame just switched off relaxes
 			// back to 0 instead of freezing wherever it was.
+			//
+			// The underdamped ZETA is only wanted on the way UP -- the flare
+			// past resting size is what reads as "catching". On the way DOWN
+			// that same ring makes ignitionScale undershoot to 0 (clamped),
+			// bounce back to ~0.1, and sink again: the flame and its point
+			// light (L.color and the billboard size both scale by
+			// ignitionScale) visibly go out, flicker back, then out -- which
+			// is exactly the "off, on, off" seen when a ghost snuffs the held
+			// torch, the first thing in the game that flips `burning` false at
+			// runtime. Critically damp the extinguish so it eases out once.
 			float wi = FLAME_IGNITION_OMEGA;
-			float zi = FLAME_IGNITION_ZETA;
-			float ignitionTarget = flameBurning(tf) ? 1.0f : 0.0f;
+			bool igniting = flameBurning(tf);
+			float ignitionTarget = igniting ? 1.0f : 0.0f;
+			float zi = igniting ? FLAME_IGNITION_ZETA : 1.0f;
 			tf.ignitionVel += ((ignitionTarget - tf.ignitionScale) * wi * wi
 								- 2.0f * zi * wi * tf.ignitionVel) * deltaT;
 			tf.ignitionScale += tf.ignitionVel * deltaT;
@@ -8420,19 +8484,36 @@ class Castlescape : public BaseProject {
 				// it snuffs the held torch. Flipping `burning` false is all it
 				// takes -- the catching-fire spring (FLAME_IGNITION_*) plays the
 				// same envelope in reverse, so the flame and its point light
-				// shrink out rather than snapping dark. Same slab as the catch
-				// test above; gated on the torch actually being lit so it only
-				// fires once per walk-through.
+				// shrink out rather than snapping dark. Gated on the torch
+				// actually being lit so it only fires once per walk-through.
+				//
+				// The trigger is the spectral veil's OWN ramp (SPECTRAL_VEIL_*,
+				// evaluated here exactly as updateUniformBuffer() does it for
+				// post.spectralVeil -- same drawn/bobbed position, same eye
+				// height, same smoothsteps), not GHOST_CATCH_RADIUS. That
+				// radius (0.85) sits well inside SPECTRAL_VEIL_INNER (1.05), so
+				// the old test only put the torch out at the dead centre, well
+				// after the screen had already washed cold. Snuffing when the
+				// veil clears SPECTRAL_VEIL_SNUFF_AT ties the flame going out
+				// to the moment "inside the ghost" first plainly reads.
 				if(!ghostsHunting && handTorchCollected && handFlameIdx >= 0 &&
 				   torchFlames[handFlameIdx].burning) {
-					float dx = camPos.x - g.pos.x;
-					float dz = camPos.z - g.pos.z;
-					float dy = std::abs((camPos.y - 0.9f) - g.pos.y);
-					if(dx * dx + dz * dz < GHOST_CATCH_RADIUS * GHOST_CATCH_RADIUS &&
-					   dy < GHOST_CATCH_VERTICAL) {
-						torchFlames[handFlameIdx].burning = false;
-						std::cout << "[torch] hand torch snuffed by ghost '"
-								  << g.instanceId << "'\n";
+					const float dyv = camPos.y - drawPos.y;
+					const float below = ghostBodyBottom - SPECTRAL_VEIL_FADE_Y;
+					const float above = ghostBodyTop + SPECTRAL_VEIL_FADE_Y;
+					if(dyv > below && dyv < above) {
+						const float vy = glm::smoothstep(below, ghostBodyBottom, dyv) *
+										 (1.0f - glm::smoothstep(ghostBodyTop, above, dyv));
+						const float dxv = camPos.x - drawPos.x;
+						const float dzv = camPos.z - drawPos.z;
+						const float horiz = std::sqrt(dxv * dxv + dzv * dzv);
+						const float vxz = 1.0f - glm::smoothstep(SPECTRAL_VEIL_INNER,
+																 SPECTRAL_VEIL_OUTER, horiz);
+						if(vxz * vy > SPECTRAL_VEIL_SNUFF_AT) {
+							torchFlames[handFlameIdx].burning = false;
+							std::cout << "[torch] hand torch snuffed by ghost '"
+									  << g.instanceId << "'\n";
+						}
 					}
 				}
 			}
