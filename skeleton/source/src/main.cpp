@@ -4183,22 +4183,6 @@ class Castlescape : public BaseProject {
 		// in one place.
 		startScreen.init(&txt, &startScreenQuad, windowTitle);
 		startScreen.setOpen(true, windowWidth, windowHeight);
-		// Offscreen capture hook (level-building only): with CS_DEBUG_CAM set to
-		// "x,y,z,yaw,pitch" the launch screen is skipped and the camera is
-		// parked at that pose, so a headless run (Xvfb + a screenshot tool) can
-		// frame a specific spot. Unset in every normal launch, so this is inert.
-		if(const char *dbg = std::getenv("CS_DEBUG_CAM")) {
-			float dx, dy, dz, dyaw, dpitch;
-			if(std::sscanf(dbg, "%f,%f,%f,%f,%f", &dx, &dy, &dz, &dyaw, &dpitch) == 5) {
-				startScreen.setOpen(false, windowWidth, windowHeight);
-				camPos = glm::vec3(dx, dy, dz);
-				camYaw = dyaw;
-				camPitch = dpitch;
-				spawnPos = camPos;
-				spawnYaw = camYaw;
-				spawnPitch = camPitch;
-			}
-		}
 		settingsMenu.init(&txt, &settingsQuad);
 		// Same two sliders as the cheat HUD's below, same onChange/format --
 		// see applyRenderScaleChange()/formatRenderScale()/applyMsaaChange()/
@@ -8403,15 +8387,6 @@ class Castlescape : public BaseProject {
 
 // This is the main: probably you do not need to touch this!
 int main() {
-    // Offscreen-capture aid (level-building only): CS_FORCE_X11 makes GLFW use
-    // the X11 backend so the game can run under Xvfb and be screenshotted.
-    // glfwInitHint must precede the first glfwInit; Starter's later glfwInit()
-    // then no-ops. Unset in every normal launch, so this is inert.
-    if(std::getenv("CS_FORCE_X11")) {
-        glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
-        glfwInit();
-    }
-
     Castlescape app;
 
     try {
