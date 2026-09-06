@@ -63,6 +63,14 @@ layout(location = 2) flat out float gate;
 // top of the per-spark life ramp.
 layout(location = 3) flat out float glow;
 layout(location = 4) flat out vec3 color;
+// 1 for a dust mote, 0 for a spark. Motes are the same baked quads on a
+// slower, dimmer, longer-lived path (see below), so Spark.frag can shade
+// them as lit dust instead of burning fuel.
+layout(location = 5) flat out float mote;
+
+// Fraction of the baked particle set that drifts as dust rather than flying
+// off as sparks.
+const float MOTE_FRACTION = 0.42;
 
 // Cheap 1D hash, Dave Hoskins' construction: three fract/multiply rounds are
 // enough to decorrelate the handful of quantities derived from inSeed below
@@ -89,7 +97,11 @@ void main() {
 	// Loop period varies per spark (1.6..3.2s), phase-offset by both the
 	// spark's own seed and the torch's, so sparks across however many
 	// torches are in the scene never pop back to spawn in visible unison.
-	float period = 1.6 + inSeed * 1.6;
+	bool isMote = hash11(inSeed * 13.0) < MOTE_FRACTION;
+
+	// Motes live several times longer than sparks and hang rather than fly,
+	// so they read as dust caught in the light, not thrown fuel.
+	float period = isMote ? (7.0 + inSeed * 8.0) : (1.6 + inSeed * 1.6);
 	float t = fract((gubo.time + fubo.seed * 11.0 + inSeed * 29.0) / period);
 	life = t;
 
@@ -128,6 +140,20 @@ void main() {
 	// hard as it swings the flame's own tip (Flame.vert's h*h term).
 	center += fubo.lean * 0.6;
 
+	// Motes ignore the crown path above and instead sit in a wide, tall box
+	// around the flame, wandering slowly on a time-sampled noise walk with a
+	// faint net rise. No age-weighting: a mote drifts the same at every point
+	// in its long life.
+	if(isMote) {
+		float boxX = (hash11(inSeed * 17.0) - 0.5) * 1.7;
+		float boxY = mix(0.10, 0.85, hash11(inSeed * 31.0 + 4.1));
+		float wanderX = (noise11(gubo.time * 0.25 + inSeed * 40.0) - 0.5) * 0.5;
+		float wanderY = (noise11(gubo.time * 0.20 + inSeed * 70.0) - 0.5) * 0.4;
+		center = vec2(boxX + wanderX,
+		              (boxY + wanderY + t * 0.12) * fubo.heightScale);
+		center += fubo.lean * 0.3;
+	}
+
 	// Direction of travel, for orienting the streak: rise is roughly
 	// constant while drift grows with age, so a young spark's direction is
 	// nearly straight up and it tilts further sideways as it ages -- the
@@ -145,6 +171,11 @@ void main() {
 	// here turns into an ~0.1-0.3 s fade rather than a pop.
 	float thr = mix(0.45, 1.15, hash11(inSeed * 91.0));
 	gate = smoothstep(thr - 0.10, thr + 0.10, fubo.intensity);
+	// Motes never gate fully off -- dust doesn't stop existing when the flame
+	// gutters -- they just dim with it.
+	if(isMote) {
+		gate = mix(0.35, 1.0, clamp((fubo.intensity - 0.3) / 1.1, 0.0, 1.0));
+	}
 
 	// Small to begin with and shrinking further with age: a few hundredths
 	// of the flame's own half-width (mvpMat's x=1 unit is that half-width),
@@ -160,15 +191,22 @@ void main() {
 	// streak, not a dot -- varied per spark so they don't all look identical.
 	float stretch = mix(2.5, 4.0, hash11(inSeed * 71.0));
 
+	// Motes are small round specks: near-constant size, no streak.
+	if(isMote) {
+		size = mix(0.018, 0.032, hash11(inSeed * 41.0)) * max(gate, 0.001);
+		stretch = 1.0;
+	}
+
 	vec2 local = perpDir * (inCorner.x * size) + travelDir * (inCorner.y * size * stretch);
 
 	// A small per-spark, time-independent z jitter: not motion, just enough
 	// depth spread that sparks don't all sit exactly on the flame body's own
 	// z=0 plane, the same parallax reasoning behind Flame.vert's layer
 	// z-offset.
-	float z = (hash11(inSeed * 83.0) - 0.5) * 0.15;
+	float z = (hash11(inSeed * 83.0) - 0.5) * (isMote ? 0.8 : 0.15);
 
 	gl_Position = fubo.mvpMat * vec4(center + local, z, 1.0);
 	quv = inCorner;
 	color = fubo.color;
+	mote = isMote ? 1.0 : 0.0;
 }

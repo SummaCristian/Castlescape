@@ -127,9 +127,10 @@ class Flame {
 	static constexpr int LAYER_COUNT = 3;
 
 	// Purely aesthetic: enough that the eye reads a stream instead of counting
-	// them. Each spark is 2 triangles and fully procedural, so this costs no
-	// CPU time.
-	static constexpr int SPARK_COUNT = 48;
+	// them. Each is 2 triangles and fully procedural, so this costs no CPU
+	// time. Spark.vert splits the set by seed: ~40% drift as dust motes, the
+	// rest fly off as sparks, so the count covers both.
+	static constexpr int SPARK_COUNT = 80;
 
 	int maxInstances = 0;
 	int instanceCount = 0;

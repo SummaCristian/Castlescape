@@ -2221,6 +2221,9 @@ class Castlescape : public BaseProject {
 	static constexpr float WALK_BOB_LATERAL = 0.02f;
 	// How fast walkBobBlend eases toward its target.
 	static constexpr float WALK_BOB_BLEND_TAU = 0.15f;
+	// Vertical head-bob applied to the view itself, kept well under the hand's
+	// bob so the world only just nods.
+	static constexpr float CAM_BOB_VERTICAL = 0.012f;
 
 	// Three-state machine driven by huntCycle.hunting(). Return walks the chase's
 	// breadcrumb trail backwards, which is why there is no pathfinding here.
@@ -5797,6 +5800,14 @@ class Castlescape : public BaseProject {
 			tf.color = huntCycle.flameColor(tf.baseColor)
 					   * huntCycle.warningPulse() * huntCycle.lightScale();
 
+			// Combustion instability: a slow wander in hue on top of the
+			// brightness spring, so a guttering flame shifts warm/cool the way
+			// burning fuel does instead of only dimming. Scaled by `gutter` so
+			// a steady flame is untouched and the hunt-cycle tint stays clean.
+			float hueWander = fireFbm(t * 0.9f + 53.0f) - 0.5f;
+			tf.color.r *= 1.0f + hueWander * 0.10f * gutter;
+			tf.color.b *= 1.0f - hueWander * 0.12f * gutter;
+
 			// Height: the same signal, compressed into a narrower band and
 			// chased much more slowly -- see TorchFlame::heightScale.
 			float hTarget = 0.78f + 0.31f * (target - 0.30f) / 1.10f;	// ~0.78..1.09
@@ -8249,10 +8260,28 @@ class Castlescape : public BaseProject {
 		// lag instead of oscillating.
 		eyeStepOffset *= std::exp(-deltaT / EYE_SMOOTH_TAU);
 
+		// Walk-bob signal shared by the camera and both hands: one accumulating
+		// phase, eased in/out by walkBobBlend so a start/stop doesn't snap the
+		// sway. Originally the torch's own state, now doubles for the key and
+		// the view, since all three swing with the same gait -- only how each
+		// reads the phase (see bobLateral's sign below) differs.
+		bool isWalking = grounded && (std::abs(m.x) > 0.01f || std::abs(m.z) > 0.01f);
+		float bobTarget = isWalking ? 1.0f : 0.0f;
+		walkBobBlend += (bobTarget - walkBobBlend) * (1.0f - std::exp(-deltaT / WALK_BOB_BLEND_TAU));
+		if(isWalking) {
+			walkBobPhase += WALK_BOB_SPEED * (sprinting ? 1.4f : 1.0f) * deltaT;
+		}
+
 		// View: rendered from the smoothed eye height. camPos itself is left
 		// untouched, so collisions, gravity and ground contact all keep working
 		// on the exact position; only what the player sees is eased.
-		glm::vec3 eyePos = camPos - glm::vec3(0.0f, eyeStepOffset, 0.0f);
+		//
+		// A small vertical head-bob rides on top, on the double-frequency
+		// signal (one dip per footstep) and well under the hand's own bob so
+		// the world barely nods while the torch swings. Presentation only, like
+		// eyeStepOffset.
+		float camBob = std::sin(walkBobPhase * 2.0f) * CAM_BOB_VERTICAL * walkBobBlend;
+		glm::vec3 eyePos = camPos - glm::vec3(0.0f, eyeStepOffset - camBob, 0.0f);
 		View = glm::lookAt(eyePos, eyePos + front, up);
 
 		// View-Projection
@@ -8269,17 +8298,8 @@ class Castlescape : public BaseProject {
 			glm::vec4(eyePos, 1.0f)
 		);
 
-		// Walk-bob signal shared by both hands: one accumulating phase, eased
-		// in/out by walkBobBlend so a start/stop doesn't snap the sway.
-		// Originally the torch's own state, now doubles for the key since
-		// both hands swing with the same gait -- only how each hand reads
-		// the phase (see bobLateral's sign below) differs between them.
-		bool isWalking = grounded && (std::abs(m.x) > 0.01f || std::abs(m.z) > 0.01f);
-		float bobTarget = isWalking ? 1.0f : 0.0f;
-		walkBobBlend += (bobTarget - walkBobBlend) * (1.0f - std::exp(-deltaT / WALK_BOB_BLEND_TAU));
-		if(isWalking) {
-			walkBobPhase += WALK_BOB_SPEED * (sprinting ? 1.4f : 1.0f) * deltaT;
-		}
+		// walkBobPhase / walkBobBlend are advanced just above the View matrix
+		// now (the camera reads them too), not here.
 
 		// Wall tuck for both hands (see applyTuck and the block of constants
 		// around it). Resolved here rather than inside each hand's own block
