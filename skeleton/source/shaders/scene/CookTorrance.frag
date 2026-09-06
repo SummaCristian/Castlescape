@@ -1,26 +1,17 @@
-// FRAGMENT SHADER. Runs on the GPU, once for every pixel of every triangle we
-// draw, and its whole job is to decide that pixel's colour.
+// FRAGMENT SHADER: runs once per pixel, decides that pixel's color.
 //
-// Where its inputs come from:
-//   in fragPos/fragNorm/fragUV  from PosNormUV.vert, the vertex shader. The GPU
-//                               interpolates them across the triangle, so each
-//                               pixel gets its own values.
-//   set 0 (gubo)                written once per frame by main.cpp: the camera
-//                               position and every light in the scene.
-//   set 1 (ubo)                 written once per object by main.cpp: that
-//                               object's matrices and its material.
-//   albedoMap                   the object's texture.
+//   in fragPos/fragNorm/fragUV  from PosNormUV.vert, interpolated per pixel
+//   set 0 (gubo)                per frame: camera position and every light
+//   set 1 (ubo)                 per object: its matrices and material
+//   albedoMap                   the object's texture
 //
-// What main() does, in order:
-//   1. read the base colour out of the texture
-//   2. for each light: work out how much light reaches this pixel, and how much
-//      of it bounces towards the camera (that second part is the BRDF)
-//   3. add the ambient term, which stands in for light that arrived after
-//      bouncing off other surfaces
-//   4. squash the total into a displayable range and write it out
+// main(), in order: read the base color from the texture; for each light work
+// out how much reaches this pixel and how much bounces to the camera (the
+// BRDF); add the ambient term for light that arrived after bouncing off other
+// surfaces; write it out raw (Composite.frag does the range compression).
 //
-// The theory behind the formulas is in notes.md; the comments here only say why
-// the code is shaped the way it is.
+// The theory is in notes.md; comments here only say why the code is shaped
+// the way it is.
 
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
@@ -47,22 +38,16 @@ layout(binding = 0, set = 1) uniform UniformBufferObject {
     float k;          // diffuse share, specular gets (1 - k)
     int flatNormals;      // 1: ignore the vertex normal, use the face's own
     int interiorAmbient;  // 1: ambient as if the surface were vertical
-    // Unused here, declared to keep this block identical to the one Flame.vert
-    // and Flame.frag see: both pipelines share DSLlocal and one C++ struct.
-    float time;
+    float time;           // unused here; declared to match the Flame block (shared DSLlocal)
     // This model's share of ambient, overriding gubo.ambientWeight. Negative
-    // means "no override", which is the default: only the models that need a
-    // different share from the scene's carry one. See ambientShare() below.
+    // means "no override", the default. See ambientShare() below.
     float ambientWeight;
-    // 0..1: this instance's focus-glow strength, set per-instance in
-    // updateUniformBuffer() when it's the object the crosshair is aimed at.
-    // See its use near the end of main() below.
+    // 0..1 focus-glow strength, set per-instance in main.cpp when this is the
+    // object the crosshair is aimed at. Used near the end of main().
     float glow;
-    // 1: shade this model as a METAL. Two things follow from it, both in
-    // main(): the diffuse term goes away entirely (k is forced to 0, a metal
-    // has no subsurface scattering to produce one), and the indirect term
-    // becomes metalAmbient() -- a reflection of the room -- instead of the
-    // hemisphere times the albedo. See Material::metallic in SceneMaterials.hpp.
+    // 1: shade as a METAL. In main(): the diffuse term goes (k forced to 0),
+    // and the indirect term becomes metalAmbient() -- a reflection of the room
+    // -- instead of the hemisphere times albedo. See Material::metallic.
     int metallic;
 } ubo;
 
@@ -77,13 +62,9 @@ struct Light {
     float cosIn;    // spot: cosine of the half inner angle
     float cosOut;   // spot: cosine of the half outer angle
     int type;
-    // -1: unshadowed. Every light in the current lights.json casts a shadow,
-    // so nothing hits that path now, but it stays for lights added past
-    // NUM_SHADOW_MAPS_2D/NUM_SHADOW_CUBES. Else the slot -- in the 2D array
-    // for a direct/spot light, in the cube array for a point light, see
-    // shadowFactor() below -- holding this light's shadow map. Set by
-    // SceneLights from lights.json's "castsShadow", see the struct comment
-    // there.
+    // -1: unshadowed (a light with no free slot leaks through walls). Else the
+    // slot holding this light's shadow map -- the 2D array for direct/spot, the
+    // cube array for point, see shadowFactor(). Set by SceneLights.
     int shadowIndex;
 };
 
@@ -94,41 +75,26 @@ layout(binding = 0, set = 0) uniform GlobalUniformBufferObject {
     vec3 ambientLower;   // indirect light bounced off the ground
     vec3 ambientDir;     // axis the two blend along, i.e. world up
     int debugFlags;      // LIGHT_DEBUG_* bits, set by the cheat menu
-    float time;          // seconds since startup, unused here (see Flame.vert)
-    // The scene's default share of ambient, 0..1. See ambientShare() below.
-    // Rides in the padding before lights[], like debugFlags and time.
-    float ambientWeight;
-    // Share of a point/spot light's radiance that comes back as INDIRECT
-    // light. See AmbientLight::bounce in SceneLights.hpp and pointBounce()
-    // below. Rides in the same padding.
-    float ambientBounce;
-    // Distance fog density, set from GEOM_CULL_CONE_DIST in
-    // updateUniformBuffer() -- see its comment there. Used at the very end
-    // of main() below, in the same padding as everything above it.
-    float fogDensity;
+    float time;          // seconds since startup, unused here
+    // All four ride the padding before lights[]:
+    float ambientWeight;  // scene default ambient share, 0..1; see ambientShare()
+    float ambientBounce;  // share of a point/spot's radiance that returns as indirect light
+    float fogDensity;     // distance fog, from GEOM_CULL_CONE_DIST in main.cpp; used at the end of main()
     Light lights[MAX_LIGHTS];
 } gubo;
 
-// Shadow sampling, set 2: its own descriptor set because it belongs to
-// neither "once a frame" (set 0) nor "once an object" (set 1) -- it's once
-// per SHADOW-CASTING LIGHT. Two separate families of slots now, one per
-// projection kind a shadow can use (see LightConstants.glsl):
-//   2D depth maps   NUM_SHADOW_MAPS_2D slots, direct/spot lights (the sun
-//                   today). lightSpace is the view-projection matrix
-//                   Shadow.vert rendered that map with.
-//   cube maps       NUM_SHADOW_CUBES slots, one real 6-face cube per point
-//                   light (the torches). No matrix needed here: a samplerCube
-//                   lookup is by DIRECTION, and the light's own position
-//                   (gubo.lights[i].pos) is already available where
-//                   shadowFactor() is called.
+// Shadow sampling, set 2: its own set because it's neither "once a frame"
+// (set 0) nor "once an object" (set 1) but once per SHADOW-CASTING LIGHT.
+// Two families of slots (LightConstants.glsl):
+//   2D depth maps   NUM_SHADOW_MAPS_2D slots, direct/spot lights. lightSpace
+//                   is the view-projection Shadow.vert rendered the map with.
+//   cube maps       NUM_SHADOW_CUBES slots, one 6-face cube per point light.
+//                   No matrix: a samplerCube lookup is by DIRECTION, and the
+//                   light position is already to hand in shadowFactor().
 //
-// SEPARATE sampler bindings rather than one binding declared as an array:
-// Scene::init's descriptor-pool accounting (Scene.hpp, the loop that
-// does `texturesInPool += 1` per binding) counts bindings, not the
-// descriptors an array binding actually needs, and every existing binding in
-// this project has count 1. An array binding would silently under-reserve
-// the pool. Ordinary one-per-map bindings sidestep that instead of relying on
-// a path nothing else here exercises.
+// SEPARATE bindings, not one array binding: Scene::init's descriptor-pool
+// accounting counts bindings, not the descriptors an array binding needs, so
+// an array binding would silently under-reserve the pool.
 layout(binding = 0, set = 2) uniform ShadowUniformBufferObject {
     mat4 lightSpace[NUM_SHADOW_MAPS_2D];
 } shadowUbo;
@@ -136,12 +102,10 @@ layout(binding = 0, set = 2) uniform ShadowUniformBufferObject {
 layout(binding = 1, set = 2) uniform sampler2D shadowMap2D_0;
 layout(binding = 2, set = 2) uniform sampler2D shadowMap2D_1;
 
-// shadowCube0..18: the dynamic pool (main.cpp's
-// dynamicShadowSlotBase..HAND_TORCH_SHADOW_INDEX, currently the whole 0..18
-// range) -- whichever wall/dl/candle point light is currently nearest the
-// player, reassigned at runtime by updateDynamicShadowSlots(). None of these
-// belongs to a particular torch; which torch's cube map lands in which
-// binding changes as the player moves.
+// The dynamic pool: whichever torch/candle point light is nearest the player,
+// reassigned at runtime by updateDynamicShadowSlots(). No binding belongs to a
+// particular torch; which cube map lands where changes as the player moves.
+// The last slot is fixed to the held torch.
 layout(binding = 3, set = 2) uniform samplerCube shadowCube0;
 layout(binding = 4, set = 2) uniform samplerCube shadowCube1;
 layout(binding = 5, set = 2) uniform samplerCube shadowCube2;
@@ -175,28 +139,18 @@ layout(binding = 32, set = 2) uniform samplerCube shadowCube29;
 layout(binding = 33, set = 2) uniform samplerCube shadowCube30;
 layout(binding = 34, set = 2) uniform samplerCube shadowCube31;	// the held torch, fixed
 
-// Stands in for shadowMaps2D[idx], which the separate-bindings choice above
-// rules out. NUM_SHADOW_MAPS_2D is 2 (LightConstants.glsl); if that ever
-// changes, a case has to be added or removed here by hand.
+// Stands in for shadowMaps2D[idx], which the separate bindings rule out.
+// NUM_SHADOW_MAPS_2D is 2; a case must be added or removed by hand if it changes.
 float sampleShadowMap2D(int idx, vec2 uv) {
     if(idx == 0) return texture(shadowMap2D_0, uv).r;
     return texture(shadowMap2D_1, uv).r;
 }
 
-// Same idea for the cube maps, sampled by direction rather than by UV, with
-// one difference that matters: this returns FOUR taps, not one.
-//
-// The PCF this feeds was tried once before as four separate one-tap calls and
-// reverted as unaffordable, correctly -- the chain below is a linear walk of
-// up to 32 comparisons to pick a binding, so calling it four times walks it
-// four times, and it is the walk, not the fetch, that costs. Taking all four
-// taps INSIDE the branch that already resolved pays for the walk once and
-// adds three texture reads to it, on texels adjacent to the first, which is
-// the cheapest thing a sampler can be asked to do.
-//
-// NUM_SHADOW_CUBES is 32 (LightConstants.glsl: 31 dynamically-assigned slots
-// shared by every wall/dl torch and candle, plus the held torch's own fixed
-// last one); a case has to be added or removed here by hand if that changes.
+// Same for the cube maps, sampled by direction, with one difference: this
+// returns FOUR taps, not one. The chain below is a linear walk of up to 32
+// comparisons to pick a binding, and it's the walk, not the fetch, that costs
+// -- so the PCF this feeds takes all four taps INSIDE the resolved branch,
+// paying for the walk once. NUM_SHADOW_CUBES is 32; add/remove a case by hand.
 #define CUBE_TAP4(s) vec4(texture(s, d0).r, texture(s, d1).r, \
                           texture(s, d2).r, texture(s, d3).r)
 vec4 sampleShadowCube4(int idx, vec3 d0, vec3 d1, vec3 d2, vec3 d3) {
@@ -234,32 +188,27 @@ vec4 sampleShadowCube4(int idx, vec3 d0, vec3 d1, vec3 d2, vec3 d3) {
     return CUBE_TAP4(shadowCube31);
 }
 
-// The sun/spot path: unchanged from the single-perspective-map technique,
-// just renamed now that it's not sharing a namespace with the torches'
-// former (and now gone) second map.
+// The sun/spot path: sample a perspective/ortho depth map through its own
+// view-projection matrix and compare.
 float shadowFromMap2D(int idx, vec3 pos, float bias) {
     vec4 lightClip = shadowUbo.lightSpace[idx] * vec4(pos, 1.0);
 
-    // Behind this map's camera. For a perspective matrix w is the view-space
-    // distance in FRONT of the camera, so w <= 0 puts `pos` on the far side of
-    // the plane through the light. The divide below would mirror such a point
-    // back into the map's 0..1 range and sample a depth belonging to a
-    // completely different direction, so it has to be caught here. The sun's
-    // orthographic matrix always yields w = 1 and never trips this.
+    // Behind this map's camera: for a perspective matrix w is the distance in
+    // FRONT of the camera, so w <= 0 means `pos` is on the far side. The divide
+    // would mirror it back into 0..1 and sample the wrong direction. The sun's
+    // ortho matrix always yields w = 1 and never trips this.
     if(lightClip.w <= 0.0) {
         return 1.0;
     }
 
     vec3 lightNDC = lightClip.xyz / lightClip.w;
 
-    // GLM_FORCE_DEPTH_ZERO_TO_ONE (Starter.hpp) means lightNDC.z is already
-    // Vulkan's 0..1 depth range, same as what's stored in the shadow map; only
-    // XY need remapping from NDC's -1..1 to a texture's 0..1.
+    // GLM_FORCE_DEPTH_ZERO_TO_ONE means lightNDC.z is already Vulkan's 0..1
+    // depth range; only XY need remapping from -1..1 to 0..1.
     vec2 shadowUV = lightNDC.xy * 0.5 + 0.5;
 
-    // Outside the map (the sun's fixed ortho box doesn't reach here): nothing
-    // to compare against. Missing this check would sample garbage at the
-    // map's clamped edge instead.
+    // Outside the map: nothing to compare against. Without this check the
+    // sampler returns garbage at the clamped edge.
     if(shadowUV.x < 0.0 || shadowUV.x > 1.0 ||
        shadowUV.y < 0.0 || shadowUV.y > 1.0 ||
        lightNDC.z < 0.0 || lightNDC.z > 1.0) {
@@ -271,132 +220,33 @@ float shadowFromMap2D(int idx, vec3 pos, float bias) {
 }
 
 // The torch path: one samplerCube lookup by direction, compared against the
-// LINEAR distance to the light (see ShadowCube.frag's header for why the
-// cube stores distance rather than projective depth). Unlike the old
-// two-map dance this always has an answer -- a cube map covers every
-// direction by construction -- so there is no "covered" out-parameter and no
-// fallback to a second slot.
+// LINEAR distance to the light (ShadowCube.frag stores distance, not
+// projective depth). A cube map covers every direction, so this always has
+// an answer -- no "covered" out-parameter, no fallback slot.
 //
-// A plain (dist - bias > closestDist) ? 0.0 : 1.0 comparison is a binary
-// lit/unlit test, which reads as a razor-sharp edge on a wall. The softening
+// A plain lit/unlit test reads as a razor-sharp edge on a wall. The softening
 // is four-tap PCF: sampleShadowCube4() reads the map at four directions
-// around the lookup and this averages the four verdicts.
+// around the lookup and this averages the verdicts. The kernel is a few
+// texels wide and rotated, so its taps straddle the true silhouette and
+// widening it costs no contact -- unlike softening from a single sample,
+// which can only spill to the LIT side and left a bright strip between an
+// object and its own shadow.
 //
-// Two earlier attempts at that softness are worth keeping straight, because
-// the shape of this one is a reaction to both.
+// The bias is computed HERE, not handed in, because sizing it honestly needs
+// `dist`. It only covers floating-point noise: the across-texel slope error
+// that a bias would otherwise fight is charged where it belongs, baked into
+// the stored distance by ShadowCube.frag from the occluder's own tilt (see
+// its header). A large bias, or a normal offset instead, each buys its own
+// artefact -- light leaking through a closed door, or peter-panning where a
+// shadow detaches from its base.
 //
-// PCF was tried first as four separate one-tap calls and reverted as
-// unaffordable -- correctly, for the reason sampleShadowCube4()'s header
-// gives, and the fix was to restructure the fetch rather than to give up on
-// the technique. It was also reverted as ugly, the taps reading as separate
-// overlapping blobs; that was the kernel, jittered far enough apart to alias
-// with four samples. The kernel here is a few texels wide and rotated.
-//
-// What replaced it was softening from the SAME single sample: ramp the lit
-// factor down across a band of occluderGap instead of stepping it. That is
-// the version this one replaces, and its failure is worth stating because it
-// is not obvious. occluderGap measures how far INTO a shadow a fragment is,
-// not how far the occluder is from it, and the two come apart badly wherever
-// a shape overhangs its own base. Around the foot of a barrel -- widest at
-// its waist, so the floor by its base sits under the bulge -- the occluder
-// stays barely in front of the floor for some way out, the gap crawls, and a
-// band 0.03 wide in gap spread over roughly 0.1 of floor. The band could only
-// ever spill to the LIT side of the silhouette, so what it produced there was
-// a bright strip between the barrel and its own shadow, and every value that
-// made the strip acceptable made the shadow edge hard. A kernel has no such
-// bind: its taps straddle the silhouette, so the transition is centred on the
-// true edge and widening it costs no contact.
-//
-// occluderGap is how much closer the stored occluder is than this fragment:
-// ~0 (or negative, floating-point noise aside) when the map's closest hit
-// IS this fragment's own surface -- i.e. nothing occludes it -- and growing
-// positive as a real occluder sits further in front of it. Ramping the
-// *lit* factor down starting at occluderGap == bias (equivalent to the old
-// `dist - bias > closestDist` threshold) rather than at occluderGap == 0
-// matters: with the old (closestDist - (dist - bias)) formulation, an
-// unoccluded surface -- occluderGap == 0 -- landed only `bias` units into a
-// softEdge-wide ramp rather than solidly on its plateau, so ordinary lit
-// walls sat partway up the ramp and any texel-to-texel precision noise
-// could tip the result either way -- which is exactly the "suddenly not
-// lit" pop reported. This version has a flat lit==1.0 plateau for every
-// occluderGap <= bias, matching the hard test's own unoccluded case.
-//
-// The bias is computed HERE rather than handed in, because the only honest
-// way to size it needs `dist`, which only this function has. It used to be a
-// pair of world-space constants interpolated by grazing angle (0.03 head-on to
-// 0.35 edge-on, with a matching 0.15..0.6 ramp), and that number was far too
-// large for what a bias is actually for: a door panel sits ~0.6 units in front
-// of the chains bolted to it, so a torch on the far side of a CLOSED door
-// still lit them through it wherever the surface faced the light obliquely --
-// which on a round chain link is most of what you see, and on a metal (no
-// diffuse term, all specular) it reads as the torch's colour smeared over the
-// links. The oversized bias was itself compensating for the bilinear cube
-// sampler, see createCubeShadowMaps(); with NEAREST filtering the bias only
-// has to cover the error that is genuinely there:
-//
-//   one texel of a cube face covers 2*dist/SHADOW_CUBE_RES of world space at
-//   distance dist (a face spans 90 degrees, so its width at dist is 2*dist),
-//
-//   and across that texel the recorded surface's own distance varies by that
-//   width times the slope of the surface as seen from the light, i.e. tan of
-//   the incidence angle -- which is what makes a grazing surface need more
-//   slack than a head-on one, the effect the old constants were reaching for
-//   but expressed in the units it actually happens in.
-//
-// That error, though, must NOT be paid for out of the depth bias, which is
-// the mistake the first attempt at this repeated in smaller units. Whatever
-// the bias is, it is a distance a real occluder is allowed to sit in front of
-// a surface without stopping the light -- so the moment it approaches the
-// ~0.65 units between a chain link and the far face of the door leaf it hangs
-// on, the door stops being a door. It grows with distance (the texel does),
-// the gap doesn't, so no cap on it is both large enough to cover a far wall
-// and small enough to respect a near door: at the chains' 5 units the first
-// version held, at the blue and purple torches' 10 and 12 it hit its cap and
-// let them through, which is exactly the two colours that survived.
-//
-// The version after that spent it on a NORMAL OFFSET instead -- move the
-// lookup along the surface's own normal, off the surface and towards the
-// light, so it lands in a texel whose recorded distance belongs to this
-// surface rather than to the stretch of it half a texel away -- sized
-// texelWorld*(1 + 2*tan) against a flat 0.12 cap. That does not leak through
-// the occluder, but it buys the offset's own failure mode instead:
-// PETER-PANNING. tan diverges at grazing incidence, so a floor lit obliquely
-// by a wall torch always paid the cap, ~12 texels at 5 units where a normal
-// offset wants one or two; lifting the sample point 0.12 off the floor shifts
-// the shadow's edge sideways by 0.12/tan(the torch's elevation over that
-// floor), and a barrel's shadow detached from its base by a third of a unit.
-//
-// BOTH of those are the same misattribution, and the fix is neither: the
-// across-texel error belongs to the surface being SAMPLED, so it is charged
-// there, baked into the stored distance by ShadowCube.frag using that
-// surface's own tilt. See its header. What is left here is a token constant
-// for floating-point noise -- the cube sampler is NEAREST, so there is no
-// filtering error on top -- and one texel of normal offset, sin-scaled so it
-// stays inside that budget at every angle, against the cube's own
-// quantisation of the receiver's position. At 5 units from a torch the two
-// together come to under two centimetres of world space, which is where the
-// lit strip between a barrel and its shadow went.
-// LIGHT_DEBUG_SHADOW_GAP's working state, written by shadowFromCube() and
-// read once at the end of main(). Globals rather than out-parameters because
-// the call sits inside the light loop's expression and there is exactly one
-// invocation's worth of them.
-//
-// A shadow belongs to a specific light, so this reports ONE of them: the one
-// whose radiance dominates this fragment, picked in the light loop below.
-//
-// Two earlier choices were both wrong in the same way -- they picked the
-// light by something other than which one is actually lighting the fragment.
-// Keeping the smallest gap, i.e. the light most willing to call it lit,
-// paints the frame green: with several torches burning almost every fragment
-// has at least one flame with a clear line to it. Pinning it to the held
-// torch instead answers honestly but about the wrong light -- a floor
-// shadowed by a WALL torch is genuinely unoccluded as far as the torch in
-// your hand is concerned, so that reads green too, and says nothing about
-// the shadow being looked at.
-//
-// dbgLast* is scratch: shadowFromCube() fills it for whichever light it was
-// just called for, and the loop promotes it to dbg* if that light is the
-// brightest seen so far.
+// LIGHT_DEBUG_SHADOW_GAP's working state, written by shadowFromCube() and read
+// at the end of main(). Globals, not out-parameters, because the call sits
+// inside the light loop's expression. A shadow belongs to one light, so this
+// reports the one whose radiance dominates this fragment: keeping the smallest
+// gap or pinning it to the held torch both answer about the wrong light and
+// paint the frame green. dbgLast* is scratch for the current call; the loop
+// promotes it to dbg* if that light is the brightest seen so far.
 bool  dbgLastValid = false;
 float dbgLastGap = 0.0;
 float dbgLastBias = 0.0;
@@ -409,37 +259,28 @@ float dbgSoft = 0.0;
 float dbgBestLum = -1.0;
 
 float shadowFromCube(int idx, vec3 pos, vec3 N, vec3 lightPos, float NdotL) {
-    // Depth slack: floating-point noise only. There is no acne left for it to
-    // cover -- the capture culls front faces, so this surface is not in the
-    // map to be compared against itself (see PShadowCube.setCullMode() in
-    // main.cpp). What remains is the difference between a distance computed
-    // here and the same distance computed in ShadowCube.frag from an
-    // interpolated position, which is a few ULPs, not millimetres.
+    // Depth slack: floating-point noise only. Front-face culling in the
+    // capture keeps this surface out of its own map, so there is no acne left
+    // to cover -- just a few ULPs between the distance computed here and the
+    // one ShadowCube.frag computed from an interpolated position.
     const float CUBE_BIAS_MIN = 0.0015;
     const float CUBE_BIAS_MAX = 0.004;
     const float CUBE_SOFT_MIN = 0.002;
-    // No normal offset. It existed to land the lookup in a texel whose record
-    // belongs to this surface rather than to the stretch of it half a texel
-    // away -- a concern that only arises when the surface is IN the map, which
-    // it no longer is. It cost a lateral shift of the shadow edge for that,
-    // which is the artifact this whole path was chasing.
+    // No normal offset: it only mattered when the surface was in its own map,
+    // and it cost a lateral shift of the shadow edge.
     const float NORMAL_OFFSET_TEXELS = 0.0;
     const float NORMAL_OFFSET_MAX = 0.0;
-    // Radius of the PCF kernel, in texels of the cube face. This is the only
-    // thing that sets how wide a shadow's edge reads now, and it is the one
-    // place where widening it does NOT eat the contact: the taps sit around
-    // the lookup direction, so the transition straddles the true silhouette
-    // instead of spilling to the lit side of it.
+    // PCF kernel radius in cube-face texels. The only thing that sets how wide
+    // a shadow edge reads, and the one place where widening it doesn't eat the
+    // contact.
     const float PCF_KERNEL_TEXELS = 3.0;
 
     float rawDist = length(pos - lightPos);
     float texelWorld = 2.0 * rawDist / float(SHADOW_CUBE_RES);
 
-    // sin of the incidence angle. cosI is still floored -- a fragment that
-    // close to edge-on receives almost nothing from this light anyway (the
-    // BRDF's own NdotL factor), so there is nothing to protect there, and the
-    // floor keeps sinI from reaching 1 and spending the full budget on a
-    // surface that cannot show the acne it would be paying for.
+    // sin of the incidence angle. cosI is floored: a near edge-on fragment
+    // gets almost nothing from this light anyway (the BRDF's NdotL), so the
+    // floor just keeps sinI off 1.
     float cosI = max(NdotL, 0.15);
     float sinI = sqrt(1.0 - cosI * cosI);
 
@@ -450,42 +291,34 @@ float shadowFromCube(int idx, vec3 pos, vec3 N, vec3 lightPos, float NdotL) {
     float dist = length(toFrag);
 
     float bias = clamp(0.5 * texelWorld, CUBE_BIAS_MIN, CUBE_BIAS_MAX);
-    // Per-tap band, not the shadow's edge softness -- that is the kernel's job
-    // now. This one only keeps a single tap from being a hard step, so the
-    // four of them average into something continuous instead of five levels.
+    // Per-tap band, not the edge softness (the kernel's job): just keeps one
+    // tap from being a hard step, so the four average continuously.
     float softEdge = CUBE_SOFT_MIN;
 
     // The four tap directions: the lookup direction pushed sideways in the
-    // plane perpendicular to it. Offsetting by `r` world units at right angles
-    // to a direction of length dist turns it by r/dist, and one texel subtends
-    // texelWorld/dist, so an offset measured in texelWorld is an offset
-    // measured in texels of the face being read -- the same currency the bias
-    // is in, and independent of how far the light is.
+    // plane perpendicular to it. An offset of `r` world units at right angles
+    // to a length-dist vector turns it by r/dist, and one texel subtends
+    // texelWorld/dist, so measuring the offset in texelWorld measures it in
+    // face texels -- the bias's currency, independent of light distance.
     vec3 axis = abs(toFrag.y) < 0.99 * dist ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
     vec3 T = normalize(cross(toFrag, axis));
     vec3 B = normalize(cross(toFrag, T));
     float r = PCF_KERNEL_TEXELS * texelWorld;
 
-    // Rotated grid rather than a 2x2 box: four points on a square grid share
-    // two x and two y coordinates, so they straddle a straight silhouette in
-    // only three distinct ways and the edge steps in thirds. Rotated, all four
-    // cross it at different offsets.
+    // Rotated grid, not a 2x2 box: a box's four points share two x and two y,
+    // so a straight edge steps in thirds. Rotated, all four cross it apart.
     vec3 d0 = toFrag + r * ( 0.33 * T + 1.00 * B);
     vec3 d1 = toFrag + r * ( 1.00 * T - 0.33 * B);
     vec3 d2 = toFrag + r * (-0.33 * T - 1.00 * B);
     vec3 d3 = toFrag + r * (-1.00 * T + 0.33 * B);
 
-    // One `dist` for all four. Each tap's own direction is longer than toFrag
-    // by r^2/(2*dist) -- at three texels that is under a micrometre of world
-    // space, far below the bias, and using it would only mean four different
-    // thresholds for what is meant to be one test sampled four times.
+    // One `dist` for all four: each tap's direction is longer than toFrag by
+    // r^2/(2*dist), under a micrometre at three texels, far below the bias.
     vec4 gaps = vec4(dist) - sampleShadowCube4(idx, d0, d1, d2, d3);
     vec4 lit = vec4(1.0) - clamp((gaps - vec4(bias)) / softEdge, 0.0, 1.0);
 
-    // Scratch for the debug view, for whichever light this call was for; the
-    // light loop decides which one survives. The tap reported is the one most
-    // willing to call this lit, which is what the whole answer would have
-    // been before the kernel existed.
+    // Debug scratch for this call; the light loop decides which light survives.
+    // The gap reported is the tap most willing to call this lit.
     dbgLastValid = true;
     dbgLastGap = min(min(gaps.x, gaps.y), min(gaps.z, gaps.w));
     dbgLastBias = bias;
@@ -494,39 +327,27 @@ float shadowFromCube(int idx, vec3 pos, vec3 N, vec3 lightPos, float NdotL) {
     return dot(lit, vec4(0.25));
 }
 
-// 1.0: fully lit. 0.0: this light's shadow map says something else is closer
-// to the light than `pos` is, i.e. `pos` is in shadow. shadowIndex < 0 skips
-// the lookup and lights unconditionally, which is why a light without a slot
-// leaks through every wall it reaches.
-//
-// NdotL picks the 2D-map bias below; on the cube path it also scales the
-// normal offset, which is why N has to come along too.
+// 1.0 lit, 0.0 in shadow. shadowIndex < 0 skips the lookup and lights
+// unconditionally, which is why a light without a slot leaks through walls.
+// NdotL picks the 2D-map bias; on the cube path it also scales the normal
+// offset, hence N.
 float shadowFactor(int shadowIndex, int type, vec3 pos, vec3 N, vec3 lightPos, float NdotL) {
-    // Shadows off (cheat menu): light everything as if no map existed. Reads
-    // gubo.debugFlags directly rather than through debugOn(), which is
-    // declared further down the file.
+    // Shadows off (cheat menu). Reads gubo.debugFlags directly, since
+    // debugOn() is declared further down.
     if(shadowIndex < 0 || (gubo.debugFlags & LIGHT_DEBUG_NO_SHADOWS) != 0) {
         return 1.0;
     }
 
+    // Cube path: bias, softening and offset all live in shadowFromCube(),
+    // derived from the light distance it computes anyway.
     if(type == LIGHT_POINT) {
-        // Bias, softening band and normal offset all live inside
-        // shadowFromCube() now: they are derived from the distance to the
-        // light, which is the one thing this function doesn't have and that
-        // one computes anyway. N and NdotL are what scale them, see there.
         return shadowFromCube(shadowIndex, pos, N, lightPos, NdotL);
     }
 
-    // The bias is per PROJECTION KIND, because one number cannot serve both.
-    // These are offsets in the map's 0..1 depth, and how many centimetres that
-    // buys depends entirely on how the projection distributes depth:
-    //
-    //   the sun's orthographic box spreads 1..200 linearly, so a fixed 0.0015
-    //   is a fixed ~30cm everywhere. Left exactly as it was, since it works.
-    //
-    //   a hypothetical shadow-casting spot would crowd most of its range into
-    //   the first metre the way the torches' old perspective maps did, hence
-    //   the slope-scaled pair kept below for that branch.
+    // Bias is per PROJECTION KIND: it's an offset in 0..1 depth, and how many
+    // cm that buys depends on how the projection distributes depth. The sun's
+    // ortho box is linear, so a fixed value works; a shadow-casting spot would
+    // crowd its range into the first metre, hence the slope-scaled pair.
     float bias;
     if(type == LIGHT_DIRECT) {
         bias = 0.0015;
@@ -539,18 +360,15 @@ float shadowFactor(int shadowIndex, int type, vec3 pos, vec3 N, vec3 lightPos, f
     return shadowFromMap2D(shadowIndex, pos, bias);
 }
 
-// Whether one of the debug views from LightConstants.glsl is on. All of them
-// are off in a normal frame, so this is a uniform branch: every pixel of every
-// draw takes the same side of it, which is the cheap kind on a GPU.
+// Whether a LightConstants.glsl debug view is on. Off in a normal frame, so
+// this is a uniform branch -- the cheap kind on a GPU.
 bool debugOn(int flag) {
     return (gubo.debugFlags & flag) != 0;
 }
 
-// LIGHT_DEBUG_HEATMAP's color ramp: black (no light) through blue, green,
-// yellow, to red (overbright). A log compression goes first because the
-// input is unclamped HDR radiance -- torches sit well above 1.0 close up --
-// so a plain linear ramp would just read as solid red across most of a lit
-// room instead of showing the falloff the cheat exists to visualize.
+// LIGHT_DEBUG_HEATMAP's ramp: black through blue, green, yellow, to red. Log
+// compression first, since the input is unclamped HDR radiance -- a linear
+// ramp would read as solid red across most of a lit room.
 vec3 heatmapRamp(float intensity) {
     float x = clamp(log(1.0 + intensity) / log(4.0), 0.0, 1.0);
     vec3 c0 = vec3(0.0, 0.0, 0.0);
@@ -566,22 +384,17 @@ vec3 heatmapRamp(float intensity) {
 
 const float PI = 3.14159265359;
 
-// Hemispheric ambient, E07 s.47-54. Indirect light, blended by which way the
+// Hemispheric ambient, E07 s.47-54. Indirect light blended by which way the
 // surface faces: aligned with ambientDir is all sky, opposite is all ground.
 //
-// interiorAmbient pins the blend at 0.5, the weight a vertical surface gets,
-// instead of deriving it from the normal. Indoors the two ends of the model
-// don't exist -- a dungeon ceiling has no sky above it and no courtyard below
-// -- and taking the ground end literally made it collect ambientLower alone:
-// 1.80x darker than the walls it meets, and brown where they are cool. Only
-// the models that ask for it in materials.json; outdoors the real blend is
-// what puts the sky on the tower tops.
+// interiorAmbient pins the blend at 0.5 (a vertical surface's weight) instead
+// of deriving it from the normal: indoors there is no sky above a ceiling and
+// no courtyard below it, and the ground end alone came out 1.80x darker than
+// the walls and brown where they are cool. Opt-in per material.
 //
-// Split in two: hemisphereColor() is the incoming indirect light along a
-// direction, with no surface in it at all, because the metals below need it
-// sampled along their REFLECTED direction rather than along the normal.
-// hemisphericAmbient() is that light landing on a diffuse surface, which is
-// what every dielectric in the scene wants and what this function used to be.
+// Split in two: hemisphereColor() is the incoming light along a direction,
+// with no surface -- the metals below sample it along the REFLECTED direction.
+// hemisphericAmbient() is that light landing on a diffuse surface.
 vec3 hemisphereColor(vec3 dir) {
     float w = (dot(dir, gubo.ambientDir) + 1.0) / 2.0;   // dot is -1..1, w is 0..1
     if(ubo.interiorAmbient == 1) w = 0.5;
@@ -592,59 +405,36 @@ vec3 hemisphericAmbient(vec3 N, vec3 mD) {
     return hemisphereColor(N) * mD;
 }
 
-// The indirect term for a METAL, standing in for hemisphericAmbient() on the
-// models that set ubo.metallic.
-//
-// What a lock and a chain actually look like is mostly not their own colour:
-// a metal has no diffuse component to scatter light back with, so nearly
-// everything the eye gets off one is a REFLECTION of what is around it. The
-// diffuse ambient above cannot express that -- it hands the surface a colour
-// picked by where the surface FACES, times an albedo, which is the one thing a
-// metal does not do. Left on it, the chain came out very close to black
-// wherever no torch reached it directly (its UVs sample the door texture's
-// wrought-iron band, albedo ~0.03 linear, so mD kills the term outright) and
-// the padlock came out as flat orange fill, i.e. painted plastic.
-//
-// The scene has no environment map, so the hemisphere IS the environment here:
-// the same two colours lights.json authored, read along the mirror direction.
-// That is the cheapest honest form of the split-sum ambient specular (E07's
-// hemisphere in place of a prefiltered cube map); a real one needs a capture
-// pass the project does not have.
+// The indirect term for a METAL, replacing hemisphericAmbient() where
+// ubo.metallic is set. A metal has no diffuse component, so nearly everything
+// the eye gets off a lock or chain is a REFLECTION of the room -- which the
+// diffuse ambient can't produce, and which left the chains near-black and the
+// padlock reading as orange plastic. With no environment map, the hemisphere
+// IS the environment: the two authored colors read along the mirror direction,
+// the cheapest honest form of split-sum ambient specular.
 vec3 metalAmbient(vec3 N, vec3 V, vec3 mS, float roughness, float F0) {
     vec3 R = reflect(-V, N);
 
-    // A rough metal reflects a BLURRED room, not a sharp one, and with a
-    // two-colour hemisphere and no mip chain there is nothing to blur. The
-    // stand-in is to slide the sample direction from R (mirror) towards N
-    // (what a fully diffuse surface would use) as roughness grows: the two
-    // ends are exactly the two ends the real thing interpolates between.
+    // A rough metal reflects a BLURRED room, and there's nothing to blur here,
+    // so slide the sample direction from R (mirror) towards N (diffuse) as
+    // roughness grows -- the same two ends the real thing interpolates between.
     vec3 D = normalize(mix(R, N, roughness));
 
-    // Schlick once more, but on N.V: there is no half vector here, since the
-    // "light" is the whole hemisphere rather than one direction. The ceiling
-    // is max(1 - roughness, F0) instead of the plain 1.0 the direct term uses
-    // -- a rough metal does not turn into a perfect mirror at the horizon, and
-    // letting it reach 1.0 puts a hard bright rim on exactly the pixels that
-    // outline a tube, which is the artefact the chains were already fighting.
+    // Schlick on N.V (no half vector: the "light" is the whole hemisphere).
+    // Ceiling is max(1 - roughness, F0), not 1.0: a rough metal shouldn't turn
+    // mirror at the horizon and put a hard bright rim around a tube.
     float NdotV = clamp(dot(N, V), 0.0, 1.0);
     float F = F0 + (max(1.0 - roughness, F0) - F0) * pow(1.0 - NdotV, 5.0);
 
-    // mS, not mD: for a metal the specular colour IS the material's colour.
+    // mS, not mD: for a metal the specular color IS the material's color.
     return hemisphereColor(D) * mS * F;
 }
 
 // How much of this fragment's light is indirect, 0..1. Per-model if the
-// material set one, the scene's default otherwise.
-//
-// This is E17's gubo.ambientLight (LambertBlinnTexture.frag), the maze lab's
-// one knob for an enclosed space, made per-model so a dungeon corridor and an
-// open courtyard can hold different values in the same frame. The maze runs at
-// 0.05; lights.json documents what the two ends of this scene use and why.
-//
-// The cheat gate sits HERE, downstream of both places a share can be authored,
-// rather than on gubo.ambientWeight alone: a model carrying its own override
-// never reads the global, so zeroing the global left the floor (0.20 in
-// materials.json) fully lit indirectly with the cheat off. See
+// material set one, the scene's default otherwise. This is E17's
+// gubo.ambientLight, made per-model so a corridor and a courtyard can differ
+// in one frame. The cheat gate sits HERE, downstream of both places a share
+// can be authored, so a model with its own override still respects it. See
 // LIGHT_DEBUG_NO_AMBIENT.
 float ambientShare() {
     if(debugOn(LIGHT_DEBUG_NO_AMBIENT)) {
@@ -670,28 +460,19 @@ vec3 lightRadiance(Light lt, vec3 pos) {
 
     float dist = length(lt.pos - pos);
 
-    // max(dist, 0.0001) alone only guards the divide -- g/dist still grows
-    // essentially unbounded as dist shrinks, so radiance stays fairly flat
-    // over most of a room then rockets upward in the last stretch right
-    // next to the source, which the tonemap then crushes to white almost
-    // immediately after. Continuous on paper, but it reads as "barely
-    // brightening, then suddenly maxed out" over the final approach to any
-    // surface right in front of the light -- which is what a wall directly
-    // ahead of the held torch shows as you walk up to it.
-    //
-    // NEAR_RADIUS softens that: it's a smooth floor on how close `dist` can
-    // effectively get (sqrt(dist^2 + r^2) never drops below r), roughly the
-    // torch flame's own physical size, so the curve flattens out near the
-    // light instead of diverging. Spreads the same total brightness change
-    // over more distance instead of dumping most of it into the last few
-    // centimetres.
+    // A plain divide guard still lets g/dist blow up right next to the source,
+    // so radiance stays flat over most of a room then spikes to white in the
+    // last stretch -- what a wall shows as you walk the held torch up to it.
+    // NEAR_RADIUS is a smooth floor on the effective distance (sqrt never
+    // drops below r), about the flame's own size, so the curve flattens near
+    // the light instead of diverging.
     const float NEAR_RADIUS = 0.4;
     float distSoft = sqrt(dist * dist + NEAR_RADIUS * NEAR_RADIUS);
     vec3 radiance = lt.color * pow(lt.g / distSoft, lt.beta);
 
     if(lt.type == LIGHT_SPOT) {
-        // lt.dir is where the lamp POINTS, so a lamp aimed down is [0,-1,0].
-        // The slides write this against lx, hence the negation here.
+        // lt.dir is where the lamp POINTS; the slides write this against lx,
+        // hence the negation.
         float cosAngle = dot(-lightDirection(lt, pos), lt.dir);
         radiance *= clamp((cosAngle - lt.cosOut) / (lt.cosIn - lt.cosOut), 0.0, 1.0);
     }
@@ -728,9 +509,9 @@ float fresnelSchlick(vec3 V, vec3 h, float F0) {
 
 // Cook-Torrance, E06 s.38-39:
 //   fr = clamp(N.L) * (k * mD + (1-k) * mS * D*F*G / (4 * clamp(N.L) * clamp(N.V)))
-// Diffuse and specular are interpolated by k, not added: adding both at full
-// strength would return more light than came in. The 4*(N.L)*(N.V) is the
-// microfacet-area to surface-area normalization, not a fudge factor.
+// Diffuse and specular are interpolated by k, not added -- adding both at full
+// strength returns more light than came in. The 4*(N.L)*(N.V) is the
+// microfacet-to-surface-area normalization.
 vec3 BRDF(vec3 N, vec3 L, vec3 V, vec3 mD, vec3 mS, float roughness, float F0, float k) {
     float NdotL = clamp(dot(N, L), 0.0, 1.0);
     float NdotV = clamp(dot(N, V), 0.0, 1.0);
@@ -740,54 +521,39 @@ vec3 BRDF(vec3 N, vec3 L, vec3 V, vec3 mD, vec3 mS, float roughness, float F0, f
     float G = geometricTerm(N, h, L, V);
     float F = fresnelSchlick(V, h, F0);
 
-    // Denominator hits 0 at the silhouette. The NdotL below zeroes the result
-    // there anyway; the guard just avoids an inf, since inf * 0 is a NaN.
+    // Denominator hits 0 at the silhouette; NdotL zeroes the result there
+    // anyway, the guard just avoids an inf (inf * 0 is NaN).
     vec3 specular = mS * (D * F * G) / max(4.0 * NdotL * NdotV, 0.0001);
 
-    // Lambert diffuse, as E06 s.38 prescribes for this model.
-    // Clamped NdotL, so a face turned away contributes 0 rather than a negative
-    // amount that would eat into what another light put there.
+    // Lambert diffuse (E06 s.38). Clamped NdotL, so a face turned away
+    // contributes 0 rather than eating into what another light put there.
     return NdotL * (k * mD + (1.0 - k) * specular);
 }
 
-// The tone map (L09 s.45) used to be applied at the end of this shader. It has
-// MOVED to Composite.frag, the last pass of the HDR chain, and the reason is
-// worth stating: tone mapping squashes everything into [0,1], and a bloom pass
-// works by finding the pixels that came out ABOVE 1. Compressing the range here
-// would throw away the only thing the bright pass is looking for, and the flame
-// would end up with no glow around it at all.
-//
-// So this shader now writes raw, un-clamped radiance into a floating-point
-// attachment, and the range compression happens once, at the very end, after
-// the bloom has been extracted from it. The Tone Mapping cheat still works; it
-// just takes effect one pass later (gubo.debugFlags is forwarded to the
-// composite's own uniform block by updateUniformBuffer()).
+// The tone map (L09 s.45) MOVED to Composite.frag, the last pass of the HDR
+// chain: it squashes everything into [0,1], and the bloom pass works by
+// finding pixels above 1, so compressing here would leave the flame no glow.
+// This shader writes raw radiance into a float attachment; the Tone Mapping
+// cheat still works, one pass later.
 
 // ---------------------------------------------------------------------------
-// Procedural grime, for the interior metals (chains, padlock, key). Those
-// three have been underground long enough to tarnish -- dust settled in the
-// pits, a filmed-over patch here and there -- and none of it is in the flat
-// albedo the MGCG pack ships. With no second UV set and no dirt map to
-// sample, it is generated from world position: a few octaves of value noise
-// read where the fragment actually sits in the room, so neighbouring chain
-// links come out weathered differently instead of identically.
+// Procedural grime for the interior metals (chains, padlock, key). They have
+// tarnished underground and none of it is in the flat MGCG albedo. With no
+// second UV set or dirt map, it comes from world position: a few octaves of
+// value noise, so neighbouring chain links weather differently.
 //
-// main() uses it for two things: roughness UP (grime scatters what bare
-// metal would throw back sharply) and the reflection tint DOWN (a filmed
-// surface reflects less of the room). Albedo is left alone -- a metal's k is
-// forced to 0, so there is no diffuse term for dirt to darken.
-//
-// Gated in main() to metal && interiorAmbient, so it lands on those three
-// and not on the outdoor gate lanterns ("light"), which the weather rinses.
+// main() uses it for roughness UP (grime scatters) and reflection tint DOWN
+// (a filmed surface reflects less). Albedo is left alone -- a metal has no
+// diffuse term to darken. Gated to metal && interiorAmbient, so it skips the
+// outdoor lanterns.
 float grimeHash(vec3 p) {
     p = fract(p * 0.3183099 + vec3(0.1, 0.2, 0.3));
     p += dot(p, p.yzx + 19.19);
     return fract((p.x + p.y) * p.z);
 }
 
-// Value noise: hash the eight corners of the cell p falls in, smoothstep the
-// fractional position, trilinearly blend. Same idea as Flame.frag's noise2,
-// one dimension up.
+// Value noise: hash the 8 corners of p's cell, smoothstep the fraction,
+// trilinearly blend. Flame.frag's noise2, one dimension up.
 float grimeNoise(vec3 p) {
     vec3 i = floor(p);
     vec3 f = p - i;
@@ -800,11 +566,9 @@ float grimeNoise(vec3 p) {
                mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y), f.z);
 }
 
-// 0 clean .. 1 filthy. The three objects are ~1-3 world units across, so
-// 6 / 18 / 50 per unit place the coarse blotches at a few centimetres and
-// the grain below that. smoothstep keeps clean metal genuinely clean and
-// drives the dirty patches most of the way, rather than a flat grey veil
-// over everything.
+// 0 clean .. 1 filthy. The objects are ~1-3 units across, so 6/18/50 per unit
+// put the coarse blotches at a few cm and the grain below. smoothstep keeps
+// clean metal clean instead of laying a grey veil over everything.
 float grime(vec3 worldPos) {
     float g = grimeNoise(worldPos *  6.0) * 0.6
             + grimeNoise(worldPos * 18.0) * 0.3
@@ -817,39 +581,31 @@ void main() {
     // Interpolation shortens the normal wherever the corner normals diverge.
     vec3 N = normalize(fragNorm);
 
-    // The MGCG models average their vertex normals across hard edges, so a flat
-    // face comes out with a gradient across it instead of one constant value
-    // (E06 s.3-16: a hard-edged solid needs its vertices duplicated per face,
-    // and these are not). For those models the face's own normal is derived
-    // here instead: the derivatives of the world position across the triangle
-    // are two vectors lying in its plane, so their cross product is exactly
-    // perpendicular to it.
-    //
-    // The sign of that cross product depends on winding, so it is oriented
-    // against the vertex normal, which is unreliable in magnitude but perfectly
-    // good at saying which side is out.
+    // The MGCG models average vertex normals across hard edges, so a flat face
+    // gets a gradient instead of one value. For those, derive the face normal
+    // here: dFdx/dFdy of the world position are two vectors in the triangle's
+    // plane, so their cross product is perpendicular to it. Its sign depends
+    // on winding, so orient it against the vertex normal (unreliable in
+    // magnitude, fine for which side is out).
     if(ubo.flatNormals == 1) {
         vec3 faceN = normalize(cross(dFdx(fragPos), dFdy(fragPos)));
         N = dot(faceN, N) < 0.0 ? -faceN : faceN;
     }
 
-    // No sRGB conversion here: the texture's image view is VK_FORMAT_R8G8B8A8_SRGB
-    // (Starter.hpp's default), so the sampler already returns linear values.
+    // No sRGB conversion: the image view is R8G8B8A8_SRGB, so the sampler
+    // already returns linear values.
     vec3 mD = texture(albedoMap, fragUV).rgb;
 
-    // Debug view: the shading normal, remapped from [-1,1] to [0,1], so +X is
-    // red, +Y green, +Z blue. Placed after the flatNormals block above so what
-    // it shows is the normal the lighting actually used, faceted faces
-    // included, which is the point of looking at it. Not a color in any real
-    // sense, so the sRGB encode the swapchain applies to it is meaningless
-    // here; the directions are still perfectly readable.
+    // Debug view: the shading normal remapped to [0,1] (+X red, +Y green,
+    // +Z blue). After the flatNormals block, so it shows the normal the
+    // lighting actually used.
     if(debugOn(LIGHT_DEBUG_NORMALS)) {
         outColor = vec4(N * 0.5 + 0.5, 1.0);
         return;
     }
 
-    // Debug view: the texture alone, no lighting and no ambient. Tells a black
-    // pixel that no light reached apart from a black pixel in the texture.
+    // Debug view: the texture alone, no lighting. Tells "no light reached"
+    // apart from "the texture is black here".
     if(debugOn(LIGHT_DEBUG_UNLIT)) {
         outColor = vec4(mD, 1.0);
         return;
@@ -857,52 +613,37 @@ void main() {
 
     vec3 V = normalize(gubo.eyePos - fragPos);
 
-    // Debug view: incoming light intensity, ignoring the surface's own
-    // albedo. Forcing mD/mS/k the same way LIGHT_DEBUG_NO_SPECULAR does
-    // reuses the normal Lo loop below unchanged; only what happens to the
-    // result (the ramp instead of a straight write) differs, further down.
+    // Debug view: incoming light intensity, ignoring albedo. Forcing mD/mS/k
+    // reuses the Lo loop below unchanged; only the result handling differs.
     bool heatmap = debugOn(LIGHT_DEBUG_HEATMAP);
     if(heatmap) {
         mD = vec3(1.0);
     }
 
-    // Both debug views want the specular gone, and the heatmap additionally
-    // wants nothing about the material in the result. Named once because the
-    // metal path below has to stand down for both of them: a "no specular"
-    // view of a surface whose whole response is specular has to show the
-    // diffuse fallback, not the metal.
+    // Both views want the specular gone. Named once because the metal path
+    // must stand down too: a "no specular" view of an all-specular surface has
+    // to show the diffuse fallback.
     bool specularOff = debugOn(LIGHT_DEBUG_NO_SPECULAR) || heatmap;
     bool metal = ubo.metallic == 1 && !specularOff;
 
-    // k is the diffuse share, so forcing it to 1 leaves the specular term
-    // multiplied by 0: the highlights go, everything else stays exactly as it
-    // was. Done here rather than inside BRDF so that function keeps taking all
-    // its inputs as arguments.
-    //
-    // A metal goes the other way, to 0: the diffuse lobe comes from light that
-    // entered the surface and scattered back out, and in a conductor the free
-    // electrons absorb that instead of re-emitting it. Forced here rather than
-    // written as "k": 0.0 in materials.json so the flag carries the whole
-    // definition of "this is a metal" in one place, and so no metal entry can
-    // be left with a stray diffuse share by accident.
+    // k is the diffuse share: forcing it to 1 zeroes the specular term (the
+    // highlights go, nothing else changes). A metal goes to 0 -- its free
+    // electrons absorb the subsurface scatter a diffuse lobe comes from.
+    // Forced here so the flag alone defines "this is a metal".
     float k = specularOff ? 1.0 : (metal ? 0.0 : ubo.k);
 
-    // Grime, for the interior metals only (see grime() above). Everyone else
-    // takes ubo.roughness / ubo.mS unchanged: g is 0, so both mixes are the
-    // identity. Where it does apply, a dirty patch roughens the surface --
-    // ubo.roughness*2 + 0.20, capped short of fully matte -- and mutes the
-    // reflection tint towards 0.4 of itself.
+    // Grime, interior metals only. Everyone else has g == 0, so both mixes
+    // are the identity. Where it applies, a dirty patch roughens the surface
+    // and mutes the reflection tint.
     //
-    // The wrought-iron chains wear it fully; the cast-brass padlock and key
-    // get much less. No per-model flag for that -- it reads the specular
-    // colour, which is already the tell: brass is warm (mS.b well under
-    // mS.r), steel is all but neutral (ratio ~1).
+    // The wrought-iron chains wear it fully, the brass padlock and key much
+    // less. No per-model flag: the specular color is the tell -- brass is warm
+    // (mS.b well under mS.r), steel is near neutral.
     float warmth = ubo.mS.b / max(ubo.mS.r, 1e-4);          // ~0.46 brass, ~1.04 steel
     float brassness = 1.0 - smoothstep(0.6, 0.95, warmth);  // 1 brass, 0 steel
-    // Two knobs, not one. grimeScale drops the overall bite; the pow() with
-    // an exponent above 1 for brass crushes the mid-grey coverage so only the
-    // few concentrated hotspots survive -- that is what breaks up the big
-    // soft blob rather than just fading it.
+    // Two knobs: grimeScale drops the overall bite; the pow() above 1 for
+    // brass crushes the mid-grey coverage so only the hotspots survive, which
+    // breaks up the soft blob instead of just fading it.
     float grimeScale = mix(1.0, 0.30, brassness);
     float g = grime(fragPos);
     g = pow(g, mix(1.0, 2.5, brassness)) * grimeScale;
@@ -910,62 +651,43 @@ void main() {
     float roughG = mix(ubo.roughness, min(ubo.roughness * 2.0 + 0.20, 0.95), g);
     vec3  mSG    = ubo.mS * mix(1.0, 0.40, g);
 
-    // Rendering equation: sum over the sources of radiance times BRDF, each
-    // term zeroed by shadowFactor() wherever that one light doesn't reach
-    // this point. hemisphericAmbient() below is untouched by it on purpose:
-    // shadow mapping only ever blocks a light's DIRECT contribution, never
-    // the sky-and-ground indirect that term stands in for -- otherwise a
-    // shadow would read as a hole into pure black instead of the dim,
-    // indirectly-lit area a real one is. That exemption is the hemisphere's
-    // alone. The per-light bounce accumulated in the loop below is shadowed
-    // like everything else there, for the reason given at its own site.
-    // Below this, a light's radiance at this fragment is darker than the
-    // final image can show even before the BRDF and shadow map get
-    // involved -- well under 1 LSB of an 8-bit display once exposure and
-    // the sRGB curve in Composite.frag are through with it. Point/spot
-    // lights are only CPU-culled by distance to the CAMERA (see
-    // TORCH_LIGHT_CULL_DIST in main.cpp), not to the fragment being shaded,
-    // so a torch that passed that cull can still be near-zero at a
-    // fragment on the far side of a large room; this catches that case per
-    // pixel instead.
+    // Rendering equation: sum of radiance times BRDF over the sources, each
+    // term zeroed by shadowFactor() where that light doesn't reach. The
+    // hemispheric ambient below is exempt on purpose -- shadow mapping blocks
+    // only a light's DIRECT contribution, or a shadow would be a hole into
+    // black. The per-light bounce in the loop IS shadowed, for the reason at
+    // its own site.
+    //
+    // LIGHT_ATTEN_EPS: below this a light's radiance is under 1 LSB of the
+    // final 8-bit image, before the BRDF even runs. Point/spot lights are only
+    // CPU-culled by distance to the CAMERA, so one that passed that cull can
+    // still be near-zero at a far fragment; this catches that per pixel.
     const float LIGHT_ATTEN_EPS = 1e-3;
 
     vec3 Lo = vec3(0.0);
-    // The point/spot lights' INDIRECT contribution, accumulated alongside
-    // their direct one. Spent below, out of the ambient share rather than
-    // added to the frame -- see the blend.
-    //
-    // In this loop rather than a pointBounce() of its own purely so it can
-    // reuse `radiance`, `L` and the light's visibility: those are the whole
-    // cost of the term, and computing them twice would double the
-    // length()/pow() work and a second shadow-map fetch in the hottest loop
-    // in the shader to produce identical numbers. It still skips the BRDF,
-    // which is the other expensive half and the one it genuinely does not
-    // want -- bounced light arrives from most of the hemisphere, so it has no
-    // lobe and no terminator.
+    // The point/spot lights' INDIRECT contribution, spent below out of the
+    // ambient share. In this loop, not a function of its own, so it can reuse
+    // `radiance`, `L` and the visibility -- recomputing those would double the
+    // length()/pow() and shadow fetch in the hottest loop. It skips the BRDF,
+    // which bounced light has no lobe for.
     vec3 bounce = vec3(0.0);
     for(int i = 0; i < gubo.lightCount; i++) {
         vec3 radiance = lightRadiance(gubo.lights[i], fragPos);
 
-        // Cheap reject before the expensive part: BRDF's handful of pow()s
-        // and, more importantly, shadowFactor()'s dependent shadow-map
-        // texture fetch. A direct light's radiance is a constant scene
-        // color, never near-zero while it's enabled, so this never fires
-        // for the sun -- only point/spot lights actually decay with
-        // distance.
+        // Cheap reject before the BRDF's pow()s and shadowFactor()'s dependent
+        // texture fetch. A direct light's radiance is constant, so this only
+        // ever fires for decaying point/spot lights.
         if(max(radiance.r, max(radiance.g, radiance.b)) < LIGHT_ATTEN_EPS) {
             continue;
         }
 
         vec3 L = lightDirection(gubo.lights[i], fragPos);
-        // Same clamped dot the BRDF uses, computed once here because
-        // shadowFactor scales its depth bias by it too.
+        // Same clamped dot the BRDF uses; shadowFactor scales its bias by it.
         float NdotL = clamp(dot(N, L), 0.0, 1.0);
         dbgLastValid = false;
         float vis = shadowFactor(gubo.lights[i].shadowIndex, gubo.lights[i].type, fragPos, N, gubo.lights[i].pos, NdotL);
-        // See the dbg* globals: keep the cube-shadowed light that contributes
-        // most radiance here, which is the one whose shadow this fragment is
-        // in or out of in any way worth looking at.
+        // dbg* globals: keep the cube-shadowed light contributing most radiance
+        // here -- the one whose shadow is worth looking at.
         float dbgLum = dot(radiance, vec3(0.2126, 0.7152, 0.0722));
         if(dbgLastValid && dbgLum > dbgBestLum) {
             dbgBestLum = dbgLum;
@@ -978,79 +700,42 @@ void main() {
             * BRDF(N, L, V, mD, mSG, roughG, ubo.F0, k)
             * vis;
 
-        // Wrap-around diffuse, NOT the clamped cosine the BRDF just used:
-        // (dot + 1) / 2 instead of max(dot, 0). Light that reaches a surface
-        // after bouncing arrives from most of the hemisphere rather than from
-        // the flame's own direction, so it has no terminator -- a face turned
-        // away from a torch is dimmer than one facing it, not black. Exactly
-        // the remap hemisphereColor() does on the ambient axis, applied to
-        // the light's direction instead of world up.
+        // Wrap-around diffuse, NOT the BRDF's clamped cosine: (dot + 1) / 2.
+        // Bounced light arrives from most of the hemisphere, so it has no
+        // terminator -- a face turned away from a torch is dimmer, not black.
+        // The same remap hemisphereColor() does, on the light direction.
         //
-        // Direct lights are excluded, and that is deliberate rather than an
-        // optimisation: the sun's own indirect contribution is what the
-        // hemispheric term already IS (sky above, ground bounce below, E07
-        // s.47-54), so feeding it in here would double it. This term exists
-        // for the sources the hemisphere cannot represent -- the ones with a
-        // position, that light one end of a corridor and not the other. It is
-        // therefore entirely independent of whether the sun exists at all.
+        // Direct lights are excluded: the sun's indirect contribution is what
+        // the hemispheric term already IS, so feeding it here would double it.
+        // This term is for the positioned sources the hemisphere can't model.
         //
-        // `vis` applies here too, and originally it did not: bounced light was
-        // held to be what FILLS a shadow rather than something a shadow can
-        // block, which is true of the light itself and false of the number
-        // used to stand in for it. Its magnitude is `radiance`, the direct,
-        // unoccluded, inverse-square arrival from the flame -- so a shadow
-        // cast by anything near a torch got filled most brightly at the end
-        // nearest the torch, fading along its own length. That is the glow at
-        // the start of a barrel's shadow, and no amount of shadow-map work
-        // could reach it: the term was never consulting the shadow map.
-        //
-        // Shadowing it does not put the scene back to a black shadow, which
-        // is what the original reasoning was protecting against.
-        // hemisphericAmbient() below is still unshadowed and still the floor
-        // under every fragment; what goes away is only the part that was
-        // tracking distance to a flame the fragment cannot see.
+        // `vis` applies here too. It didn't originally, and a shadow near a
+        // torch filled brightest at the torch end and faded -- the glow at the
+        // start of a barrel's shadow, because the term never read the map.
+        // Shadowing it doesn't bring back a black shadow: hemisphericAmbient()
+        // is still the unshadowed floor under every fragment.
         if(gubo.lights[i].type != LIGHT_DIRECT) {
             bounce += radiance * (dot(N, L) * 0.5 + 0.5) * vis;
         }
     }
 
-    // E17's blend (LambertBlinnTexture.frag:51-52), not a sum: ambient is a
-    // SHARE of the light at this fragment, and the direct term gives up
-    // exactly what ambient takes. Summing the two, as this did before, made
-    // hemisphericAmbient() a brightness floor under every pixel in the scene
-    // -- it has no visibility term, so a sealed room collected the same
-    // indirect light as the open courtyard, and no ceiling could stop it. The
-    // blend can't do that: at w the ambient never contributes more than w of
-    // the frame, and the total can never exceed what the direct lights alone
-    // would have given.
+    // E17's blend, not a sum: ambient is a SHARE of the light at this fragment
+    // and the direct term gives up exactly what ambient takes. Summed (as
+    // before) the hemispheric term was a brightness floor under every pixel --
+    // no visibility term, so a sealed room collected as much indirect light as
+    // the courtyard. Blended, the ambient never exceeds `aw` of the frame.
     //
-    // Note this is still not occlusion. It is a per-model authored guess at
-    // how enclosed a surface is, which is what E17 does and what the assets
-    // allow -- the MGCG pack ships albedo only, so the AO map E14/E15 sample
-    // (aoMap, [TODO 5b]) has nothing to read. Baking one is the honest fix.
+    // Still not occlusion: a per-model authored guess at how enclosed a
+    // surface is, until there's an AO map to bake (the MGCG pack ships albedo
+    // only).
     //
-    // The metals take the same share of the frame, spent on a reflection of
-    // the room instead of on a diffuse bounce -- see metalAmbient(). Same
-    // blend, same weight: what changes is only what the indirect light does
-    // once it lands.
-    // Indirect light now has two sources, and they answer different questions.
-    // hemisphericAmbient() is "what arrives from the sky and from the ground",
-    // which is the right model outdoors and vacuous in a sealed corridor. The
-    // bounce is "what arrives from the torches after hitting a wall", which is
-    // the only indirect light there actually is down there. Summed, because
-    // they are genuinely two different sources -- but summed INSIDE the
-    // ambient bucket, so the pair still cannot take more than `aw` of the
-    // frame and the E17 blend's guarantee below is untouched.
-    //
-    // mD for the same reason hemisphericAmbient() applies it: this is indirect
-    // light landing on a diffuse surface, and it gets reflected by the base
-    // colour exactly like direct light does.
-    //
-    // Metals take the hemisphere alone. Their indirect term is a REFLECTION,
-    // sampled along the reflected view direction (metalAmbient()); a wrap
-    // diffuse term has no direction to reflect and adding it would just paint
-    // a diffuse lobe back onto the one surface type defined by not having one.
-    // The chains and the padlock hang in torchlight and get it directly.
+    // Indirect light has two sources: hemisphericAmbient() (sky and ground,
+    // right outdoors, vacuous in a corridor) and the bounce (torchlight off a
+    // wall, the only indirect light down there). Summed INSIDE the ambient
+    // bucket, so the pair still can't exceed `aw`. mD because this is indirect
+    // light on a diffuse surface. Metals take the hemisphere alone, as a
+    // REFLECTION (metalAmbient()) -- a wrap diffuse term has nothing to
+    // reflect.
     float aw = ambientShare();
     vec3 ambient = metal ? metalAmbient(N, V, mSG, roughG, ubo.F0)
                          : hemisphericAmbient(N, mD) + bounce * gubo.ambientBounce * mD;
@@ -1062,9 +747,8 @@ void main() {
         return;
     }
 
-    // See LIGHT_DEBUG_SHADOW_GAP. Sits after the light loop because that is
-    // what fills dbgGap, and before the glow/tone-map tail because none of
-    // that means anything in a false-colour view.
+    // LIGHT_DEBUG_SHADOW_GAP. After the light loop (which fills dbgGap),
+    // before the glow tail (meaningless in a false-color view).
     if(debugOn(LIGHT_DEBUG_SHADOW_GAP)) {
         vec3 dbg;
         if(!dbgCube)                       dbg = vec3(0.25);
@@ -1076,42 +760,25 @@ void main() {
         return;
     }
 
-    // Focus glow: a whimsical gold "magic field" aura on the silhouette of
-    // whichever single door/pickup instance the player's crosshair is
-    // currently aimed at (ubo.glow, set per-instance in main.cpp's
-    // updateUniformBuffer loop -- see gazedInstance), chosen to stay clear
-    // of the ghost attack mode's own color cue. Purely a per-fragment color
-    // addition on this instance's own surface -- it doesn't cast any light
-    // onto anything else nearby (an earlier version injected a point light
-    // for that; removed, so the effect stays exactly on the model).
-    //
-    // A Fresnel/rim term (grazing angles between the surface normal and the
-    // view direction) concentrates this at the model's silhouette rather
-    // than washing the whole surface, like a field clinging to its edges.
-    // `flow` rides a sine wave over world position instead of just fragment
-    // time, so as the term sweeps 0..1 it reads as travelling around the
-    // object's surface rather than the whole thing pulsing in place
-    // together.
+    // Focus glow: a gold "magic field" aura on the silhouette of whichever
+    // door/pickup/candle/torch instance the crosshair is aimed at (ubo.glow,
+    // set per-instance in main.cpp). Purely a per-fragment color add on this
+    // surface -- it casts no light on anything else. A Fresnel rim term
+    // concentrates it at the silhouette, and `flow` rides a sine over world
+    // position so it reads as travelling around the object rather than
+    // pulsing in place.
     if(ubo.glow != 0.0) {
-        // ubo.glow (set in main.cpp's updateUniformBuffer, see gazedGlowKind
-        // and gazedInteractionDisabled there) packs two things into one
-        // scalar: rounded magnitude selects the category color (1 = Door,
-        // gold; 2 = Pickup, blue/purple; 3 = Candle, warm flame orange;
-        // 4 = WallTorch, bright fire yellow), then a negative sign overrides
-        // that with red -- the player is
-        // aimed at something disabled right now (e.g. a locked door with no
-        // matching key, or a candle with nothing to light it with). Same
-        // aura either way, just a different color, so everything below is
-        // shared.
+        // ubo.glow packs two things: rounded magnitude picks the category
+        // color (1 Door gold, 2 Pickup blue/purple, 3 Candle orange,
+        // 4 WallTorch yellow), a negative sign overrides it with red for
+        // something disabled (a locked door with no key, a candle with
+        // nothing to light it). Same aura, different color.
         const vec3 GLOW_COLOR_DOOR = vec3(1.0, 0.78, 0.25);
         const vec3 GLOW_COLOR_PICKUP = vec3(0.55, 0.35, 1.0);
-        // Hotter and redder than the door's gold, so the two read apart at a
-        // glance: a candle promises FIRE, and the aura is the only cue the
-        // player gets before pressing the key.
+        // Hotter and redder than the door's gold: a candle promises FIRE.
         const vec3 GLOW_COLOR_CANDLE = vec3(1.0, 0.45, 0.10);
-        // Brighter and yellower than the candle's ember orange: a burning
-        // wall torch is a strong light source, and this is the cue that it's
-        // the thing to light your own torch from.
+        // Brighter and yellower still: a burning wall torch is what you light
+        // your own torch from.
         const vec3 GLOW_COLOR_TORCH = vec3(1.0, 0.66, 0.22);
         const vec3 GLOW_COLOR_DISABLED = vec3(1.0, 0.15, 0.1);
         vec3 GLOW_COLOR;
@@ -1130,65 +797,44 @@ void main() {
         float ndotv = clamp(dot(N, V), 0.0, 1.0);
         float edgeTerm = 1.0 - ndotv;
 
-        // A bit wider than the original pow(edgeTerm, 3.0): on its own this
-        // still wasn't enough contrast on small, shiny props like the key,
-        // whose own specular highlights compete with a thin gold rim for
-        // attention -- see the dark outline below for the rest of the fix.
+        // Wider than a plain pow(edgeTerm, 3.0): still not enough contrast on
+        // small shiny props like the key, whose own highlights fight the rim.
         float rim = pow(edgeTerm, 2.2);
 
-        // A thin, near-black separator right at the true geometric
-        // silhouette -- a much sharper power than the gold rim, so it only
-        // shows in the last couple of degrees -- darkening the surface
-        // there BEFORE the gold is added. A reflective surface like the
-        // key's can otherwise bounce a bright highlight straight through
-        // right where the gold band sits, washing the two together into one
-        // gold-on-gold blur; giving the gold something duller immediately
-        // underneath it at the very edge is what actually separates it from
-        // the model, the way an outline separates a sticker from its
-        // background.
+        // A thin near-black separator right at the silhouette (much sharper
+        // power), darkening the surface BEFORE the gold is added. Without it a
+        // reflective surface bounces a highlight through the gold band and the
+        // two wash together; the darker edge separates the aura from the model
+        // like an outline round a sticker.
         float edgeOutline = pow(edgeTerm, 12.0);
         color = mix(color, color * 0.15, edgeOutline * glowStrength);
 
         float flow = 0.5 + 0.5 * sin(dot(fragPos, vec3(1.3, 0.9, 1.1)) * 2.2 - ubo.time * 2.0);
         vec3 glowRaw = GLOW_COLOR * glowStrength * rim * flow * 0.9;
 
-        // Composite.frag's tone map (toneMap() there) divides everything at
-        // a pixel by that SAME pixel's own total luminance, so a plain
-        // additive glow gets proportionally crushed wherever the surface
-        // underneath is already bright, and shows almost undimmed wherever
-        // it's dark -- exactly backwards from "always visible no matter
-        // what". Scaling the addition by (1 + this fragment's own
-        // pre-glow luminance) cancels that division back out to first
-        // order (the algebra: output = (c + k*(Y+1)) / (Y + k*(Y+1) + 1)
-        // -> k/(1+k) as Y grows, a constant, instead of shrinking towards
-        // 0), so the glow's apparent brightness ends up roughly the same
-        // whether the object sits in full torchlight or pitch dark.
-        // Unclamped HDR like the rest of `color`, so it still blooms
-        // through the same post chain the torch flames ride.
+        // Composite.frag's tone map divides each pixel by its own luminance,
+        // so a plain additive glow gets crushed where the surface is bright
+        // and shows undimmed where it's dark -- backwards. Scaling the add by
+        // (1 + pre-glow luminance) cancels that division to first order, so
+        // the glow looks about equally bright in torchlight or pitch dark.
+        // Unclamped HDR, so it still blooms through the post chain.
         float baseLuminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
         color += glowRaw * (1.0 + baseLuminance);
     }
 
-    // Distance fog: fades toward black (matching buildPostAttachments()'s
-    // background clear colour, see main.cpp) as fragPos gets further from
-    // the eye, so the geometry visibility cull (GEOM_CULL_* in main.cpp)
-    // reads as things dissolving into a dark, atmospheric haze -- the classic
-    // "heavy fog hides the draw distance" trick -- rather than popping out of
-    // view partway through the screen. Exponential-SQUARED falloff (as
-    // opposed to plain exponential) rather than a hard linear ramp: it stays
-    // close to 1 near the camera, where clarity still matters for gameplay
-    // (reading a door, spotting a key), and only starts biting hard in the
-    // back half of its range, right where the cull needs it to. Computed in
-    // HDR linear space, before Composite.frag's tone map: fogging AFTER
-    // tonemapping would fight the display-referred curve instead of blending
-    // like a physical haze would.
+    // Distance fog: fades toward black (the background clear color) with
+    // distance from the eye, so the geometry cull (GEOM_CULL_* in main.cpp)
+    // reads as things dissolving into haze rather than popping out mid-screen.
+    // Exponential-SQUARED falloff stays near 1 close to the camera, where
+    // clarity still matters, and bites in the back half where the cull needs
+    // it. In HDR linear space, before the tone map, so it blends like a
+    // physical haze.
     float fogDist = length(fragPos - gubo.eyePos);
     float fogFactor = exp(-pow(gubo.fogDensity * fogDist, 2.0));
     color = mix(vec3(0.0), color, fogFactor);
 
-    // Written linear and unclamped into an R16G16B16A16_SFLOAT attachment, so
-    // a surface that receives more than a unit of light keeps saying so rather
-    // than being cut off at white. Composite.frag tone maps it down at the end
-    // of the chain; the bloom passes in between are what read the excess.
+    // Linear, unclamped, into an R16G16B16A16_SFLOAT attachment: a surface lit
+    // past 1.0 keeps saying so. Composite.frag tone maps it down at the end;
+    // the bloom passes in between read the excess.
     outColor = vec4(color, 1.0);
 }

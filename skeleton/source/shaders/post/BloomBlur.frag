@@ -1,18 +1,10 @@
-// FRAGMENT SHADER: one axis of a separable Gaussian blur, run twice per
-// frame (horizontal then vertical) on the quarter-res bright-pass output.
-// A true 2D Gaussian blur is separable into two 1D passes with identical
-// per-pixel cost to a single N-tap 2D kernel of the same radius but far
-// fewer taps overall (2*N vs N*N) -- this shader is that 1D pass, and which
-// axis it runs along for a given draw is entirely decided by post.blurDir.
+// FRAGMENT SHADER: one axis of a separable Gaussian blur, run twice per frame
+// (H then V) on the quarter-res bright-pass output. A 2D Gaussian separates
+// into two 1D passes (2*N taps instead of N*N); post.blurDir picks the axis.
 //
-// Where its inputs come from:
-//   uv              from Post.vert, the shared full-screen-quad vertex shader.
-//   post (set 0)    written per draw by main.cpp: the source texture's texel
-//                   size and blurDir, (1,0) for the horizontal pass and (0,1)
-//                   for the vertical one.
-//   srcTex          the previous stage's output: BloomBright.frag's result
-//                   for the horizontal pass, this shader's own horizontal
-//                   result for the vertical pass.
+//   uv          from Post.vert
+//   post (set 0)  per draw: source texel size, blurDir (1,0) H or (0,1) V
+//   srcTex       previous stage: BloomBright.frag for H, this shader's H result for V
 
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
@@ -36,36 +28,24 @@ layout(location = 0) in vec2 uv;
 layout(location = 0) out vec4 outColor;
 
 void main() {
-	// Straightforward 9 independent fetches, not the 5-fetch bilinear-tap
-	// trick (pairing weights and sampling between texel centres to get two
-	// taps for the price of one). That trick needs each pair's two weights
-	// to be combined and its sample point solved for by hand per kernel, and
-	// getting that arithmetic wrong silently biases the blur rather than
-	// erroring out. This bloom's kernel is small and runs at quarter
-	// resolution, so the extra four fetches are cheap enough that the risk
-	// isn't worth taking.
+	// 9 plain fetches, not the 5-fetch bilinear-tap trick: that needs each
+	// pair's weight and sample point solved by hand, and getting it wrong
+	// silently biases the blur. The kernel is small and runs at quarter res,
+	// so the extra four fetches are cheap.
 	//
-	// Weights are a standard radius-4 discrete Gaussian, symmetric around
-	// the centre tap and normalized to sum to 1.0 so the blur cannot change
-	// the image's total brightness, only spread it out.
+	// Weights: a radius-4 discrete Gaussian, symmetric, normalized to 1.0 so
+	// the blur only spreads brightness, never changes the total.
 	float weights[9] = float[](
 		0.016216, 0.054054, 0.1216216, 0.1945946, 0.2270270,
 		0.1945946, 0.1216216, 0.054054, 0.016216
 	);
 
-	// Half a texel in from each border: the clamp range for the taps below.
-	//
-	// This has to be done by hand because Starter.hpp builds a framebuffer
-	// attachment's sampler with its default address mode, which is
-	// VK_SAMPLER_ADDRESS_MODE_REPEAT (see FrameBufferAttachment::createResources
-	// -> TextureSampler::init), and every target in this chain is such an
-	// attachment. Without the clamp, the taps that fall off one edge WRAP to
-	// the opposite one, so anything overbright near the top of the frame --
-	// the exit door's glare, a torch -- prints a bright band along the bottom
-	// of the screen and vice versa. Clamping here is equivalent to
-	// CLAMP_TO_EDGE and keeps the fix inside the bloom chain, rather than
-	// changing a sampler default that every model texture in the level relies
-	// on for its UV tiling.
+	// Clamp range: half a texel in from each border. Needed by hand because
+	// Starter.hpp builds framebuffer-attachment samplers with REPEAT, so an
+	// off-edge tap wraps and an overbright pixel at the top of the frame
+	// prints a bright band along the bottom. This is CLAMP_TO_EDGE done in
+	// the shader, so the fix stays inside the bloom chain rather than
+	// changing a sampler default every model texture relies on for tiling.
 	vec2 lo = post.texelSize * 0.5;
 	vec2 hi = vec2(1.0) - lo;
 
@@ -76,7 +56,6 @@ void main() {
 		sum += texture(srcTex, sampleUV).rgb * weights[i];
 	}
 
-	// Unclamped: still an HDR intermediate, read by another blur pass or by
-	// Composite.frag, not a final displayable colour yet.
+	// Unclamped: still an HDR intermediate, not a displayable colour yet.
 	outColor = vec4(sum, 1.0);
 }

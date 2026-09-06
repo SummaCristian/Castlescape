@@ -1,35 +1,26 @@
-// How much of a ghost is drawn, given where the camera is. Shared by
-// Spectral.frag and its depth prepass so the two agree exactly -- if they
-// didn't, the prepass would write depth for a shell the colour pass no longer
-// draws and punch a ghost-shaped hole through the flames and the exit glow.
-//
-// Two terms, combined with min():
-//
+// How much of a ghost is drawn, given the camera position. Shared by
+// Spectral.frag and its depth prepass so the two agree exactly. Two terms,
+// min()'d:
 //   INSIDE  the whole instance, faded by how close the EYE is to the ghost's
-//           vertical axis. This is the one that matters: standing inside a
-//           ghost, the arms and the hem's points are a metre or more away and
-//           no per-fragment distance can reach them, so they stay hanging in
-//           frame while the body around them thins out.
-//   NEAR    per fragment, by distance to the eye. Covers brushing past the
-//           edge of the robe without being at its axis, where the near clip
-//           plane (0.1) would slice the sheet open.
+//           vertical axis. The one that matters: standing inside a ghost, the
+//           arms and hem points are a metre away and no per-fragment distance
+//           reaches them.
+//   NEAR    per fragment, by distance to the eye. Covers brushing the robe
+//           off-axis, where the 0.1 near clip would slice the sheet open.
 //
-// main.cpp ramps the full-screen veil (SPECTRAL_VEIL_*) over the same range
-// INSIDE uses, so what leaves the mesh arrives on the frame. Retune together.
+// main.cpp ramps the full-screen veil over the same range INSIDE uses, so what
+// leaves the mesh arrives on the frame. Retune together.
 
 #ifndef SPECTRAL_FADE_GLSL
 #define SPECTRAL_FADE_GLSL
 
-// NEAR is set well OUTSIDE the body, not at its axis: the robe is about 0.5
-// wide (ghostRadius in main.cpp), so the whole ghost is gone a step before the
-// player crosses into it -- arms and hem points included, which are the parts
-// a per-fragment fade never reaches. Anything tighter leaves them hanging in
-// frame on the way in.
+// Set well OUTSIDE the body, not at its axis: the robe is ~0.5 wide, so the
+// ghost is gone a step before the player crosses into it -- arms and hem
+// points included, which a per-fragment fade never reaches.
 const float SPECTRAL_INSIDE_FAR  = 2.00;
 const float SPECTRAL_INSIDE_NEAR = 1.05;
-// Ghost.gltf's own Y bounds, the same fit main.cpp keeps in ghostBodyBottom /
-// ghostBodyTop, plus a margin: crossing them has to fade, or the bob switches
-// the whole ghost on and off from below.
+// Ghost.gltf's Y bounds plus a margin (ghostBodyBottom/Top in main.cpp):
+// crossing them must fade, or the bob switches the ghost on and off from below.
 const float SPECTRAL_INSIDE_Y_MIN = -1.80;
 const float SPECTRAL_INSIDE_Y_MAX =  0.83;
 const float SPECTRAL_INSIDE_Y_FADE = 0.60;
