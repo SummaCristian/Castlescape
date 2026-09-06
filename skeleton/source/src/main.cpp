@@ -89,9 +89,7 @@ struct GlobalUniformBufferObject {
 	int debugFlags;
 	// Seconds since startup, for the held torch's flame (Flame.hpp): the one
 	// thing in the frame that animates on the GPU rather than being computed
-	// here and uploaded. LightData's own alignas(16) forces the compiler to
-	// pad the array start to a 16-byte boundary regardless, so this scalar
-	// just rides in front of that padding like debugFlags does above.
+	// here and uploaded.
 	float time;
 	// The scene's default share of indirect light, 0..1, from lights.json.
 	// Rides in the same padding before lights[] that time and debugFlags do,
@@ -634,7 +632,7 @@ class Castlescape : public BaseProject {
 	// Spawns inside the dungeon hall (dh), clear of the table and both torches,
 	// now that the castle courtyard is gone -- there's no outdoor approach
 	// to walk in from anymore.
-	glm::vec3 camPos = glm::vec3(-27.4f, 1.8f, 18.0f);
+	glm::vec3 camPos = glm::vec3(-20.2f, 1.8f, 18.0f);
 	// Yaw: rotation around world up axis, in degrees.
 	// yaw=0 faces +X; increasing yaw turns right, decreasing turns left.
 	// Faces +X so spawning looks straight down the hall toward the far door.

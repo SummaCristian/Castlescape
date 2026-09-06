@@ -177,7 +177,7 @@ CORNER_BOXES = [
 # =========================================================================
 # ogni area: prefisso -> lista di celle (i,j)
 AREAS = {
-    "ia": [(i, 2) for i in range(-4, 0)],                       # alley intro (SO del hub)
+    "ia": [(i, 2) for i in range(-3, 0)],                       # alley intro (SO del hub)
     "hb": [(i, j) for i in range(0, 3) for j in range(0, 3)],   # hub 3x3
     "b1": [(1, -2), (1, -1)],                                   # alley nord
     "ra": [(i, j) for i in range(0, 4) for j in range(-5, -2)], # room A 4x3
@@ -220,8 +220,6 @@ TORCHES = [
     ("hbTorchN2",  2, 0, "N", A),
     ("hbTorchW",   0, 1, "W", A),
     ("hbTorchE",   2, 2, "E", A),
-    ("hbTorchS1",  0, 2, "S", A),
-    ("hbTorchS2",  2, 2, "S", A),
     ("raTorchW",   0, -4, "W", A),
     ("raTorchE",   3, -4, "E", A),
     ("raTorchN1",  1, -5, "N", A),
@@ -292,8 +290,8 @@ PROPS = [
     ("rcChair",   "Chair",  6.4,  0.02, 46.4, 130, None),
     ("rcSkull1",  "Skull",  5.6,  0.02, 40.4, 25, None),
     # ============================ corridoi ================================
-    ("iaBar",     "Barrel", -25.4, 0.02, 15.4, 10, None),
-    ("iaSkull",   "Skull",  -21.8, 0.02, 20.6, -25, None),
+    ("iaBar",     "Barrel", -18.2, 0.02, 15.4, 10, None),
+    ("iaSkull",   "Skull",  -14.6, 0.02, 20.6, -25, None),
     ("b1Bar",     "Barrel", 8.6,  0.02, -12.2, 0, None),
     ("b2Bar",     "Barrel", -11.0, 0.02, 4.8, -15, None),
     ("b3Bar",     "Barrel", 8.6,  0.02, 26.8, 0, None),
@@ -315,7 +313,7 @@ BANNERS = [
 ]
 
 # camera di spawn: estremita' ovest dell'alley, guarda +X lungo il corridoio
-SPAWN = (TS * -4 + 1.4, 1.8, TS * 2 + 3.6)      # (-27.4, 1.8, 18.0)
+SPAWN = (TS * -3 + 1.4, 1.8, TS * 2 + 3.6)      # (-20.2, 1.8, 18.0)
 HAND_TORCH = ("handTorch", (-28.8, -0.12, 0.0), [0.0, 35.0, -90.0])
 
 
