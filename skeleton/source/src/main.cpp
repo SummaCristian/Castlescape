@@ -357,6 +357,12 @@ class Castlescape : public BaseProject {
 	// its slot. Without a margin a player standing on the boundary between two
 	// candidates would flip it, and force a fresh render, on every re-evaluation.
 	static constexpr float SHADOW_SWAP_MARGIN = 1.15f;
+	// Reach margin an EXISTING shadow-cube occupant is judged by in the
+	// view-cone cull (lightReachesViewCone), vs. 1.0 for a fresh claimant. Same
+	// job SHADOW_SWAP_MARGIN does for the distance contest: a torch sitting on
+	// the cone boundary while the player turns past it shouldn't surrender and
+	// re-render its cube every re-evaluation.
+	static constexpr float SHADOW_VIEW_KEEP_MARGIN = 1.15f;
 
 	// Models, textures and Descriptors (values assigned to the uniforms)
 	DescriptorSet DSglobal;
@@ -1465,6 +1471,14 @@ class Castlescape : public BaseProject {
 	// 2%: invisible even in this dark, but a ghost at the far end doesn't keep
 	// every torch re-rendering. Lower it if a shadow stops following its ghost.
 	static constexpr float SHADOW_REACH_CUTOFF = 0.02f;
+	// Fraction of a torch light's peak below which lightReachesViewCone() treats
+	// it as lighting nothing: once that contour clears the drawn region (the
+	// GEOM_CULL_RADIUS ball or the view cone) the light is dropped from gubo and
+	// its shadow cube slot is freed. Higher than SHADOW_REACH_CUTOFF -- a shadow
+	// that lags its caster reads worse than a faint light winking out -- but low
+	// enough to stay invisible in this dark. Raise it to cull harder; watch the
+	// boundary from cheats.debugCam (the per-flame live/dead crosses).
+	static constexpr float LIGHT_CULL_REACH_CUTOFF = 0.04f;
 
 	// How far a torch light is still uploaded, and how many may be live. Each
 	// costs a full GGX eval per SAMPLE -- the dominant GPU cost. The
@@ -1504,6 +1518,12 @@ class Castlescape : public BaseProject {
 	// How much clear space the debug camera's near plane leaves in front of
 	// the player after clipping away the room shell between them.
 	static constexpr float DEBUG_CAM_CLIP_MARGIN = 4.0f;
+	// With the debug camera on, instances whose origin sits above this height
+	// (the ceilings at y=6.2, nothing else) are skipped, so the spectator
+	// looks into an open-top dollhouse instead of at a roof. The near-plane
+	// cutaway only clears the roof right over the player; this clears it over
+	// every room the cone reaches.
+	static constexpr float DEBUG_CAM_ROOF_CUT = 5.0f;
 
 	// True if the instance at worldPos (bounding radius objRadius) is close or
 	// aimed-at enough to draw. eyePos/forward are computed once per frame in
@@ -1531,6 +1551,45 @@ class Castlescape : public BaseProject {
 		// tiny/far one still needs the full cosine.
 		float angularSlack = glm::clamp(objRadius / dist, 0.0f, 1.0f) * 0.5f;
 		return facing >= (GEOM_CULL_CONE_COS - angularSlack);
+	}
+
+	// True if a point light at `lightPos` with effective reach `reach` could
+	// light ANY geometry the frame draws -- i.e. its illumination sphere
+	// overlaps the geometry-visible region: the always-drawn GEOM_CULL_RADIUS
+	// ball around the eye, or the view cone (apex at the eye, axis `forward`,
+	// half-angle from GEOM_CULL_CONE_COS, length GEOM_CULL_CONE_DIST). Torch
+	// lights and their shadow cubes are dropped when this is false: a torch
+	// whose whole lit sphere sits behind the player or down an off-cone
+	// corridor contributes nothing on screen.
+	//
+	// Deliberately conservative -- it inflates the cone by the full `reach` and
+	// skips geometryVisible()'s per-instance angular slack, so it only ever
+	// culls a light that truly reaches nothing drawn. The perpendicular and
+	// axial distances are both 1-Lipschitz in world position, so evaluating the
+	// cone's flare at the farthest axial point the sphere can touch
+	// (axial + reach) bounds every lit point inside it. One sqrt, no acos/tan.
+	static bool lightReachesViewCone(const glm::vec3 &lightPos, float reach,
+									 const glm::vec3 &eyePos, const glm::vec3 &forward) {
+		glm::vec3 d = lightPos - eyePos;
+
+		// Overlaps the always-drawn bubble (any facing).
+		float nearR = GEOM_CULL_RADIUS + reach;
+		if(glm::dot(d, d) <= nearR * nearR) {
+			return true;
+		}
+
+		float axial = glm::dot(d, forward);
+		// Sphere entirely past the cone's far cap.
+		if(axial - reach > GEOM_CULL_CONE_DIST) {
+			return false;
+		}
+		float perp = glm::length(d - axial * forward);
+
+		// Widest the cone gets over the axial span the sphere reaches into.
+		float tHi = glm::clamp(axial + reach, 0.0f, GEOM_CULL_CONE_DIST);
+		float tanHalf = std::sqrt(std::max(0.0f, 1.0f - GEOM_CULL_CONE_COS * GEOM_CULL_CONE_COS))
+						/ GEOM_CULL_CONE_COS;
+		return perp <= tHi * tanHalf + reach;
 	}
 
 	// How much a candidate's priority (live-light cut and shadow pool) is
@@ -3216,9 +3275,20 @@ class Castlescape : public BaseProject {
 	// for d gives the distance where that light is down to a cutoff fraction of
 	// peak. A bigger g gets a proportionally bigger answer, so this is correct
 	// for candles as well as torches. Clamped to the cube's far plane.
-	static float shadowRelevantReach(float g, float beta) {
-		const float d = g * std::pow(SHADOW_REACH_CUTOFF, -1.0f / beta);
+	static float lightReachForCutoff(float g, float beta, float cutoff) {
+		const float d = g * std::pow(cutoff, -1.0f / beta);
 		return std::min(d, TORCH_SHADOW_FAR_CONST);
+	}
+	static float shadowRelevantReach(float g, float beta) {
+		return lightReachForCutoff(g, beta, SHADOW_REACH_CUTOFF);
+	}
+
+	// Reach fed to lightReachesViewCone() for a flame: the distance its light is
+	// down to LIGHT_CULL_REACH_CUTOFF of peak, at full (un-flickered) intensity
+	// so a one-frame gutter can't drop and re-acquire the light or its shadow.
+	static float flameLightCullReach(const TorchFlame &tf) {
+		return lightReachForCutoff(flameLightG(tf.isCandle, 1.0f), TORCH_LIGHT_BETA,
+								   LIGHT_CULL_REACH_CUTOFF);
 	}
 
 	std::array<glm::mat4, 6> cubeFaceMatricesFor(const glm::vec3 &pos) const {
@@ -3334,9 +3404,24 @@ class Castlescape : public BaseProject {
 			if(!flameBurning(tf)) return false;
 			return tf.isCandle ? cheats.candleShadowsEnabled : cheats.torchShadowsEnabled;
 		};
+
+		// A torch whose light no longer reaches anything the frame draws (same
+		// test the light-append loop culls by) has no on-screen shadow to cast,
+		// so it gives its cube slot back. An existing occupant is judged with a
+		// reach margin (SHADOW_VIEW_KEEP_MARGIN) so a torch hovering on the cone
+		// boundary while the player turns doesn't re-render its cube every pass;
+		// a fresh candidate must clear the un-margined bar to claim one.
+		auto lightsView = [&](const TorchFlame &tf, float reachMargin) {
+			if(tf.heldByCamera) return true;
+			glm::vec3 p = glm::vec3(tf.inst->Wm * glm::vec4(tf.anchor, 1.0f));
+			return lightReachesViewCone(p, flameLightCullReach(tf) * reachMargin,
+										eyePos, forward);
+		};
+
 		for(int s = base; s < base + count; s++) {
 			int idx = dynamicSlotOccupant[s];
-			if(idx != -1 && !categoryEnabled(torchFlames[idx])) {
+			if(idx != -1 && (!categoryEnabled(torchFlames[idx])
+							 || !lightsView(torchFlames[idx], SHADOW_VIEW_KEEP_MARGIN))) {
 				torchFlames[idx].shadowSlot = -1;
 				dynamicSlotOccupant[s] = -1;
 			}
@@ -3346,7 +3431,8 @@ class Castlescape : public BaseProject {
 		std::vector<Cand> waiting;
 		for(size_t i = 0; i < torchFlames.size(); i++) {
 			const TorchFlame &tf = torchFlames[i];
-			if(!tf.shadowCandidate || tf.shadowSlot >= 0 || !categoryEnabled(tf)) {
+			if(!tf.shadowCandidate || tf.shadowSlot >= 0 || !categoryEnabled(tf)
+			   || !lightsView(tf, 1.0f)) {
 				continue;
 			}
 			waiting.push_back({(int)i, distSqTo(tf)});
@@ -4528,9 +4614,18 @@ class Castlescape : public BaseProject {
 				glm::vec3 worldPos = glm::vec3(tf.inst->Wm * glm::vec4(tf.anchor, 1.0f));
 				glm::vec3 d = worldPos - eyePos;
 				float dSq = glm::dot(d, d);
-				if(dSq <= cullSq) {
-					nearest.push_back({facingBiasedDistSq(worldPos, eyePos, forward), &tf});
+				if(dSq > cullSq) {
+					continue;
 				}
+				// View-cone cull: a wall torch whose whole lit sphere sits
+				// outside what the frame draws lights nothing on screen -- drop
+				// it before it takes a live slot or a BRDF eval. The held torch
+				// rides the camera, so it always reaches the view.
+				if(!tf.heldByCamera
+				   && !lightReachesViewCone(worldPos, flameLightCullReach(tf), eyePos, forward)) {
+					continue;
+				}
+				nearest.push_back({facingBiasedDistSq(worldPos, eyePos, forward), &tf});
 			}
 			std::sort(nearest.begin(), nearest.end(),
 					  [](const auto &a, const auto &b) { return a.first < b.first; });
@@ -5011,6 +5106,22 @@ class Castlescape : public BaseProject {
 				DebugLines::PushLine(eyePos, edge, coneCol, dbgPos, dbgColor);
 			}
 			ring(capC, capR, rr, uu, coneCol);
+
+			// Torch-light / shadow cull companion: a cross at every burning wall
+			// flame, green when its light survives lightReachesViewCone() and
+			// red when it's dropped (light out of gubo, cube slot freed). Same
+			// reach the cull feeds in, so the colour flips exactly on the
+			// boundary you see the surrounding geometry wink out at.
+			const glm::vec4 liveCol(0.3f, 1.0f, 0.35f, 1.0f);
+			const glm::vec4 deadCol(1.0f, 0.25f, 0.2f, 1.0f);
+			for(const TorchFlame &tf : torchFlames) {
+				if(tf.heldByCamera || !flameBurning(tf)) {
+					continue;
+				}
+				glm::vec3 p = glm::vec3(tf.inst->Wm * glm::vec4(tf.anchor, 1.0f));
+				bool live = lightReachesViewCone(p, flameLightCullReach(tf), eyePos, forward);
+				DebugLines::PushCross(p, 0.5f, live ? liveCol : deadCol, dbgPos, dbgColor);
+			}
 		}
 
 		debugLines.update(currentImage, ViewPrj, dbgPos, dbgColor);
@@ -5061,6 +5172,10 @@ class Castlescape : public BaseProject {
 															   e.zMax - e.zMin));
 				}
 				if(!geometryVisible(instPos, instRadius, eyePos, forward)) {
+					renderWm = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
+				}
+				// Open-top dollhouse for the spectator view (see DEBUG_CAM_ROOF_CUT).
+				if(cheats.debugCam && instPos.y > DEBUG_CAM_ROOF_CUT) {
 					renderWm = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
 				}
 				ubo.mMat = renderWm;
