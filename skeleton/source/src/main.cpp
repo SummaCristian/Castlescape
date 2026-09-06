@@ -8024,11 +8024,7 @@ class Castlescape : public BaseProject {
 						moveDir = ghostSteer(g, toPlayer / d);
 						if(moveDir != glm::vec2(0.0f)) {
 							// min(step, d): stops the ghost overshooting
-							// straight past a player it has already reached,
-							// which at chase speed on a long frame it otherwise
-							// can -- and overshooting is how you get a ghost
-							// that passes THROUGH the player without the catch
-							// test below ever seeing them close.
+							// straight past a player it has already reached
 							float step = std::min(g.chaseSpeed * deltaT, d);
 							g.pos.x += moveDir.x * step;
 							g.pos.z += moveDir.y * step;
@@ -8037,11 +8033,8 @@ class Castlescape : public BaseProject {
 						ghostResolveWalls(g.pos);
 					}
 
-					// Giving up: a ghost pinned against a closed door and one
-					// standing on a stale lastKnownPlayerPos with nobody there
-					// both look the same from here -- no meaningful ground
-					// covered -- so one timer catches both instead of needing
-					// an "arrived" check that the door case would never trip.
+					// Giving up: a ghost pinned against a closed wall or on the lastKnownPlayerPos
+					// will return to normal patrol after a timer
 					float moved = glm::length(glm::vec2(g.pos.x - g.stuckCheckPos.x, g.pos.z - g.stuckCheckPos.z));
 					if(moved >= GHOST_STUCK_EPS) {
 						g.stuckCheckPos = g.pos;
@@ -8054,23 +8047,14 @@ class Castlescape : public BaseProject {
 						}
 					}
 
-					// Breadcrumb. Dropped by distance travelled, not by time,
-					// so the trail's density doesn't depend on the frame rate.
+					// Breadcrumb. Dropped by distance travelled, not by time, (trail density not dependant on frame rate)
 					if(g.trail.empty()) {
 						g.trail.push_back(g.pos);
 					} else if(glm::length(glm::vec2(g.pos.x - g.trail.back().x,
 													g.pos.z - g.trail.back().z)) >= GHOST_TRAIL_SPACING) {
-						// Before adding it: does this land back on a stretch we
-						// already walked? If so the shortest way home from here
-						// is that older crumb, and everything recorded since is
-						// a detour worth throwing away. Searched oldest-first
-						// so the biggest loop is the one that gets cut.
-						//
-						// The last two crumbs are excluded because they're
-						// necessarily within the prune radius of where we are
-						// (spacing is smaller than that radius, deliberately),
-						// and matching them would prune the trail back to
-						// nothing on every single step.
+						// Loop check: if this point revisits an earlier crumb, drop
+						// everything after it (oldest match = biggest loop cut).
+						// Skip last 2 crumbs, always within prune radius.
 						int cut = -1;
 						for(int i = 0; i + 2 < (int)g.trail.size(); i++) {
 							glm::vec2 delta(g.pos.x - g.trail[i].x, g.pos.z - g.trail[i].z);
