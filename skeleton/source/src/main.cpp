@@ -113,15 +113,6 @@ struct GlobalUniformBufferObject {
 	LightData lights[MAX_LIGHTS];
 };
 
-// Set 2: the shadow-sampling data, read by CookTorrance.frag. One matrix per
-// 2D-shadow light (NUM_SHADOW_MAPS_2D -- just the sun today), the SAME
-// view-projection its own shadow pass rendered with (computeShadowMatrices()).
-// Torches need no matrix here: a cube map is sampled by direction, not by
-// transforming into its clip space.
-struct ShadowUniformBufferObject {
-	alignas(16) glm::mat4 lightSpace[NUM_SHADOW_MAPS_2D];
-};
-
 // One torch's cube shadow CAPTURE data (ShadowCube.vert/frag, PShadowCube),
 // set 1 there. A uniform buffer and not a push constant, re-mapped every frame
 // for every torch including the static ones: the main command buffer is
@@ -266,25 +257,6 @@ class Castlescape : public BaseProject {
 	// the minimum in the depth buffer.
 	Pipeline PspectralDepth;
 
-	// Shadow mapping, 2D branch: one depth-only render pass per 2D
-	// shadow-casting light (NUM_SHADOW_MAPS_2D, LightConstants.glsl -- just
-	// the sun today) and ONE pipeline shared across all of them. Reusing
-	// PShadow instead of one pipeline per pass relies on Vulkan's
-	// render-pass-compatibility rule: RPShadow2D[i] all use the identical
-	// AT_DEPTH_ONLY attachment configuration, so a pipeline created against
-	// one of them works with any of the others. Unlike RP/P, both are
-	// created once in localInit() and never touched by a resize: an
-	// offscreen depth target doesn't depend on the window, so there's no
-	// reason to tear it down and rebuild it the way the swapchain-sized
-	// resources are.
-	//
-	// Only the CookTorrance technique is drawn into these (see
-	// populateCommandBuffer()) -- the flames aren't occluders and shouldn't
-	// occlude either, being translucent, so they're skipped rather than given
-	// their own shadow logic. Same for the cube branch below.
-	RenderPass RPShadow2D[NUM_SHADOW_MAPS_2D];
-	Pipeline PShadow;
-
 	// Shadow mapping, CUBE branch (the torches): a real 6-face cube map per
 	// point light instead of the old two-perspective-map workaround -- see
 	// CubeShadowMap.hpp for why (linear-distance storage, one flat bias).
@@ -315,21 +287,15 @@ class Castlescape : public BaseProject {
 	DescriptorSetLayout DSLshadowCubeCapture;
 	DescriptorSet DSshadowCube[NUM_SHADOW_CUBES];
 
-	// set 2 for the main pass's shadow sampling: one UBO (the 2D light-space
-	// matrices) plus one sampler binding per shadow map (2D then cube), read
-	// by CookTorrance.frag's shadowFactor(). DSLlocal/DSLglobal stay set 1/0.
+	// set 2 for the main pass's shadow sampling: one sampler binding per
+	// torch cube map, read by CookTorrance.frag's shadowFactor().
+	// DSLlocal/DSLglobal stay set 1/0.
 	//
 	// No DescriptorSet member of its own: this one rides Scene's ordinary
 	// per-instance machinery, so every CookTorrance instance gets an identical,
 	// redundant copy. Wasteful but cheap at this instance count, and it avoids
 	// hand-rolling a THIRD way to bind a descriptor set.
 	DescriptorSetLayout DSLshadowSample;
-	// View-projection matrix each 2D shadow pass rendered with, index-matched
-	// to LightData::shadowIndex for a direct/spot light. Computed once in
-	// computeShadowMatrices() (the sun is static) and reused both as the push
-	// constant Shadow.vert takes and as the UBO CookTorrance.frag samples
-	// against.
-	glm::mat4 shadowLightSpace2D[NUM_SHADOW_MAPS_2D];
 	// The six face view-projection matrices for each torch's cube map,
 	// index-matched [LightData::shadowIndex][face] (face order: see
 	// CUBE_FACE_DIR in CubeShadowMap.hpp). Computed once, same reasoning.
@@ -3004,32 +2970,23 @@ class Castlescape : public BaseProject {
 					// third  element : the pipeline stage where it will be used
 					{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_ALL_GRAPHICS, sizeof(GlobalUniformBufferObject), 1}
 				  });
-		// Shadow sampling (set 2 of P, see CookTorrance.frag). One UBO, one
-		// separate sampler binding per map -- see the member declaration for why
+		// Shadow sampling (set 2 of P, see CookTorrance.frag). One separate
+		// sampler binding per cube map -- see the member declaration for why
 		// not one array binding. linkSize on the samplers is their own index
 		// into the flat VkDescriptorImageInfo list Scene builds per instance
 		// (see the texDefs passed to PRs[0].init below), the same role it plays
 		// for DSLlocal's single texture.
 		//
 		// Built in a loop rather than written out, so the count lives in
-		// exactly one place. Binding 0 is the UBO, then NUM_SHADOW_MAPS_2D
-		// sampler2D bindings, then NUM_SHADOW_CUBES samplerCube bindings --
-		// the same order and numbering CookTorrance.frag declares its
-		// shadowMap2D_*/shadowCube* with, which nothing but agreement here
-		// keeps true. linkSize follows the same 2D-then-cube order (see
-		// shadowMapDefs below).
-		std::vector<DescriptorSetLayoutBinding> shadowSampleBindings = {
-					{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(ShadowUniformBufferObject), 1}
-				  };
-		for(int i = 0; i < NUM_SHADOW_MAPS_2D; i++) {
-			shadowSampleBindings.push_back({(uint32_t)(i + 1),
+		// exactly one place: NUM_SHADOW_CUBES samplerCube bindings, the same
+		// order and numbering CookTorrance.frag declares its shadowCube*
+		// bindings with, which nothing but agreement here keeps true.
+		// linkSize follows the same order (see shadowMapDefs below).
+		std::vector<DescriptorSetLayoutBinding> shadowSampleBindings;
+		for(int i = 0; i < NUM_SHADOW_CUBES; i++) {
+			shadowSampleBindings.push_back({(uint32_t)i,
 											VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
 											VK_SHADER_STAGE_FRAGMENT_BIT, i, 1});
-		}
-		for(int i = 0; i < NUM_SHADOW_CUBES; i++) {
-			shadowSampleBindings.push_back({(uint32_t)(NUM_SHADOW_MAPS_2D + i + 1),
-											VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-											VK_SHADER_STAGE_FRAGMENT_BIT, NUM_SHADOW_MAPS_2D + i, 1});
 		}
 		DSLshadowSample.init(this, shadowSampleBindings);
 		VD.init(this, {
@@ -3077,28 +3034,6 @@ class Castlescape : public BaseProject {
 		maxMsaaLevel = std::log2((float)getMaxUsableSampleCount());
 
 		initRenderPasses();
-
-		// The 2D shadow render passes -- the sun's today, in
-		// LightData::shadowIndex order (see SceneLights::init). AT_DEPTH_ONLY
-		// is a stock configuration built for exactly this: a D32_SFLOAT
-		// attachment usable both as a depth target and, after
-		// ATDEP_DEPTH_TRANS's barrier, as a sampled texture. initSampler=true
-		// (the last argument) is what makes attachments[0].getViewAndSampler()
-		// below valid -- without it there's no VkSampler to hand back.
-		//
-		// .create() runs right here rather than in
-		// pipelinesAndDescriptorSetsInit() (where RP/P are created) for two
-		// reasons: these don't need to survive a resize the way the
-		// swapchain-sized passes do, and PRs[0].init() below needs the actual
-		// VkImageView+sampler to exist already, to bind them into every
-		// CookTorrance instance's shadow-sampling descriptor set.
-		for(int i = 0; i < NUM_SHADOW_MAPS_2D; i++) {
-			RPShadow2D[i].init(this, SHADOW_MAP_RES, SHADOW_MAP_RES, -1,
-							  RenderPass::getStandardAttchmentsProperties(AT_DEPTH_ONLY, this),
-							  RenderPass::getStandardDependencies(ATDEP_DEPTH_TRANS),
-							  true);
-			RPShadow2D[i].create();
-		}
 
 		// The cube shadow render pass (torches) -- see the RPShadowCubeCompat
 		// member comment for why this is built once, shared, and only its
@@ -3265,29 +3200,10 @@ class Castlescape : public BaseProject {
 		memcpy(Mpost->vertices.data(), postCorners, sizeof(postCorners));
 		Mpost->initMesh(this, &VDpost, false);
 
-		// The shadow pass's own pipeline (see the member declaration for why
-		// one, shared, instead of one each). Its only set is DSLlocal -- the SAME
-		// per-instance buffer the main pass's ubo.mMat comes from, reused
-		// here at set 0 instead of set 1 to read Wm again for a different
-		// projection; see Shadow.vert's header for why that's safe. The
-		// light's own view-projection arrives separately, as a push constant,
-		// since (unlike Wm) it never changes frame to frame.
-		VkPushConstantRange shadowPushConstant{};
-		shadowPushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-		shadowPushConstant.offset = 0;
-		shadowPushConstant.size = sizeof(glm::mat4);
-		PShadow.init(this, &VD, "shaders/shadow/Shadow.vert.spv",
-								"shaders/shadow/Shadow.frag.spv",
-								{&DSLlocal}, {shadowPushConstant});
-		// Created against RPShadow2D[0], but usable with all of them: they share
-		// the identical AT_DEPTH_ONLY attachment layout, and Vulkan only requires
-		// render-pass COMPATIBILITY (same attachment formats/samples/layouts)
-		// between the render pass a pipeline was created with and the one
-		// it's bound under at draw time, not the exact same object.
-		PShadow.create(&RPShadow2D[0]);
-
-		// The cube shadow pass's pipeline (torches). Same DSLlocal reuse as
-		// PShadow, see Shadow.vert's header. Set 1 is DSLshadowCubeCapture,
+		// The cube shadow pass's pipeline (torches). Same DSLlocal reuse
+		// idea as the main pass: set 0 is the SAME per-instance buffer the
+		// main pass's ubo.mMat comes from, reused here to read Wm again for a
+		// different projection. Set 1 is DSLshadowCubeCapture,
 		// one uniform buffer per torch cube slot (DSshadowCube[], mapped
 		// fresh every frame in updateUniformBuffer()) carrying the light's
 		// current view-projection matrices and world position -- NOT a push
@@ -3360,12 +3276,9 @@ class Castlescape : public BaseProject {
 		// are the same fixed images for every instance, not per-instance
 		// textures like DSLlocal's albedo map. pos is unused on a
 		// non-fromInstance entry. In a loop for the same reason the layout
-		// above is. 2D maps first, then cube maps -- same order the binding
-		// list above and CookTorrance.frag's declarations use.
+		// above is. Same order the binding list above and CookTorrance.frag's
+		// declarations use.
 		std::vector<TextureDefs> shadowMapDefs;
-		for(int i = 0; i < NUM_SHADOW_MAPS_2D; i++) {
-			shadowMapDefs.push_back({false, 0, RPShadow2D[i].attachments[0].getViewAndSampler()});
-		}
 		for(int i = 0; i < NUM_SHADOW_CUBES; i++) {
 			shadowMapDefs.push_back({false, 0,
 				{cubeShadowSampler.getSampler(), torchCube[i].cubeView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}});
@@ -4420,8 +4333,8 @@ class Castlescape : public BaseProject {
 
 	// Builds the view-projection matrix each of the shadow passes renders
 	// with, in LightData::shadowIndex order. Called once, from localInit()
-	// right after sceneLights.init(): the sun and the torches never move, so
-	// there is nothing here that needs recomputing per frame.
+	// right after sceneLights.init(): the torches never move, so there is
+	// nothing here that needs recomputing per frame.
 	//
 	// Reads sceneLights.all() rather than scene.json/InstanceIds directly: a
 	// point light's world position is instance-plus-offset (see
@@ -4435,34 +4348,8 @@ class Castlescape : public BaseProject {
 		// needs the same number for the color attachment's clear value,
 		// which is why it's a member and not a local here.
 
-		// The sun has no position, only a travel direction (SceneLights.hpp),
-		// so its shadow camera needs a stand-in position: back away from a
-		// point roughly at the middle of the playable area, far enough that
-		// an orthographic box this big (SUN_ORTHO_HALF_EXTENT) covers both
-		// the castle courtyard and the dungeon under it. Hand-picked by
-		// looking at the instance coordinates in scene.json, the same way
-		// the collider and light offsets there were -- not derived from
-		// anything, and the first thing to revisit if the shadow clips.
-		const glm::vec3 SUN_TARGET(-8.0f, 0.0f, 15.0f);
-		const float SUN_ORTHO_HALF_EXTENT = 55.0f;
-		const float SUN_DISTANCE = 80.0f;
-
 		for(const LightData &L : sceneLights.all()) {
 			if(L.shadowIndex < 0) {
-				continue;
-			}
-
-			if(L.type == LIGHT_DIRECT) {
-				glm::vec3 pos = SUN_TARGET - L.dir * SUN_DISTANCE;
-				glm::mat4 view = glm::lookAt(pos, SUN_TARGET, glm::vec3(0.0f, 1.0f, 0.0f));
-				glm::mat4 proj = glm::ortho(-SUN_ORTHO_HALF_EXTENT, SUN_ORTHO_HALF_EXTENT,
-											-SUN_ORTHO_HALF_EXTENT, SUN_ORTHO_HALF_EXTENT,
-											1.0f, 200.0f);
-				// Same Vulkan Y-flip as the main camera's projection (see
-				// View/ViewPrj in GameLogic()); GLM assumes an OpenGL-handed
-				// NDC otherwise.
-				proj[1][1] *= -1;
-				shadowLightSpace2D[L.shadowIndex] = proj * view;
 				continue;
 			}
 
@@ -5185,7 +5072,7 @@ class Castlescape : public BaseProject {
 	// createImageView/findDepthFormat are PROTECTED members of BaseProject:
 	// only this class's own methods can call them (see CubeShadowMap.hpp's
 	// header comment), the same reason every other Vulkan resource in this
-	// file -- RPShadow2D, RP, the post chain -- is built in a method here
+	// file -- RP, the post chain -- is built in a method here
 	// rather than in a free-standing helper.
 	void createCubeShadowMaps() {
 		// Shared by every torch: same resolution, same format, so one
@@ -5451,19 +5338,11 @@ class Castlescape : public BaseProject {
 		PblurV.destroy();
 		Pcomposite.destroy();
 
-		// PShadow/RPShadow2D never go through pipelinesAndDescriptorSetsCleanup
-		// (see the member declaration for why -- they don't depend on the
-		// swapchain, so a resize never tears them down), which is where P/RP
-		// normally get their .cleanup() half. Both halves have to happen
-		// somewhere, so both happen here instead. Same story for the cube
-		// branch (PShadowCube/RPShadowCubeCompat/torchCube[]).
-		PShadow.cleanup();
-		PShadow.destroy();
-		for(int i = 0; i < NUM_SHADOW_MAPS_2D; i++) {
-			RPShadow2D[i].cleanup();
-			RPShadow2D[i].destroy();
-		}
-
+		// PShadowCube/RPShadowCubeCompat/torchCube[] never go through
+		// pipelinesAndDescriptorSetsCleanup (see the member declaration for
+		// why -- they don't depend on the swapchain, so a resize never tears
+		// them down), which is where P/RP normally get their .cleanup() half.
+		// Both halves have to happen somewhere, so both happen here instead.
 		PShadowCube.cleanup();
 		PShadowCube.destroy();
 		destroyCubeShadowMaps();
@@ -5512,53 +5391,6 @@ class Castlescape : public BaseProject {
 		// separate command buffers submitted after this one (submit orders
 		// 10000 and 9000 against this one's 0), so they end up drawing on top
 		// of the composited frame.
-
-		// The shadow passes, all before the main pass they feed:
-		// CookTorrance.frag samples these maps, so they have to be fully
-		// rendered (and transitioned to a readable layout) before that draw
-		// happens. Not Scene::populateCommandBuffer -- that walks every
-		// technique including Flame, and the flames are deliberately not
-		// occluders here (see the RPShadow2D member comment) -- so this
-		// draws straight over the CookTorrance instances (technique 0 in
-		// scene.json) itself, twice: once per 2D map, once per torch per
-		// cube face.
-		for(int i = 0; i < NUM_SHADOW_MAPS_2D; i++) {
-			RPShadow2D[i].begin(commandBuffer, currentImage);
-			PShadow.bind(commandBuffer);
-			vkCmdPushConstants(commandBuffer, PShadow.pipelineLayout,
-							   VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4),
-							   &shadowLightSpace2D[i]);
-			for(int j = 0; j < SC.TI[0].InstanceCount; j++) {
-				Instance &inst = SC.TI[0].I[j];
-
-				// The light fixtures don't occlude (see Material::castsShadow).
-				// Same forModel() lookup the main pass does for the BRDF, so no
-				// extra per-frame work beyond the branch.
-				if(!materials.forModel(inst.Mid).castsShadow) {
-					continue;
-				}
-				// Same held-torch exemption as recordCubeSlotFaces: this pass
-				// is recorded once per swapchain image and replayed unmodified
-				// (see this function's header comment), so a camera-anchored
-				// occluder here would freeze wherever it stood at record time
-				// -- fine for the static floor pose, wrong for the carried one.
-				if(&inst == handTorchInst && handTorchCollected && cheats.handTorchEnabled
-				   && !cheats.handTorchModelCastsShadowWhenHeld) {
-					continue;
-				}
-
-				// set 0 here is DSLlocal's per-instance buffer -- the SAME
-				// descriptor set the main pass binds at set 1 (DS[0][1]),
-				// re-mapped with this instance's current Wm every frame in
-				// updateUniformBuffer() regardless of which pipeline reads
-				// it. See Shadow.vert's header for why reusing it is safe.
-				inst.DS[0][1]->bind(commandBuffer, PShadow, 0, currentImage);
-				SC.M[inst.Mid]->bind(commandBuffer);
-				vkCmdDrawIndexed(commandBuffer,
-								 static_cast<uint32_t>(SC.M[inst.Mid]->indices.size()), 1, 0, 0, 0);
-			}
-			RPShadow2D[i].end(commandBuffer);
-		}
 
 		// No cube shadow pass here at all, the held torch's included: every one
 		// of them is recorded and submitted per frame by
@@ -6481,19 +6313,7 @@ class Castlescape : public BaseProject {
 		// defines the local parameters for the uniforms
 		UniformBufferObject ubo{};
 
-		// Same matrices every CookTorrance instance's set 2 gets mapped
-		// with below -- built once here rather than inside the loop since
-		// it's identical for every one of them. Static content (see
-		// computeShadowMatrices()), but still re-mapped every frame: map()
-		// writes into a per-swapchain-image buffer slot, and mapping only the
-		// slot for image 0 would leave the others holding whatever was there
-		// at allocation time.
-		ShadowUniformBufferObject shadowUbo{};
-		for(int i = 0; i < NUM_SHADOW_MAPS_2D; i++) {
-			shadowUbo.lightSpace[i] = shadowLightSpace2D[i];
-		}
-
-		// Same idea, cube side: DSshadowCube[t] feeds the shadow CAPTURE pass
+		// DSshadowCube[t] feeds the shadow CAPTURE pass
 		// (PShadowCube/ShadowCube.vert/frag) its matrices/position through a
 		// mapped uniform buffer instead of a push constant, precisely so the
 		// held torch's slot -- refreshed a few lines above in this same
@@ -6723,10 +6543,10 @@ class Castlescape : public BaseProject {
 				inst.DS[0][0]->map(currentImage, &gubo, 0); // global (light/camera)
 				inst.DS[0][1]->map(currentImage, &ubo, 0); // camera MVPs
 				// set2=DSLshadowSample, on techniques whose pipeline layout
-				// declares a third set.
-				if(inst.NDs[0] >= 3) {
-					inst.DS[0][2]->map(currentImage, &shadowUbo, 0);
-				}
+				// declares a third set, is never mapped here: it holds only
+				// fixed samplerCube bindings, set once at descriptor-set
+				// creation (shadowMapDefs in localInit()), with no per-frame
+				// host-visible buffer behind it.
 			}
 		}
 
