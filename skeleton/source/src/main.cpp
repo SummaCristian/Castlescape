@@ -634,7 +634,7 @@ class Castlescape : public BaseProject {
 	// Spawns inside the dungeon hall (dh), clear of the table and both torches,
 	// now that the castle courtyard is gone -- there's no outdoor approach
 	// to walk in from anymore.
-	glm::vec3 camPos = glm::vec3(-27.4f, 1.8f, 25.2f);
+	glm::vec3 camPos = glm::vec3(-27.4f, 1.8f, 18.0f);
 	// Yaw: rotation around world up axis, in degrees.
 	// yaw=0 faces +X; increasing yaw turns right, decreasing turns left.
 	// Faces +X so spawning looks straight down the hall toward the far door.
@@ -2468,7 +2468,10 @@ class Castlescape : public BaseProject {
 	// something that merely covers the opening head-on. Everything past the
 	// arch is masked by the wall's own depth, and the part below y 0 is buried
 	// under the ground plane outside.
-	static constexpr glm::vec3 EXIT_GLOW_CENTER = glm::vec3(30.8f, 2.8f, 10.79f);
+	// Hub shrunk from 4x4 to 3x3 (see tools/build_scene.py): hbDoorE moved one
+	// tile west, so every X here is shifted by -7.2 from what the comments
+	// above still describe.
+	static constexpr glm::vec3 EXIT_GLOW_CENTER = glm::vec3(23.6f, 2.8f, 10.79f);
 	static constexpr float EXIT_GLOW_HALF_WIDTH = 4.4f;		// along world Z
 	static constexpr float EXIT_GLOW_HALF_HEIGHT = 4.6f;	// along world Y
 	// Faces back into the castle, i.e. west, so the player looking out through
@@ -2483,7 +2486,7 @@ class Castlescape : public BaseProject {
 	// 6cm above the ground plane: far enough not to z-fight it, low enough
 	// that the door -- whose own bottom edge is at y 0.2 -- always sweeps
 	// above it rather than through it.
-	static constexpr glm::vec3 EXIT_GLOW_FLOOR_CENTER = glm::vec3(29.9f, 0.06f, 10.79f);
+	static constexpr glm::vec3 EXIT_GLOW_FLOOR_CENTER = glm::vec3(22.7f, 0.06f, 10.79f);
 	static constexpr float EXIT_GLOW_FLOOR_HALF_X = 1.6f;
 	static constexpr float EXIT_GLOW_FLOOR_HALF_Z = 3.6f;
 	static constexpr glm::vec3 EXIT_GLOW_FLOOR_NORMAL = glm::vec3(0.0f, 1.0f, 0.0f);
@@ -2510,7 +2513,7 @@ class Castlescape : public BaseProject {
 	// near end runs back under the wall so its border fade never shows, and
 	// the far end passes behind the upright quad rather than meeting it at a
 	// seam.
-	static constexpr glm::vec3 EXIT_GLOW_CEILING_CENTER = glm::vec3(29.9f, 4.90f, 10.79f);
+	static constexpr glm::vec3 EXIT_GLOW_CEILING_CENTER = glm::vec3(22.7f, 4.90f, 10.79f);
 	static constexpr float EXIT_GLOW_CEILING_HALF_X = 1.6f;
 	static constexpr float EXIT_GLOW_CEILING_HALF_Z = 3.6f;
 	static constexpr glm::vec3 EXIT_GLOW_CEILING_NORMAL = glm::vec3(0.0f, -1.0f, 0.0f);
