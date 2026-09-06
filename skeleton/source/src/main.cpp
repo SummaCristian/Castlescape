@@ -5854,6 +5854,37 @@ class Castlescape : public BaseProject {
 		}
 	}
 
+	// --- F11 fullscreen toggle ---------------------------------------------
+	// Starter.hpp forces GLFW_RESIZABLE=FALSE, but glfwSetWindowMonitor() still
+	// works: switching monitors fires GLFW's framebuffer-resize callback, which
+	// makes BaseProject recreate the swapchain and call onWindowResize() for us.
+	bool fullscreen = false;
+	bool f11WasDown = false;
+	int savedWinX = 0, savedWinY = 0, savedWinW = 0, savedWinH = 0;
+
+	void toggleFullscreen() {
+		if(!fullscreen) {
+			glfwGetWindowPos(window, &savedWinX, &savedWinY);
+			glfwGetWindowSize(window, &savedWinW, &savedWinH);
+			GLFWmonitor* mon = glfwGetPrimaryMonitor();
+			const GLFWvidmode* mode = glfwGetVideoMode(mon);
+			glfwSetWindowMonitor(window, mon, 0, 0,
+			                     mode->width, mode->height, mode->refreshRate);
+			fullscreen = true;
+		} else {
+			glfwSetWindowMonitor(window, nullptr,
+			                     savedWinX, savedWinY, savedWinW, savedWinH, 0);
+			fullscreen = false;
+		}
+	}
+
+	// Edge-triggered: fires once per F11 press.
+	void pollFullscreenToggle() {
+		bool f11Down = glfwGetKey(window, GLFW_KEY_F11) == GLFW_PRESS;
+		if(f11Down && !f11WasDown) toggleFullscreen();
+		f11WasDown = f11Down;
+	}
+
 	float GameLogic() {
 		// Camera FOV-y, Near Plane and Far Plane
 		const float FOVy = glm::radians(45.0f);
@@ -5868,6 +5899,8 @@ class Castlescape : public BaseProject {
 		float deltaT;
 		glm::vec3 m = glm::vec3(0.0f), r = glm::vec3(0.0f);
 		bool fire = false;
+
+		pollFullscreenToggle();
 
 		// Poll the overlays BEFORE getSixAxis, which turns on
 		// GLFW_STICKY_MOUSE_BUTTONS (a one-shot read): whoever polls the click
