@@ -7833,8 +7833,9 @@ class Castlescape : public BaseProject {
 							float step = std::min(g.chaseSpeed * deltaT, d);
 							g.pos.x += moveDir.x * step;
 							g.pos.z += moveDir.y * step;
-							ghostResolveWalls(g.pos);
 						}
+						// Out of the loop to avoid getting stuck in objects when hunt starts
+						ghostResolveWalls(g.pos);
 					}
 
 					// Giving up: a ghost pinned against a closed door and one
