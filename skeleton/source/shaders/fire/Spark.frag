@@ -24,6 +24,8 @@ layout(location = 2) flat in float gate;
 layout(location = 3) flat in float glow;
 // This flame's target hue, see Flame.frag's recolorStop() for the technique.
 layout(location = 4) flat in vec3 color;
+// 1 for a dust mote: shaded as lit dust rather than burning fuel.
+layout(location = 5) flat in float mote;
 
 layout(location = 0) out vec4 outColor;
 
@@ -40,8 +42,14 @@ void main() {
 	// Fade in fast right after spawn and out before the loop resets, so
 	// `life` ever actually reaching 0 or 1 is never visible -- the spark is
 	// already fully transparent on both ends of its own loop.
-	float fade = smoothstep(0.0, 0.08, life) * (1.0 - smoothstep(0.75, 1.0, life));
+	float fade = mote > 0.5
+		? smoothstep(0.0, 0.15, life) * (1.0 - smoothstep(0.55, 1.0, life))
+		: smoothstep(0.0, 0.08, life) * (1.0 - smoothstep(0.75, 1.0, life));
 	float alpha = falloff * fade * gate;
+	// Motes are faint: they only catch the light, they don't emit.
+	if(mote > 0.5) {
+		alpha *= 0.45;
+	}
 
 	// Same depth-write reasoning as Flame.frag: depthWriteEnable is hardcoded
 	// VK_TRUE on every pipeline including this one, so an undiscarded
@@ -69,6 +77,14 @@ void main() {
 	// spark is a genuine bloom source only near birth, not for its whole
 	// short life.
 	float hdrBoost = mix(12.0, 3.0, life);
+
+	// A mote is dust lit by the fire, not a coal: a warm desaturated grey
+	// carrying a little of the flame's colour, at roughly unit brightness so
+	// it barely touches the bloom instead of blowing out to a white dot.
+	if(mote > 0.5) {
+		sparkColor = mix(vec3(0.85, 0.72, 0.52), color, 0.3);
+		hdrBoost = mix(1.8, 0.6, life);
+	}
 
 	outColor = vec4(sparkColor * hdrBoost * glow, alpha);
 }

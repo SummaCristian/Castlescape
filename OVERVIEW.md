@@ -115,7 +115,7 @@ i descriptor set layout, il culling, il depth test, il blending, il numero di
 sample MSAA. Cambiare anche una sola di queste cose vuol dire creare una
 pipeline nuova.
 
-Per questo il progetto ha otto pipeline: `P` (la scena), `PShadow`,
+Per questo il progetto ha otto pipeline: `P` (la scena), <mark>`PShadow`,</mark>
 `PShadowCube`, `Pbright`, `PblurH`, `PblurV`, `Pcomposite`, più quelle di
 fiamma, ExitGlow, UiQuad, testo. Non è ridondanza: sono davvero configurazioni
 diverse.
@@ -291,6 +291,42 @@ sulle luci e la valutazione GGX. Misurato sulla Iris Xe: 25 FPS a 16 sample, 94 
 Assegnarlo è lecito senza toccare `Starter.hpp`: `msaaSamples` è un membro
 protected di `BaseProject` e `pickPhysicalDevice()` (che imposta il default)
 gira prima di `localInit()`.
+
+**Risoluzione interna (`renderScale`, oggi 0.8).** La scena 3D — `RP` e la
+catena HDR in cui disegna `CookTorrance.frag` — è renderizzata a questa frazione
+della risoluzione della finestra **su ogni asse**, cioè a `renderScale²` dei
+pixel: 0.8 è circa il 64%. `Composite.frag` la riporta poi alla dimensione reale
+della finestra tramite lo stesso sampler bilineare con cui già legge `srcTex`,
+quindi l'output riempie comunque la finestra a piena risoluzione: solo il
+dettaglio della scena è calcolato su meno pixel.
+
+Il guadagno è proporzionale al taglio di pixel, e si compone con il punto sopra:
+ogni invocazione di fragment risparmiata è una su cui il per-sample shading
+avrebbe fatto girare il loop completo sulle luci. Si paga in una scena
+leggermente più morbida, che nebbia, vignette, bloom e il buio generale di un
+dungeon nascondono bene.
+
+**La UI non è inclusa**: testo, prompt, crosshair, HUD e menu girano in pass e
+command buffer propri, sottomessi dopo `RPcomposite`, e restano
+incondizionatamente alla risoluzione vera della finestra. È il motivo per cui il
+testo resta nitido qualunque valore abbia lo slider.
+
+Sia `renderScale` che il livello MSAA sono **membri runtime e non costanti di
+compilazione**, perché entrambi hanno uno slider nel menu. Cambiarli rigioca lo
+stesso percorso di ricostruzione di un resize vero (`onWindowResize()` alla
+dimensione corrente, poi `RebuildPipeline()`). Il livello MSAA è tenuto come
+log2 (0 → 1×, 1 → 2×, 2 → 4×) perché lo slider ha passo additivo fisso di ±1 e
+i sample count Vulkan devono essere potenze di due; il massimo viene da
+`getMaxUsableSampleCount()`, così una GPU che non regge 16× non se lo vede
+offrire.
+
+Una nota di sincronizzazione che vale la pena saper spiegare: l'applicazione è
+**saltata se una ricostruzione è già pendente**. `recreateSwapChain()` gira una
+volta sola, in fondo al `drawFrame()` del frame corrente; impilarci sopra una
+seconda dimensione bersaglio prima che sia avvenuta è ciò che una volta ha fatto
+iniziare un render pass contro una dimensione più nuova del framebuffer a cui
+era legato — gli errori di validazione "renderArea greater than framebuffer", e
+il crash subito dopo.
 
 > **Se il prof chiede**
 >
@@ -1274,6 +1310,29 @@ troppo grande produce **peter-panning**: l'ombra si stacca dall'oggetto, e
 soprattutto la luce passa *attraverso* occlusori sottili. §5.6 racconta come
 questo progetto risolve il conflitto.
 
+**Come lo risolve davvero, sul percorso cubemap.** Ogni difesa tradizionale
+contro l'acne è una forma di *slack* — un bias, un normal offset, una banda di
+ammorbidimento — e lo slack è esattamente ciò che stacca l'ombra dal suo
+occlusore: dove un occlusore sporge sopra la propria base il divario col
+pavimento cresce lentamente, quindi anche pochi millimetri di tolleranza si
+allargano in centimetri di pavimento illuminato. Tre giri di taratura di quel
+numero, su due file diversi, hanno spostato la striscia senza mai chiuderla.
+
+`PShadowCube.setCullMode(VK_CULL_MODE_FRONT_BIT)` **rimuove la premessa**: ogni
+occlusore registra il lato girato DALL'ALTRA parte rispetto alla torcia, quindi
+una superficie rivolta verso la luce non è nella mappa e non può fallire un
+confronto con se stessa. La silhouette — l'insieme delle direzioni che
+l'occlusore copre, l'unica cosa che decide dove cade l'ombra — è identica nei
+due casi.
+
+Il costo, ed è reale: un occlusore ora perde luce per il proprio **spessore**,
+dato che ciò che viene registrato è la sua faccia lontana. È un errore limitato
+dalla geometria e non da una costante, e ogni muro e ogni anta di porta di questo
+dungeon è molto più spesso dello slack che sostituisce. Il caso da tenere
+d'occhio è l'opposto: qualcosa costruito come una singola faccia piatta non ha
+una faccia lontana da registrare, e smette di proiettare ombra dal lato che la
+luce vede.
+
 Il progetto ha **due famiglie** di ombre, una per tipo di proiezione.
 
 ## 5.2 Shadow map 2D — il sole
@@ -1344,6 +1403,12 @@ Quindi gli slot **non** sono assegnati al momento del caricamento:
 - l'**ultimo** slot (`HAND_TORCH_SHADOW_INDEX = NUM_SHADOW_CUBES - 1`) è riservato alla torcia in mano, che non passa da `lights.json`: la sua matrice di mondo non esiste in forma sensata finché `GameLogic()` non comincia a riscriverla ogni frame, quindi non può ricevere un indice fisso a load time né matrici fisse in `computeShadowMatrices()`. `updateHandTorchShadow()` gliele ricalcola ogni frame.
 - **tutti gli altri** li distribuisce `updateDynamicShadowSlots()` a runtime, alle luci attualmente più vicine al giocatore, ogni `SHADOW_REASSIGN_INTERVAL = 0.3 s` (i candidati sono statici, si muove solo il giocatore: non serve una risposta per frame).
 
+Vale la pena saperlo se il prof chiede quanto pesa: **in questa scena il contest
+non scatta mai**. La passata sugli slot vuoti è incondizionata e i candidati sono
+12 contro 31 slot dinamici, quindi ognuno tiene la sua ombra in permanenza. La
+logica di contesa qui sotto serve a un livello autorato con più point light
+degne d'ombra che slot liberi.
+
 Con **isteresi**: un candidato in attesa deve essere più vicino dell'occupante
 attuale di un fattore `SHADOW_SWAP_MARGIN = 1.15` per prendergli lo slot. Senza
 margine, un giocatore fermo sul confine di distanza fra due candidati farebbe
@@ -1370,6 +1435,63 @@ di **almeno un render** anche se resta vuoto per sempre: altrimenti la sua
 immagine resta in `VK_IMAGE_LAYOUT_UNDEFINED`, contro cui un descrittore
 `samplerCube` non può legalmente essere bindato. Da qui il percorso
 "begin/end e basta" in `recordCubeSlotFaces()` per uno slot non occupato.
+
+**La sottomissione separata (`submitCubeShadowCaptures`).** Le catture non
+stanno nel command buffer "main": quello è registrato una volta per immagine
+della swapchain e riprodotto identico, e non sa esprimere "questi slot, questo
+frame". Vengono quindi registrate e sottomesse a parte, alla fine di
+`updateUniformBuffer()` — dopo che ogni istanza ha la matrice di mondo del frame
+corrente, perché questa passata binda **lo stesso descriptor set per-istanza**
+della passata principale, e registrarla prima cuocerebbe una `Wm` stantia dentro
+la mappa.
+
+Due cose rendono quella sottomissione separata *corretta* e non solo comoda, ed
+è la parte da saper difendere:
+
+- Viene sottomessa **prima** del buffer principale, sulla stessa coda, quindi la precede nell'ordine di sottomissione. Una **barriera** in fondo ordina poi queste scritture di colore rispetto a ogni comando successivo sulla coda, campionamento delle cubemap incluso. È questo che fa vedere alle letture delle catture finite, ed è ciò che ha sostituito il `vkQueueWaitIdle` che c'era prima: la GPU non deve più svuotarsi a metà frame, deve solo ordinare due stadi fra loro.
+- Ogni immagine della swapchain ha il **suo** buffer e la **sua** fence, attesa prima di ri-registrare, perché ri-registrare un buffer ancora in volo è undefined behaviour. A regime quella fence è segnalata da un pezzo e l'attesa ritorna subito.
+
+**Il cull per faccia (`cullPerFace`).** Nel renderizzare una faccia si scartano
+le istanze che le cadono fuori. Una faccia copre un sesto della sfera, quindi il
+taglio è circa 6×, ed è ciò che rende sostenibile una ri-cattura per frame.
+
+Ha però un vincolo di correttezza che vale la pena saper enunciare: **è valido
+solo per un command buffer registrato e sottomesso nello stesso frame**. Un
+insieme di visibili deciso al momento della registrazione smette di essere vero
+appena la luce o gli occlusori si muovono, quindi un buffer riprodotto su più
+frame — il buffer "main" di §0.6 — non può usarlo. Il flag esiste invece di
+essere dato per scontato proprio per rendere esplicito quel vincolo dove viene
+sfruttato.
+
+**L'invalidazione per faccia (`faceMask` / `pendingFaceMask`).** Il caching
+sopra ragiona per slot: o si ridisegnano tutte e sei le facce o nessuna. Ma un
+occlusore che si muove — una porta che si apre, un fantasma che passa — invalida
+tipicamente **una faccia sola**. `movingOccluders` marca in `pendingFaceMask`
+solo le facce toccate, e `recordCubeSlotFaces()` salta le altre: una faccia fuori
+dalla maschera non viene né pulita né iniziata, e conserva i texel dell'ultimo
+disegno.
+
+Il guadagno è concreto: una cubemap è sei immagini indipendenti che condividono
+un handle, e a 1024² R32 per faccia **i clear costano più dei draw**. Ridisegnare
+tutte e sei per un fantasma che ne tocca una o due significava pulire e riempire
+6 MB di render target per sistemarne 1. Uno slot la cui LUCE è cambiata prende
+comunque tutte e sei (`ALL_CUBE_FACES`): niente del vecchio contenuto sopravvive
+allo spostamento della camera da cui è stato ripreso.
+
+Una faccia viene marcata in due casi: contiene un mover che si è spostato da
+quando la faccia è stata disegnata l'ultima volta, oppure ne conteneva uno alla
+cattura precedente e ora non più (i suoi texel hanno ancora addosso un fantasma
+che se n'è andato). Tutto il resto costa un test di distanza e uno di frustum.
+La portata usata è quella **propria di ogni luce**, misurata contro la sfera
+avvolgente del mover e non contro la sua origine, così le uniche catture saltate
+sono quelle il cui risultato nessuno potrebbe vedere. Non c'è budget per frame
+né coda: un'ombra aggiornata con un frame di ritardo è un'ombra che si vede
+inseguire il suo fantasma.
+
+Corollario da ricordare: una faccia deve entrare nella maschera **almeno una
+volta** prima che qualcuno campioni il cubo, per lo stesso motivo di
+`VK_IMAGE_LAYOUT_UNDEFINED` di sopra. Il diff sugli occupanti se ne occupa
+chiedendo `ALL_CUBE_FACES` la prima volta che vede ogni slot.
 
 ## 5.6 Il filtraggio del cubo — `shadowFromCube()`
 
@@ -1475,6 +1597,17 @@ interpolerebbe fra distanze appartenenti a superfici diverse, producendo valori
 intermedi che non corrispondono a niente di reale, ed è ciò che il vecchio bias
 sovradimensionato stava in realtà compensando.
 
+Vale la pena avere pronto il dettaglio, perché è la parte che si spiega meglio.
+Attraverso una silhouette — un texel sull'anta della porta e quello accanto che
+guarda oltre il bordo fino al muro in fondo — il bilineare restituisce una
+distanza che non appartiene a **nessuna** delle due. L'errore è proporzionale al
+salto di profondità attraverso il bordo, cioè **metri, non texel**, ed è per
+questo che serviva un bias dello stesso ordine (0.35) per mascherarlo. Quel bias
+è esattamente ciò che permetteva a una torcia di illuminare le catene
+**attraverso una porta chiusa**, dato che la porta sta solo ~0.6 unità davanti a
+loro. Campionare un texel solo rende il confronto onesto e riporta il bias a
+essere una quantità dell'ordine del texel.
+
 > **Se il prof chiede**
 >
 > *"Perché una cubemap per le point light e non una shadow map normale?"* — Una
@@ -1486,11 +1619,16 @@ sovradimensionato stava in realtà compensando.
 > valore deve significare la stessa cosa su ogni faccia. Vale per una distanza
 > euclidea, non per una profondità prospettica.
 >
-> *"Come gestisci lo shadow acne?"* — Con un bias piccolo più un normal offset.
-> Il bias grande non è utilizzabile perché è la distanza a cui un occlusore reale
-> viene ignorato, e nel dungeon un pannello di porta sta 0.65 unità davanti alle
-> catene: alzare il bias faceva passare la luce attraverso la porta. Il normal
-> offset sposta il campionamento lungo la normale invece di allentare la soglia.
+> *"Come gestisci lo shadow acne?"* — Sul percorso cubemap, **togliendo la
+> premessa invece di compensarla**: `PShadowCube` culla le facce ANTERIORI, quindi
+> una superficie rivolta verso la luce non è nella mappa e non può confrontarsi
+> con se stessa. Non c'è acne da pagare. Quel che resta è un bias minuscolo
+> (0.0015..0.004) che copre solo il rumore in virgola mobile fra la distanza
+> calcolata qui e quella calcolata in `ShadowCube.frag`, più il PCF. Il normal
+> offset **non c'è più**: `NORMAL_OFFSET_TEXELS` è 0. Serviva a centrare la
+> lookup nel texel della superficie giusta, problema che esiste solo se la
+> superficie è nella mappa, e costava uno spostamento laterale del bordo
+> d'ombra. Sul sole, ortografico, resta il bias fisso `0.0015` (§5.2).
 >
 > *"Hai 32 cubemap, non è tantissimo?"* — Non sono tutte attive: sono un pool
 > assegnato a runtime alle torce più vicine al giocatore, con isteresi per non
@@ -1582,7 +1720,89 @@ conta meno di una in vista, ma non viene azzerata, così una molto vicina alle
 spalle resta comunque credibile. Lo stesso criterio pesa la scelta degli slot
 ombra.
 
+**Perché il cull delle luci conta più di quello della geometria.**
+`CookTorrance.frag` cicla su ogni luce per ogni frammento, e con il per-sample
+shading forzato (§0.9) questo significa una valutazione GGX completa **quattro
+volte per pixel** a 4× MSAA, che la luce si veda o no. È il costo GPU dominante
+del renderer, ben sopra il cull geometrico, che taglia solo draw call — e le draw
+call non sono mai state il collo di bottiglia a questo numero di istanze.
+
+Il raggio è passato da 25 a 120 e ora a 55, e la storia è istruttiva. Il dungeon
+è largo ~60 unità, quindi 25 spegneva le torce di qualunque stanza in cui il
+giocatore non fosse — **visibilmente**, perché il billboard della fiamma è
+incondizionato: restava acceso a schermo mentre non illuminava nulla, con le
+pareti attorno nere. È esattamente il caso che una stima puramente numerica
+("contribuisce il 3%, sotto la soglia che l'ambient nasconde") non riesce a
+prendere.
+
+**Il cull geometrico (`GEOM_CULL_*`)**: un raggio attorno al giocatore, più un
+cono più lungo lungo la direzione di sguardo. Sostituisce un approccio a grafo di
+stanze (flood fill attraverso le porte aperte) che con questo asset pack era
+fragile: i pezzi di muro non piastrellano in modo affidabile l'impronta completa
+di una stanza, quindi le box derivate avevano buchi grandi abbastanza da
+nascondere la stanza in cui il giocatore *stava*. Il test raggio+cono legge solo
+la posizione e il facing della camera e la posizione di ogni istanza: nessuna
+topologia da sbagliare, niente da riautorare quando il livello cambia.
+
+Il compromesso è voluto: non sa che c'è un muro in mezzo, quindi un'istanza
+appena oltre una porta aperta può comparire poco prima che la porta sia
+raggiunta. È un taglio approssimato di "cosa vale la pena disegnare", non un
+sistema di visibilità portal-correct.
+
+**La nebbia è agganciata allo stesso numero.** `gubo.fogDensity` non è una
+costante tarata a mano: risolve `exp(-(density·dist)²) = 0.01` per
+`dist = GEOM_CULL_CONE_DIST × 2.5`, così nebbia e cull non possono divergere. Il
+fattore 2.5 è l'unica manopola. A 1.0 la nebbia arrivava a saturazione
+*esattamente* alla distanza di cull, e si leggeva come troppo scura molto prima
+— una curva esponenziale perde luminosità in fretta assai prima di "arrivare" al
+suo residuo. A 2.5 la vicinanza resta entro pochi punti percentuali dello
+scoperto fino all'anello `GEOM_CULL_RADIUS`, e si è a circa metà luminosità alla
+portata massima del cono. Il prezzo è che un po' di pop geometrico può affacciarsi
+proprio sul bordo, mitigato dalla vignette e dal fatto che nebbia e sfondo
+condividono lo stesso nero.
+
+I due cull sono **legati da uno `static_assert`** che impone
+`TORCH_LIGHT_CULL_DIST >= GEOM_CULL_CONE_DIST` (oggi 55 e 50). Così qualunque
+cosa il cui supporto-torcia è ancora disegnato è garantita ancora illuminata, e
+il caso "torcia visibile ma al buio" non può ripresentarsi. Abbassare il cull
+delle luci sotto quello geometrico non compila.
+
 ## 6.5 La fiamma
+
+**Come è costruita la base del billboard.** Le fiamme sono quad orientati verso
+la camera, e la base viene costruita in CPU una volta per frame e moltiplicata
+per la ViewPrj (§2.7). Ce ne sono **due**, e il perché è una bella domanda
+d'esame.
+
+La prima è **cilindrica**, condivisa da tutte le fiamme del mondo, e prende
+l'asse *right* **della camera** invece del vettore occhio→ancora di ogni fiamma.
+Il billboard cilindrico da manuale userebbe `cross(worldUp, eyePos - anchor)`, e
+funziona per una torcia a muro a qualche unità di distanza. Cade sulla torcia in
+mano: quell'ancora sta a meno di un'unità dall'occhio ed è piazzata in spazio
+camera, quindi inclinando lo sguardo ruota in blocco attorno all'occhio. Il suo
+offset **orizzontale** dall'occhio tende a zero e, alla pitch in cui la torcia
+passa esattamente sopra (o sotto) la camera, cambia segno: lo yaw derivato fa un
+salto di 180°, cioè la fiamma **gira su se stessa** quando guardi in su o in giù,
+e appena prima del salto quel vettore è quasi di lunghezza nulla, quindi la sua
+direzione è già rumore numerico.
+
+L'asse right della camera non ha nessuno dei due problemi: la camera è costruita
+yaw-poi-pitch senza roll, quindi quell'asse è esattamente orizzontale a ogni
+pitch, non degenera mai, e ruota solo con lo yaw — che è l'unica rotazione che
+una fiamma in piedi deve seguire. Orientarsi verso il **piano** di vista invece
+che verso il **punto** di vista è comunque la scelta standard: è ciò che impedisce
+a un billboard di ruotare lentamente mentre scorre attraverso lo schermo, e alle
+distanze di una torcia le due cose sono indistinguibili.
+
+La seconda base è **solo per la torcia in mano**, e usa gli assi veri della
+camera, pitch compreso, letti dalle colonne di `camToWorld`. Quella torcia non è
+un oggetto del mondo davanti a cui la camera passa: è saldata alla camera e si
+inclina visibilmente con lo sguardo. Una fiamma che resta verticale nel mondo
+sopra un manico che si inclina esce dall'allineamento, e oltre una pitch modesta
+sembra sporgere di lato invece che bruciare sulla punta — peggio della rotazione
+che la base cilindrica serviva a togliere. Legandola alla stessa base che cavalca
+il mesh della torcia, le due restano rigide a ogni pitch, e poiché la base è
+letta direttamente dalla matrice di vista non può degenerare né ribaltarsi.
 
 Vedi §3.7 e §3.8 per gli shader. Il punto architetturale da ripetere perché è
 quello su cui vale la pena essere chiari: **il bagliore attorno alla fiamma non è
@@ -1680,6 +1900,21 @@ morire di buio non è la stessa cosa che morire per un fantasma.
 - **Chase** — durante una caccia: linea di vista, steering, inseguimento.
 - **Return** — è lo stato che fa funzionare tutto il resto, e vale la pena spiegarlo. Un fantasma che ha inseguito il giocatore per mezzo dungeon deve tornare alla sua pattuglia, e senza pathfinding non sa come. La soluzione: durante l'inseguimento lascia una **briciola** ogni `GHOST_TRAIL_SPACING` unità, e tornare è semplicemente ripercorrere le briciole a ritroso. Il percorso **si auto-pota**: una briciola nuova che cade vicino a una vecchia taglia via tutto il segmento in mezzo. Un fantasma che ha passato la caccia a girare attorno a un tavolo torna quindi indietro in linea, non ripercorrendo i cerchi.
 
+**Perché i fantasmi usano la technique "Spectral" e non CookTorrance.** All'inizio
+erano prop opachi come tutti gli altri, il che dava loro gratis l'ombra nella
+mappa 2D del sole e in quelle cubemap delle torce. Poi il sole è stato tolto, e
+ri-catturare le cubemap per un occlusore che si muove di continuo è costato più
+di quanto valesse l'ombra. Restava un prop grigio opaco senza ombra sotto, e
+l'ombra mancante era la cosa più evidente di lui.
+
+`Spectral` risolve rendendolo **incorporeo** invece che opaco: alpha-blended,
+unlit, emissivo, con un rim di Fresnel lungo la silhouette. Una cosa attraverso
+cui si vede il muro non ha motivo di proiettare ombra, quindi la via economica
+smette di sembrare un compromesso. Due conseguenze, entrambe volute: le passate
+d'ombra percorrono solo `SC.TI[0]`, quindi i fantasmi ne sono fuori
+strutturalmente e non per un controllo `castsShadow`; e non ricevono ombra
+nemmeno loro, dato che un emettitore unlit non ha niente da scurire.
+
 **Collisione**: un cilindro verticale, non una box — una box ruoterebbe con lui.
 Le due misure sono fittate dalla geometria di `Ghost.gltf` al caricamento. La
 fascia verticale è ai bounds esatti della mesh; il raggio invece è
@@ -1687,11 +1922,28 @@ deliberatamente **ridotto** sotto il raggio reale, perché un fantasma è
 prevalentemente un drappo e prenderne i bordi come solidi lo farebbe incastrare
 in ogni porta.
 
+Lo shrink è 0.45 e non di più per un motivo preciso, che vale come esempio di
+compromesso: portandolo a 0.65 il raggio effettivo si avvicinava tanto a metà
+larghezza di una porta che il test clear/blocked dello steering cominciava a
+cambiare risposta ogni frame, e il fantasma **vibrava** sulla soglia. Un
+fantasma che compenetra un tavolo è un difetto visivo minore; uno che vibra in
+una porta è rotto. L'obiettivo non è azzerare la compenetrazione, è non
+regredire il movimento.
+
 Niente pathfinding: c'è un test contro i muri, un push-out identico a quello del
 giocatore, e uno steering che apre a ventaglio da una direzione desiderata a
 passi crescenti e prende il primo candidato che non colpisce un muro entro una
 certa distanza. Se è chiuso da ogni lato restituisce un vettore nullo, e il
 chiamante lo gestisce.
+
+Il ventaglio da solo **ditherebbe**: un fantasma davanti a un pilastro col
+giocatore dietro valuterebbe destra e sinistra come equivalenti a ogni frame e,
+al muoversi della geometria di centimetri, continuerebbe a scambiarle, vibrando
+sul posto invece di impegnarsi. `turnBias` ricorda il lato scelto e lo riprova
+per primo, e viene riesaminato solo quando il fantasma ritrova una linea dritta
+libera. È lo stesso genere di problema dello shrink a 0.65 di sopra: due
+condizioni quasi equivalenti valutate ogni frame vogliono sempre un po' di
+memoria o di isteresi.
 
 I fantasmi obbediscono agli stessi muri del giocatore per un motivo di design,
 non di realismo: se un fantasma potesse attraversare la parete dietro di te, non

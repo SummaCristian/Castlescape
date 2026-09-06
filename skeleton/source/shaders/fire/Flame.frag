@@ -86,12 +86,25 @@ float noiseLo(vec2 p) {
 void main() {
 	float y = uv.y;
 
-	// One time base for the whole fire field, scaled up from real seconds:
-	// every motion here -- advection, spine sway, warp morph, bubbles,
-	// shimmer -- rides this one value, so the flame's overall tempo is a
-	// single knob instead of five rates to re-balance against each other.
-	// 1.3 makes it burn visibly livelier without turning frantic.
+	// Two time bases, both scaled up from real seconds. ft drives the fast
+	// per-pixel shimmer (the flame's flicker, `ft * 7.0` below); fm drives
+	// the bulk movement -- spine sway, the rising advection, the warp morph,
+	// the bubbles -- so the flame licks and travels without the flicker
+	// turning frantic.
+	//
+	// fm's rate is not constant: it swells and eases over ~5-15 s, so the
+	// flame surges on a draft and settles again. fm is the exact integral of
+	//   R0 * (1 + A1*sin(W1 t) + A2*sin(W2 t))
+	// which keeps the phase continuous -- scaling time by a moving factor
+	// directly would make the whole field stutter as the factor changed.
+	// A1 + A2 < 1 so the rate never crosses zero and the flame never flows
+	// backward. seed offsets each torch so they don't all breathe in step.
 	float ft = gubo.time * 1.3;
+	const float R0 = 2.2;
+	const float A1 = 0.30, W1 = 0.55;
+	const float A2 = 0.15, W2 = 1.30;
+	float st = gubo.time + seed * 6.0;
+	float fm = R0 * (st - (A1 / W1) * cos(W1 * st) - (A2 / W2) * cos(W2 * st));
 
 	// WANDERING SPINE. The centreline itself sways: the sample x is shifted
 	// by slow noise advected down the flame axis, zero at the wick (a flame
@@ -104,7 +117,7 @@ void main() {
 	// without it the flame's outline never travels at all.
 	// Worst case |offset| at the tip is 0.35 and the tip half-width is well
 	// under that from 1.0, so the swayed field always stays inside the card.
-	vec2 spineP = vec2(seed * 7.0 + layer * 1.7, y * 1.6 - ft * 0.9);
+	vec2 spineP = vec2(seed * 7.0 + layer * 1.7, y * 1.6 - fm * 0.9);
 	float sway = (noiseLo(spineP) - 0.5) * 2.0;	// ~[-1,1], low frequency
 	float x = uv.x - sway * 0.35 * y * y;
 
@@ -145,7 +158,7 @@ void main() {
 	// rising through the flame.
 	float scrollSpeed = 0.55 + layer * 0.18;
 	float scrollPhase = seed * 9.0 + layer * 3.1;
-	vec2 p = vec2(x * 2.2, y * 3.4 - ft * scrollSpeed - scrollPhase);
+	vec2 p = vec2(x * 2.2, y * 3.4 - fm * scrollSpeed - scrollPhase);
 
 	// Domain warp: offset the FBM lookup by a second, lower-frequency FBM
 	// (itself slowly advected) instead of sampling the first FBM directly.
@@ -159,7 +172,7 @@ void main() {
 	// instead of the same frozen curl riding up the card unchanged. And the
 	// warp's bite grows with height -- near-laminar at the wick, where a
 	// real flame is a smooth cone, fully turbulent by the tip.
-	vec2 warpCoord = p * 0.4 + vec2(ft * 0.16, -ft * scrollSpeed * 0.5);
+	vec2 warpCoord = p * 0.4 + vec2(fm * 0.16, -fm * scrollSpeed * 0.5);
 	vec2 warp = vec2(fbm(warpCoord), fbm(warpCoord + 19.3)) - 0.5;
 	float heatNoise = fbm(p + warp * mix(0.85, 1.55, y));
 
@@ -191,7 +204,7 @@ void main() {
 	// tongues around them. Added to heat, a pocket both brightens (the
 	// temperature ramp below) and locally bulges the silhouette (the alpha
 	// window reads heat too).
-	vec2 bp = vec2(x * 3.0, y * 2.2 - ft * scrollSpeed * 1.35 - scrollPhase * 1.3);
+	vec2 bp = vec2(x * 3.0, y * 2.2 - fm * scrollSpeed * 1.35 - scrollPhase * 1.3);
 	float bubbles = smoothstep(0.58, 0.80, noiseLo(bp + warp * 0.6));
 	heat += bubbles * shape * mix(0.55, 0.20, y);
 

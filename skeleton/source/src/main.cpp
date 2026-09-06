@@ -27,82 +27,48 @@
 #include "custom/DebugLines.hpp"
 #include "custom/HuntCycle.hpp"
 
-// Our own files, and where to start reading.
-//
-//   custom/SceneColliders.hpp   the boxes and ramps the player walks into
-//   custom/SceneMaterials.hpp   what each surface is made of
-//   custom/SceneLights.hpp      the scene's lights
-//   custom/UiQuad.hpp           coloured rectangles for the HUD
-//   custom/CheatHud.hpp         the cheat menu, opened with L
-//
-// Each of the first three reads its own data file from assets/scenes/ at
-// startup, so the scene can be changed without touching C++:
+// The scene is data-driven: these files in assets/scenes/ are read at startup,
+// so it can be changed without touching C++.
 //
 //   scene.json      which models exist and where they are placed
-//   colliders.json  hand-authored collision shapes for models an auto-fitted
-//                   box gets wrong, like the gate's archway
+//   colliders.json  collision shapes for models an auto-fitted box gets wrong
 //   materials.json  surface parameters, one entry per model
 //   lights.json     the light sources and the ambient light
-//   gameplay.json   the hunt cycle's timings, the ghosts' patrols, and where
-//                   the run is won (see custom/HuntCycle.hpp)
+//   flames.json     which models get a flame, and its shape
+//   gameplay.json   hunt timings, ghost patrols, and where the run is won
 //
-// The shaders are in source/shaders/, one folder per job: scene/ (PosNormUV.vert
-// and CookTorrance.frag, the pair that draws the scene), spectral/ (the ghosts),
-// shadow/, post/, fire/, exit/, ui/, debug/, and framework/ for the Starter's own.
-//
-// notes.md at the repo root explains the reasoning behind all of it.
+// Shaders live in source/shaders/, one folder per job. OVERVIEW.md and notes.md
+// at the repo root explain the reasoning behind all of it.
 
 // The uniform buffer object used in this example
 struct UniformBufferObject {
 	alignas(16) glm::mat4 mvpMat;
 	alignas(16) glm::mat4 mMat;
-	// inverse-transpose of mMat. Normals can't ride the world matrix or a
-	// non-uniform scale tilts them off the surface (the road is scaled [1,4,1]).
-	// A mat4 rather than a mat3 to avoid std140's column-padding rules.
+	// inverse-transpose of mMat: a non-uniform scale would tilt normals off the
+	// surface. A mat4 and not a mat3, to dodge std140's column padding.
 	alignas(16) glm::mat4 nMat;
-	// Cook-Torrance material. mD isn't here, it's the albedo texture.
-	//
-	// Must match, field for field, the block declared by the four shaders that
-	// see it: PosNormUV.vert and CookTorrance.frag at set 1, Shadow.vert and
-	// ShadowCube.vert at set 0. (Flame.vert and Spark.vert sit at the same
-	// binding but read a FlameUniformBufferObject of their own, so they are not
-	// bound by this layout.)
-	//
-	// No explicit padding of ours: the scalars below fall into std140's vec4
-	// slots on their own, as [mS.xyz | roughness], [F0 | k | flatNormals |
-	// interiorAmbient], [time | ambientWeight | glow | metallic]. The struct's
-	// 16-byte alignment rounds its size to those same 240 bytes, so C++ and
-	// GLSL agree. `glow` and `metallic` were added into the third slot's spare
-	// room, which is why the size did not move when they appeared.
+	// Cook-Torrance material; mD isn't here, it's the albedo texture. Must match
+	// field for field the block the four shaders that see it declare. No explicit
+	// padding: the scalars below fill std140's vec4 slots exactly, 240 bytes.
 	alignas(16) glm::vec3 mS;	// specular color
 	float roughness;			// rho: width of the microfacet distribution
 	float F0;					// reflectance seen head-on
 	float k;					// diffuse share of the BRDF
 	int flatNormals;			// 1: derive the face normal in the shader
-	// 1: take the hemispheric ambient of a vertical surface instead of the one
-	// this surface's normal implies. For interiors, where the sky/ground blend
-	// the model is built on has no meaning. See SceneMaterials.hpp.
+	// 1: use a vertical surface's hemispheric ambient instead of this normal's.
+	// For interiors, where the sky/ground blend has no meaning.
 	int interiorAmbient;
-	// Seconds since startup, the same value for every instance in a frame.
-	// Piggybacks the per-object UBO instead of going in
-	// GlobalUniformBufferObject, which would shift LightData[] off the offset
-	// the comment there notes. Read only by the Flame shaders, which animate
-	// the torch flames entirely on the GPU; the scene shaders declare it and
-	// ignore it, since both pipelines share DSLlocal and so this one struct.
+	// Seconds since startup. Rides the per-object UBO rather than the global one,
+	// which would shift LightData[]. Only the Flame shaders read it.
 	float time;
-	// This model's share of indirect light, overriding the scene's. Negative
-	// means "inherit gubo.ambientWeight", and that is the common case: only
-	// the interior models carry one. See Material::ambientWeight.
+	// This model's share of indirect light. Negative means inherit
+	// gubo.ambientWeight, which is the common case.
 	float ambientWeight;
-	// 0..1: this instance's currently-gazed-at focus highlight strength. Set
-	// per-instance (not per-model, unlike the fields above) in
-	// updateUniformBuffer()'s per-instance loop by comparing against
-	// gazedInstance. Read only by CookTorrance.frag; the other three shaders
-	// that share this layout declare and ignore it, same as time above.
+	// 0..1 focus highlight for the instance being looked at. Per-INSTANCE, unlike
+	// the fields above, set against gazedInstance in updateUniformBuffer().
 	float glow;
-	// 1: shade this model as a metal -- no diffuse lobe, and an indirect term
-	// that reflects the room instead of scattering it. See Material::metallic
-	// in SceneMaterials.hpp and metalAmbient() in CookTorrance.frag.
+	// 1: shade as a metal -- no diffuse lobe, and an indirect term that reflects
+	// the room instead of scattering it.
 	int metallic;
 };
 
@@ -386,121 +352,53 @@ class Castlescape : public BaseProject {
 	// path's depth bias from the world size of one texel of this map, so the
 	// shader has to know the same number. See LightConstants.glsl.
 	static constexpr int SHADOW_MAP_RES = SHADOW_CUBE_RES;
-	// Far clip for every torch's cube map (computeShadowMatrices()) and the
-	// clear value ShadowCube.frag's output gets reset to before each face
-	// pass: with nothing drawn a fragment's "distance" should read as
-	// infinity/unlit, and any value >= this far plane does that -- PROVIDED
-	// shadowFromCube() (CookTorrance.frag) never actually gets queried
-	// beyond it, which was true back when this was 15: with the old g/beta
-	// the torch's radiance was already down to a few percent by 15 units
-	// out, invisibly below LIGHT_ATTEN_EPS's per-pixel skip soon after.
-	//
-	// That invariant broke once the falloff was retuned for a longer reach
-	// (lower beta, higher g, a soft RADIANCE_CAP replacing the old
-	// unbounded-then-culled shape): the torch now stays visibly bright well
-	// past 15 units, so any wall farther than that from the torch WAS being
-	// queried -- and got the clear value back as its "nearest occluder",
-	// which is closer than the wall's own real distance, so it read as
-	// falsely shadowed. That's what looked like the torch's light "only
-	// reaching a fixed radius" with a hard edge at that radius, rather than
-	// the shadow bug it actually was. Raised to comfortably cover the
-	// dungeon's own ~60-unit footprint (TORCH_LIGHT_CULL_DIST's comment,
-	// main.cpp) so the far plane stops being reachable during normal play.
+	// Far clip for every torch cube map, and the clear value each face is reset
+	// to, so "nothing drawn" reads as unlit. This must stay past anything
+	// shadowFromCube() can be asked about, or a wall beyond it takes the clear
+	// value as its nearest occluder and reads as falsely shadowed.
 	static constexpr float TORCH_SHADOW_FAR_CONST = 60.0f;
-	// Near clip for every torch's cube map -- close enough that only the
-	// torch fixture itself (not an occluder, Material::castsShadow) falls
-	// inside it. A member (not a computeShadowMatrices() local) because
-	// updateHandTorchShadow() needs the same number every frame.
+	// Near clip: close enough that only the torch fixture falls inside it. A
+	// member because updateHandTorchShadow() needs the same number every frame.
 	static constexpr float TORCH_SHADOW_NEAR_CONST = 0.05f;
-	// The cube slot reserved for the held torch, one past the six lights.json
-	// hands out (SceneLights::init, nextShadowIndexCube, torchW1/W2/E1/E2/DC/
-	// DV): the held torch never goes through lights.json -- its Wm doesn't
-	// exist in a meaningful form until GameLogic() starts overwriting it
-	// every frame, so unlike the static torches it can't get a fixed
-	// shadowIndex at SceneLights::init() time or fixed face matrices at
-	// computeShadowMatrices() time. Instead updateHandTorchShadow() recomputes
-	// torchFaceMatrices[HAND_TORCH_SHADOW_INDEX]/torchLightPos[..] every frame
-	// in updateUniformBuffer(), before populateCommandBuffer() reads them.
+	// The slot reserved for the held torch, which never goes through lights.json:
+	// its Wm means nothing until GameLogic() starts rewriting it every frame, so
+	// it can get neither a fixed shadowIndex nor fixed face matrices.
 	static constexpr int HAND_TORCH_SHADOW_INDEX = NUM_SHADOW_CUBES - 1;
 
-	// The DYNAMIC shadow-cube pool: everything between lights.json's own
-	// fixed slots (0..dynamicShadowSlotBase) and the held torch's reserved
-	// last one (HAND_TORCH_SHADOW_INDEX). Set once in localInit(), right
-	// after computeShadowMatrices() reports how many fixed slots
-	// sceneLights.all() actually used -- not a literal 6, so this stays
-	// correct if lights.json's own torch count ever changes.
+	// Start of the DYNAMIC pool: everything between lights.json's fixed slots and
+	// the held torch's reserved last one. Counted at startup, not a literal, so
+	// it survives a change to lights.json's own torch count.
 	int dynamicShadowSlotBase = 0;
-	// dynamicSlotOccupant[s] is an index into torchFlames for whichever
-	// flame currently holds dynamic slot (dynamicShadowSlotBase + s), or -1
-	// if the slot is empty (more slots than shadowCandidate flames). Sized
-	// NUM_SHADOW_CUBES for simplicity -- only the entries covering the
-	// dynamic range are ever touched -- rather than adding another
-	// compile-time constant for the pool's width.
+	// Index into torchFlames for whichever flame holds each dynamic slot, or -1
+	// if empty. Sized NUM_SHADOW_CUBES for simplicity; only the dynamic range
+	// is ever touched.
 	std::array<int, NUM_SHADOW_CUBES> dynamicSlotOccupant{};
 
-	// Caching for the static cube shadow slots (everything except
-	// HAND_TORCH_SHADOW_INDEX, which moves every frame and is excluded from
-	// this bookkeeping entirely): lastRenderedOccupant[t] is the "occupant
-	// identity" the slot's image last actually had its 6 faces rendered
-	// for -- t itself for a fixed lights.json slot (that identity never
-	// changes once set), or dynamicSlotOccupant[t] for a dynamic-pool slot.
-	// SHADOW_SLOT_UNSET means "never rendered", which every slot starts as:
-	// the image is otherwise left at VK_IMAGE_LAYOUT_UNDEFINED, which the
-	// samplerCube array descriptor is not allowed to be bound against, so
-	// every slot needs exactly one render even if it stays empty forever
-	// (see recordCubeSlotFaces()'s begin/end-only path for an unoccupied
-	// slot). Compared every frame against the slot's CURRENT identity
-	// (cheap: NUM_SHADOW_CUBES int compares) in updateUniformBuffer(); a
-	// mismatch queues that slot's six faces into pendingFaceMask and updates the
-	// stored identity, so a slot whose occupant hasn't changed since its
-	// last render is never touched again -- static point lights in this
-	// scene (all of them but the held torch: SceneLights::update() never
-	// moves a point light, and updateDynamicShadowSlots() only reassigns a
-	// dynamic slot when a nearer candidate genuinely outbids the current
-	// one) end up rendered exactly once for the life of the program instead
-	// of on every one of the ~9000+ per-frame draw calls the old
-	// unconditional every-frame loop cost across all of them combined.
+	// The occupant identity each slot last rendered its six faces for. Diffed
+	// against the current one every frame; a mismatch queues all six faces.
+	// Static point lights therefore render exactly once for the program's life.
+	// SHADOW_SLOT_UNSET means never rendered, which every slot starts as: the
+	// image would otherwise stay in VK_IMAGE_LAYOUT_UNDEFINED, which a
+	// samplerCube descriptor may not be bound against. Hence one render even for
+	// a slot that stays empty forever.
 	static constexpr int SHADOW_SLOT_UNSET = -2;
 	std::array<int, NUM_SHADOW_CUBES> lastRenderedOccupant;
-	// What the diffs found stale this frame, as a BITMASK OF FACES per slot
-	// (bit f = CUBE_FACE_DIR[f]), re-captured by submitCubeShadowCaptures()
-	// right after the DSshadowCube mapping loop writes their fresh matrices/
-	// position for currentImage (see updateUniformBuffer()) -- not inside the
-	// "main" NamedCommandBuffer, which is recorded once per swapchain image and
-	// replayed unmodified every frame after that (see
-	// ShadowCubeUniformBufferObject's comment), so anything recorded into IT
-	// would still redraw every frame regardless of this caching.
-	//
-	// Per FACE rather than per slot because a cube map is six independent
-	// images that happen to share a handle: a face nobody re-renders keeps the
-	// texels it was last drawn with, and for the static half of this scene
-	// those texels stay correct forever. A ghost walking past a torch changes
-	// what one, sometimes two of that torch's faces see -- redrawing all six
-	// meant clearing and refilling 6 MB of render target to fix 1 MB of it, and
-	// at ~1024^2 R32 per face the clears alone were the cost, not the draws.
-	// A slot whose LIGHT changed still gets all six (ALL_CUBE_FACES): nothing
-	// about its old content survives moving the camera it was shot from.
+	// What the diffs found stale this frame, as a bitmask of FACES per slot.
+	// Per face and not per slot because a cube map is six independent images: at
+	// 1024^2 R32 each, redrawing all six to fix one is mostly clear cost. A slot
+	// whose LIGHT changed still gets all six -- nothing about its old content
+	// survives moving the camera it was shot from.
 	std::array<uint8_t, NUM_SHADOW_CUBES> pendingFaceMask{};
 	static constexpr uint8_t ALL_CUBE_FACES = 0x3F;
 
 	// ---- The per-frame cube-shadow submission ----
-	//
-	// Every cube capture that can change from one frame to the next -- the held
-	// torch, plus whatever faces pendingFaceMask marks -- is recorded into ONE
-	// command buffer of our own, re-recorded and submitted every frame just
-	// before Starter.hpp's drawFrame() submits the "main" one.
-	//
-	// Its own pool, because the framework's commandPool is created with flags =
-	// 0 and a buffer allocated from a pool without
-	// VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT may not be re-recorded.
-	// Freeing and reallocating per frame would work but churns pool memory for
-	// nothing.
+	// Its own pool: the framework's commandPool has flags = 0, and a buffer from
+	// a pool without RESET_COMMAND_BUFFER_BIT may not be re-recorded.
 	VkCommandPool shadowCommandPool = VK_NULL_HANDLE;
-	// One buffer and one fence per swapchain image: the buffer for image i is
-	// still executing until its fence signals, and re-recording a buffer the
-	// GPU is reading is undefined behaviour. Ours rather than reusing
-	// inFlightFences: those are signalled by the MAIN submit, and a later
-	// submit finishing does not by itself prove an earlier one did.
+	// One buffer and fence per swapchain image, since re-recording a buffer the
+	// GPU is still reading is undefined behaviour. Ours rather than
+	// inFlightFences: those are signalled by the MAIN submit, and a later submit
+	// finishing does not prove an earlier one did.
 	std::vector<VkCommandBuffer> shadowCB;
 	std::vector<VkFence> shadowCBFence;
 	// Where the held torch's light was, and whether it was casting at all, when
@@ -511,22 +409,13 @@ class Castlescape : public BaseProject {
 	glm::vec3 lastHandTorchCapturePos{std::numeric_limits<float>::infinity()};
 	bool lastHandTorchCaptureOccupied = false;
 
-	// The occupant diff above answers "did this slot's LIGHT change hands",
-	// which is the only reason a slot's capture can go stale as long as every
-	// occluder in the scene is nailed down. The ghosts are not, and neither is
-	// a door mid-swing. While lights.json still had a sun that didn't show: a
-	// mover's visible shadow was the SUN's 2D map, which is re-rendered inside
-	// the "main" command buffer every frame and so followed it (see
-	// Shadow.vert's header). With the sun gone the only shadow a ghost casts is
-	// the torches' cube one -- and that one stayed frozen in whatever pose the
-	// slot happened to be captured in.
+	// The occupant diff only answers "did this slot's LIGHT change hands", which
+	// is enough while every occluder is nailed down. Ghosts and swinging doors
+	// are not, and with the sun gone the cube maps are the only shadow they cast.
 	//
-	// So movers get their own invalidation: queueMoverCubeSlotRenders(). The
-	// candidates are the ghosts and the door leaves, NOT every instance whose
-	// Wm changes -- a floating pickup key spins on the spot forever and would
-	// keep every slot near it re-rendering for a shadow nobody can pick out,
-	// which is exactly the per-frame cost this cache exists to avoid. Of those
-	// candidates only the ones materials.json marks castsShadow actually make
+	// Candidates are the ghosts and door leaves, NOT every instance whose Wm
+	// changes: a pickup key spinning on the spot would re-render every slot near
+	// it forever. Of those, only the ones materials.json marks castsShadow make
 	// the list, which today means the doors: the ghosts moved continuously
 	// enough that capturing them cost more than their shadows were worth, and
 	// they are switched off there rather than here (see materials.json's
@@ -537,56 +426,33 @@ class Castlescape : public BaseProject {
 	// standing still costs one mat4 compare and no draws.
 	std::vector<glm::mat4> movingOccluderWm;
 	bool moverListBuilt = false;
-	// Which of slot t's faces had a mover in them at their last capture, same
-	// bit layout as pendingFaceMask. Needed for the faces a mover LEAVES:
-	// walking from a torch's +X face to its +Z one changes both, and nothing
-	// about the ghost's new position tells +X that it still has the ghost
-	// painted on it. Same for leaving the light's reach entirely.
+	// Which faces had a mover at their last capture. Needed for the faces a mover
+	// LEAVES: nothing about a ghost's new position tells the face it walked out
+	// of that it still has the ghost painted on it.
 	std::array<uint8_t, NUM_SHADOW_CUBES> slotFaceHadMover{};
-	// How far each slot's light still matters, i.e. the distance past which a
-	// mover cannot cast a shadow anyone could see through it. Derived from
-	// that light's OWN falloff rather than picked as a radius -- see
-	// shadowRelevantReach() -- and written wherever torchLightPos[] is, so the
-	// two always describe the same light.
+	// How far each slot's light still matters, derived from its OWN falloff
+	// rather than picked as a radius. Written wherever torchLightPos[] is.
 	std::array<float, NUM_SHADOW_CUBES> torchShadowReach{};
 
-	// How much (in-game) time between updateDynamicShadowSlots() calls: the
-	// candidates are static objects, only the player moves, so this doesn't
-	// need a per-frame answer. Startup value equal to the interval so the
-	// very first updateUniformBuffer() call fires it immediately (else the
-	// dynamic slots would render whatever garbage torchFaceMatrices/
-	// torchLightPos happen to start with).
+	// Time between updateDynamicShadowSlots() calls: the candidates are static,
+	// only the player moves. Starts equal to the interval so the first frame
+	// fires it immediately, rather than rendering uninitialised matrices.
 	float shadowReassignTimer = 0.3f;
 	static constexpr float SHADOW_REASSIGN_INTERVAL = 0.3f;
-	// A waiting candidate must be closer than an occupied slot's current
-	// occupant by more than this factor to take the slot. Without a margin,
-	// a player standing near the distance boundary between two candidates
-	// would flip the slot -- and force a fresh shadow render, since there's
-	// no cross-fade between "has a shadow" and "doesn't" -- on essentially
-	// every re-evaluation.
+	// A waiting candidate must beat the current occupant by this factor to take
+	// its slot. Without a margin a player standing on the boundary between two
+	// candidates would flip it, and force a fresh render, on every re-evaluation.
 	static constexpr float SHADOW_SWAP_MARGIN = 1.15f;
 
 	// Models, textures and Descriptors (values assigned to the uniforms)
 	DescriptorSet DSglobal;
 
 	// ---- HDR post-processing chain ----
+	// scene (RGBA16F, MSAA + resolve) -> bright pass -> blur H -> blur V (all
+	// quarter res) -> composite (swapchain: scene + bloom, then tone map).
 	//
-	// scene (RGBA16F, MSAA + resolve)
-	//   -> bright pass  (quarter res: threshold + downsample)
-	//   -> blur H       (quarter res: separable gaussian)
-	//   -> blur V       (quarter res: separable gaussian)
-	//   -> composite    (swapchain: scene + bloom, then tone map)
-	//
-	// All five are recorded into the same "main" command buffer in that order,
-	// and every offscreen pass uses ATDEP_SIMPLE, whose second dependency
-	// (subpass 0 -> EXTERNAL, COLOR_ATTACHMENT_OUTPUT -> FRAGMENT_SHADER) is
-	// exactly the barrier that makes each pass's writes visible to the next
-	// pass's texture reads. Its FIRST dependency matters just as much and is
-	// easier to miss: it is a write-after-read barrier against the PREVIOUS
-	// frame, which is what keeps frame N+1 from overwriting an offscreen
-	// target while frame N is still sampling it. There are two frames in
-	// flight and only one image per offscreen attachment, so without it that
-	// race is real.
+	// All recorded into the "main" buffer in that order; ordering between them
+	// comes from ATDEP_SIMPLE's subpass dependencies, not manual barriers.
 	RenderPass RPbright, RPblurH, RPblurV, RPcomposite;
 	VertexDescriptor VDpost;
 	// One layout for the passes that read a single texture, one for the
@@ -610,44 +476,14 @@ class Castlescape : public BaseProject {
 	// instead of a tight one.
 	static constexpr int BLOOM_DIV = 4;
 
-	// The 3D scene (RP, the hdrAtt chain CookTorrance.frag draws into) renders
-	// at this fraction of the window's actual resolution in each axis, i.e.
-	// renderScale^2 of its pixel count -- 0.8 is ~64%. Composite.frag then
-	// upsamples it back up to the real window size through the same
-	// bilinear sampler it already reads srcTex with, so the OUTPUT still
-	// fills the window at full resolution; only the scene's own detail is
-	// computed at fewer pixels. Free performance-wise in proportion to that
-	// pixel-count cut (every fragment invocation this saves is one this
-	// project's forced per-sample shading -- see msaaSamples' comment above
-	// -- would otherwise have run the full light loop for), paid for in a
-	// slightly softer scene, which fog/vignette/bloom/the general darkness of
-	// a dungeon already hide well.
-	//
-	// The UI (txt/uiQuad/crosshair/hud/pauseMenu/startScreen) is NOT part of
-	// this: those all render in their own separate command buffers/passes,
-	// submitted after RPcomposite (see populateCommandBuffer()'s comment),
-	// which stays at the window's real resolution unconditionally -- so text
-	// and prompts stay perfectly sharp regardless of this value.
-	//
-	// A runtime member, not a compile-time constant: the "Render Scale"
-	// slider in the cheat HUD (see its addSlider() call below) changes this
-	// live, then replays the same rebuild path a real window resize already
-	// uses -- onWindowResize(windowWidth, windowHeight) to recompute
-	// RP/bloom sizes at the new scale, then RebuildPipeline() to actually
-	// tear down and recreate the render targets at those sizes. Everything
-	// that used to read the old compile-time constant (renderWidth()/
-	// renderHeight(), bloomWidth()/bloomHeight(), and both call sites below)
-	// reads this member instead, so nothing needed to change but this
-	// declaration and its initial value.
+	// The 3D scene renders at this fraction of the window's resolution on each
+	// axis, and Composite.frag upsamples it back. The UI is NOT part of this and
+	// stays at the real window resolution, so text keeps its edges.
 	float renderScale = 0.8f;
 
-	// The scene's own render resolution, some window dimension scaled by
-	// renderScale and clamped to at least 1 (a minimised or absurdly narrow
-	// window can't ask for a zero-sized image). Takes the window dimension
-	// as a parameter rather than reading swapChainExtent directly, since
-	// onWindowResize() needs to compute this from the NEW size it was just
-	// handed, before swapChainExtent itself has necessarily been updated to
-	// match.
+	// Clamped to at least 1: a minimised window can't ask for a zero-sized image.
+	// Takes the window dimension as a parameter because onWindowResize() must
+	// compute this from the NEW size, before swapChainExtent has caught up.
 	int renderWidth(int windowW) const {
 		return std::max(1, (int)std::lround(windowW * renderScale));
 	}
@@ -655,38 +491,18 @@ class Castlescape : public BaseProject {
 		return std::max(1, (int)std::lround(windowH * renderScale));
 	}
 
-	// The MSAA sample count as a log2 "level" (0 -> 1x, 1 -> 2x, 2 -> 4x, ...)
-	// rather than the raw VkSampleCountFlagBits value, so the "MSAA" cheat
-	// slider's fixed +/-1-per-press step (see CheatHud::addSlider) lands
-	// exactly on the powers of two Vulkan sample counts have to be, instead
-	// of needing a doubling step a plain additive slider can't express.
-	// Starts at 2 (4x), matching msaaSamples' own initial value below.
+	// MSAA sample count as a log2 level (0 -> 1x, 2 -> 4x), because the slider's
+	// fixed +/-1 step can't express the doubling Vulkan sample counts need.
 	float msaaLevel = 2.0f;
-	// The slider's upper bound, in the same units: set from
-	// getMaxUsableSampleCount() once at startup (see localInit()) so a GPU
-	// that can't do 16x is never offered it.
+	// Upper bound, from getMaxUsableSampleCount(): never offer 16x to a GPU
+	// that can't do it.
 	float maxMsaaLevel = 2.0f;
 
-	// Applies a new renderScale (already written into the member by
-	// whichever slider called this -- CheatHud's "Render Scale" row or
-	// SettingsMenu's, both register this same method as onChange) by
-	// replaying the same rebuild path a real window resize already goes
-	// through (see framebufferResizeCallback/onWindowResize in Starter.hpp)
-	// at the CURRENT window size, so only the internal render resolution
-	// changes, nothing about the window itself.
-	//
-	// Skipped while a rebuild (this one, a previous slider press, or an
-	// actual window resize) is still pending -- see framebufferResized's
-	// own comment in Starter.hpp and RebuildPipeline()'s. recreateSwapChain()
-	// only runs once, at the very end of the CURRENT frame's drawFrame();
-	// stacking a second target size on top before that has happened is what
-	// let a render pass get begun against a size newer than the framebuffer
-	// it was actually bound to once (the "renderArea... greater than
-	// framebuffer" validation errors, and the crash that followed them).
-	// This can't fully rule out the same race from resizing the WINDOW
-	// itself very rapidly, since that path lives in the immutable
-	// Starter.hpp and isn't something this guard touches -- but it stops
-	// our own sliders from being an extra source of the same pileup.
+	// Replays a real resize's rebuild path at the CURRENT window size, so only
+	// the internal render resolution changes. SKIPPED while a rebuild is still
+	// pending: recreateSwapChain() runs once at the end of the current frame,
+	// and stacking a second target size on top of it is what once began a render
+	// pass against a size newer than the framebuffer bound to it.
 	void applyRenderScaleChange() {
 		if(!framebufferResized) {
 			onWindowResize((int)windowWidth, (int)windowHeight);
@@ -694,16 +510,10 @@ class Castlescape : public BaseProject {
 		}
 	}
 
-	// Shows the actual pixel resolution alongside the percentage (e.g.
-	// "< 80% (1536x864) >") rather than switching to fixed presets like
-	// 720p/1080p: those only mean one specific shape (16:9) at one specific
-	// window size, while this scale has to stay meaningful at whatever
-	// size/shape the window is resized to. Reads renderWidth()/
-	// renderHeight() -- which read the LIVE renderScale, not the parameter
-	// -- rather than recomputing from scratch, so this can never drift from
-	// what's actually being rendered. v is unused: always formats the
-	// CURRENT renderScale/window size, since that's genuinely what's live
-	// regardless of which slider control called this mid-adjustment.
+	// Shows the real pixel resolution beside the percentage rather than fixed
+	// presets like 720p, which only mean one shape at one window size. Reads
+	// renderWidth()/renderHeight(), so it can't drift from what is rendered. v is
+	// unused: this always formats the CURRENT scale, whoever called it.
 	std::string formatRenderScale(float /*v*/) {
 		char buf[32];
 		snprintf(buf, sizeof(buf), "< %d%% (%dx%d) >",
@@ -712,14 +522,9 @@ class Castlescape : public BaseProject {
 		return std::string(buf);
 	}
 
-	// Applies a new msaaLevel (already written into the member by whichever
-	// slider called this) by converting it back to a real
-	// VkSampleCountFlagBits, then rebuilding the render passes' attachment
-	// properties around it (initRenderPasses() -- a sample-count change,
-	// unlike renderScale's plain width/height change, has to regenerate
-	// hdrAtt itself) before tearing down and recreating the actual GPU
-	// images/pipelines (RebuildPipeline()). Same pending-rebuild guard as
-	// applyRenderScaleChange(), same reason.
+	// Converts the level back to a VkSampleCountFlagBits, then regenerates the
+	// attachment properties -- a sample-count change, unlike renderScale's plain
+	// width/height one, has to rebuild hdrAtt itself. Same pending guard.
 	void applyMsaaChange() {
 		if(!framebufferResized) {
 			msaaSamples = static_cast<VkSampleCountFlagBits>(1 << (int)std::lround(msaaLevel));
@@ -2214,83 +2019,20 @@ class Castlescape : public BaseProject {
 	// shadow ever stops following its ghost too early, lower it.
 	static constexpr float SHADOW_REACH_CUTOFF = 0.02f;
 
-	// How far a torch light still gets uploaded, and how many may be live at
-	// once. CookTorrance.frag loops over every light for every fragment
-	// (times the MSAA sample count -- Starter.hpp turns on
-	// sampleShadingEnable with minSampleShading 1.0, i.e. full per-SAMPLE
-	// shading, and this project runs 4x MSAA -- see msaaSamples), so an
-	// uploaded light costs a full GGX evaluation FOUR TIMES per pixel,
-	// whether or not it can be seen. This is the actual dominant per-frame
-	// GPU cost in this renderer, well above anything the geometry visibility
-	// cull below touches (that one only trims draw calls, which were never
-	// the bottleneck at this instance count).
-	//
-	// 25 used to be "generous" back when this was written against a
-	// six-torch scene and a much smaller live-light/shadow-slot budget --
-	// wrong for a while after that: the dungeon's own footprint is ~60 units
-	// across, so a 25-unit radius dropped any torch in a room the player
-	// wasn't standing in, VISIBLY (its flame billboard is unconditional, see
-	// Flame.hpp, so it stayed lit-looking on screen while casting zero light
-	// and shading its own surroundings pitch black -- exactly what a
-	// purely-numeric "3% contribution, below what ambient hides" estimate
-	// can't catch). 120 fixed that by comfortably covering the whole level
-	// from any point in it, at the cost of uploading nearly every torch in
-	// the dungeon nearly all the time.
-	//
-	// Tied to GEOM_CULL_CONE_DIST below (with a small margin) rather than to
-	// its own flat number now that that geometry cull exists: anything whose
-	// TORCH BRACKET is still being drawn is guaranteed to still be lit, so
-	// the "visibly glowing but dark" case above can't reoccur for anything
-	// with a visible model behind it. The residual case that can still
-	// happen -- a flame's billboard alone, unconditional and undimmed,
-	// rendering past both cutoffs with nothing lighting it -- is far less
-	// noticeable than a fully modelled, clearly-visible dark torch was: a
-	// small/distant glow with no bracket to contrast it against. Kept as a
-	// static_assert right after GEOM_CULL_CONE_DIST is declared, so the two
-	// can't drift out of sync by editing only one of them.
+	// How far a torch light is still uploaded, and how many may be live at once.
+	// Every uploaded light costs a full GGX evaluation per SAMPLE, so this is the
+	// dominant GPU cost here. Tied to GEOM_CULL_CONE_DIST by the static_assert
+	// below, so a drawn torch bracket is always still a lit one.
 	static constexpr float TORCH_LIGHT_CULL_DIST = 55.0f;
 	static constexpr int TORCH_LIGHT_MAX_LIVE = 32;
 
-	// Geometry visibility: a radius around the player, plus a longer cone
-	// down whatever direction the camera is actually facing. Replaces an
-	// earlier room-graph approach (flood-filling through open doors from an
-	// authored or collider-derived room box) that turned out to be too
-	// fragile against this asset pack: wall pieces don't reliably tile a
-	// room's full footprint with a scene.json "collider", so the derived
-	// boxes had gaps big enough to hide the room the player was STANDING
-	// in, not just the ones further away. A radius+cone test needs none of
-	// that: it reads only the camera's live position/facing and each
-	// instance's own position, so there is no room topology to get wrong
-	// and no per-scene authoring to keep in sync as the level changes.
+	// Geometry visibility: a radius around the player plus a longer cone down the
+	// view direction. Applied to GEOMETRY only, never to the light list above.
 	//
-	// The tradeoff, on purpose: unlike a room graph this has no idea a wall
-	// is between the camera and something behind it, so a light-hearted
-	// example would be an instance just past an open doorway showing up
-	// slightly before the doorway itself is reached, if it happens to sit
-	// inside the cone. That's an acceptable, cheap approximation for a
-	// player-facing "what's worth drawing" cut, not a portal-correct
-	// visibility system. Only applied to GEOMETRY (see the UBO loop in
-	// updateUniformBuffer()) -- deliberately NOT applied to the torch light
-	// list below, which stays on its own pure-distance cull: a light that
-	// stops being uploaded to gubo while its flame's billboard (drawn
-	// separately, unconditionally, see Flame.hpp) keeps rendering reads as
-	// a burning torch that lights nothing, which is exactly the bug
-	// TORCH_LIGHT_CULL_DIST's own comment above already had to fix once.
-	//
-	// GEOM_CULL_RADIUS: always draw anything this close, regardless of
-	// facing -- so turning around, or a wall just to your side, doesn't pop.
-	// Camera FOV is only 45 degrees vertical (see FOVy below), but on a wide
-	// enough window the diagonal half-angle still stretches close to the
-	// cone's own half-angle, so this and GEOM_CULL_CONE_COS both carry
-	// comfortable headroom past the frustum's actual edges rather than
-	// tracking them exactly -- cheaper than deriving the true frustum planes
-	// every time the window resizes, for a cut that only has to be
-	// approximately right.
+	// Always draw anything this close, whatever the facing, so turning around
+	// doesn't pop. Carries headroom past the real frustum rather than tracking it.
 	static constexpr float GEOM_CULL_RADIUS = 16.0f;
-	// GEOM_CULL_CONE_DIST: how far the extended cone reaches down the view
-	// direction -- long enough to see clear down the dungeon's own ~60-unit
-	// longest sightline without popping the far wall into view a step at a
-	// time.
+	// How far the cone reaches: the dungeon's longest sightline is ~60 units.
 	static constexpr float GEOM_CULL_CONE_DIST = 50.0f;
 	// Keeps TORCH_LIGHT_CULL_DIST (declared above, before this one exists --
 	// see its own comment for why) at least as far as this cone reaches, so
@@ -2481,65 +2223,12 @@ class Castlescape : public BaseProject {
 	static constexpr float WALK_BOB_LATERAL = 0.02f;
 	// How fast walkBobBlend eases toward its target.
 	static constexpr float WALK_BOB_BLEND_TAU = 0.15f;
+	// Vertical head-bob applied to the view itself, kept well under the hand's
+	// bob so the world only just nods.
+	static constexpr float CAM_BOB_VERTICAL = 0.012f;
 
-	// The dungeon ghost (assets/models/Entities/Ghost.gltf, "ghost" instance
-	// in scene.json): a single-mesh, single-texture prop (see the model's own
-	// notes.md-style history -- body and "orb" were originally two separate
-	// pieces, joined in Blender and re-UV'd onto one flat-grey texture so the
-	// engine's one-texture-per-instance loader could draw it as one entity).
-	// Patrols a closed loop of waypoints at constant speed, facing its
-	// direction of travel, with a sinusoidal bob layered on top of the Y
-	// coordinate -- same idea as the torch's flame envelope, just applied to
-	// world position instead of brightness.
-	//
-	// Drawn with the "Spectral" technique (Pspectral / shaders/spectral/Spectral.frag),
-	// NOT with the CookTorrance one every other prop uses. It used to be the
-	// latter, which bought it shadows in the sun's 2D map and the torches' cube
-	// maps for free -- until the sun was removed (88e019e) and the cube
-	// re-captures a continuously moving occluder forces turned out to cost more
-	// than the shadow was worth (46777d5, and materials.json's "ghost" entry).
-	// What was left was an opaque grey prop with no shadow under it, and the
-	// missing shadow was the most visible thing about it.
-	//
-	// The Spectral technique answers that by making the ghost incorporeal
-	// instead: alpha-blended, unlit, emissive, lit along its own silhouette by
-	// a Fresnel rim -- which is why the model's ragged hem glows without the
-	// shader knowing the hem exists. Something you can see the wall through has
-	// no business casting a shadow, so the cheap path stops looking like a
-	// compromise. See Spectral.frag's header for the effect itself and
-	// Pspectral's declaration for the pipeline state it needs.
-	//
-	// Two consequences elsewhere, both wanted: the shadow passes in
-	// populateCommandBuffer() walk SC.TI[0] only, so the ghosts are now outside
-	// them structurally rather than by a castsShadow check, and the ghosts no
-	// longer receive shadows either -- an unlit emitter has nothing to darken.
-	//
-	// Each ghost runs a three-state machine, driven entirely by
-	// huntCycle.hunting():
-	//
-	//   Patrol   the original behaviour: walk the authored waypoint loop.
-	//   Chase    drop the loop and steer toward the player, around walls.
-	//   Return   the hunt is over, so walk BACK to where the chase started
-	//            and pick the patrol up exactly where it was left.
-	//
-	// Return is the state that makes the whole thing work, and it exists
-	// because of one specific problem: a ghost that can't pass through walls
-	// can end a chase anywhere in the castle -- three rooms and two doorways
-	// away from its loop -- and "walk back to a point you can no longer see"
-	// is exactly the pathfinding problem we don't want to solve for a level
-	// this small.
-	//
-	// So it isn't solved. During a chase the ghost drops a breadcrumb every
-	// GHOST_TRAIL_SPACING units (`trail` below), and returning is just walking
-	// that list backwards. The route home is guaranteed walkable because the
-	// ghost physically walked it a moment ago, and it costs one vector push
-	// every few frames instead of a nav mesh, an A* and a graph to run it on.
-	//
-	// The trail also self-prunes: a new breadcrumb landing near an older one
-	// truncates everything after that older one (see the chase block in
-	// GameLogic). A ghost that spends a hunt circling a table therefore walks
-	// home in a straight-ish line rather than re-tracing every lap, and the
-	// list stays bounded no matter how long a hunt runs.
+	// Three-state machine driven by huntCycle.hunting(). Return walks the chase's
+	// breadcrumb trail backwards, which is why there is no pathfinding here.
 	enum class GhostMode {
 		Patrol,
 		Chase,
@@ -2627,54 +2316,17 @@ class Castlescape : public BaseProject {
 	// Yaw easing, radians/second. Roughly a half-turn in a third of a second.
 	static constexpr float GHOST_TURN_SPEED = 9.0f;
 
-	// Collision size: a vertical cylinder, not a box. A box would rotate with
-	// the mesh's facing (or, left axis-aligned, would silently stop matching
-	// it), and either way its corners project further out on a diagonal than
-	// a circle of the same "radius" -- which is exactly how a box collider
-	// snags on a doorway jamb or a corridor corner that a cylinder just slides
-	// past. That snagging risk is why character/creature controllers use
-	// capsules instead of boxes as a matter of course, and it's the reason
-	// this stays a circle in XZ even though the ghost itself isn't round.
+	// A vertical cylinder, not a box: a box's corners project further on a
+	// diagonal and snag on doorway jambs. Both numbers are fitted from
+	// Ghost.gltf at load time, so a model swap can't desync them.
 	//
-	// Both numbers below are fitted from Ghost.gltf's own geometry at load
-	// time (see the fit right after ghosts are read from gameplay.json)
-	// instead of being hand-measured constants, so a model swap can't quietly
-	// desync them again the way the old hardcoded values did.
-	//
-	// The vertical slab is taken at the mesh's exact fitted bounds: unlike the
-	// radius there's no "getting stuck" failure mode to guard against by
-	// shrinking it, and shrinking it is exactly what caused the ghost to float
-	// over furniture it visibly clipped through (see ghostBlockedAt/
-	// ghostResolveWalls). Ghost.gltf's local bounds run from -1.80 to +0.83
-	// around its origin -- most of the body hangs below the pivot, not
-	// centered on it -- which is also why this is two numbers and not one
-	// symmetric half-height.
-	//
-	// The radius, by contrast, IS deliberately shrunk below the mesh's actual
-	// footprint (ghostXZFitShrink), the same way it always was: a circle sized
-	// to guarantee zero visual clipping would be wide enough to snag in a
-	// doorway. Shrinking it off the real fit rather than picking an unrelated
-	// number keeps it in the same ballpark as the mesh if the model changes.
-	//
-	// 0.45 lands the fitted radius close to 0.5 -- the value this project
-	// shipped and navigated doorways with before any of this fitting existed.
-	// A larger shrink (tried: 0.65, plus a steering margin on top of that)
-	// pushed the effective radius close enough to half the doorway width that
-	// ghostSteer's clear/blocked test started flipping every frame near a
-	// threshold, which is worse than the clipping it was meant to fix: a
-	// ghost that visibly clips a table is a minor visual issue, one that
-	// visibly vibrates in a doorway is a broken one. Getting all the way back
-	// to zero clipping isn't the goal here; not regressing movement is.
+	// The radius is deliberately shrunk below the real fit -- a circle wide
+	// enough for zero clipping snags in doorways. 0.45 and not more: at 0.65 the
+	// steering's clear/blocked test flipped every frame and the ghost vibrated.
 	static constexpr float ghostXZFitShrink = 0.45f;
-	// Steering briefly probed with extra padding above the real radius, meant
-	// to stop borderline gaps from flip-flopping every frame. Playtesting it
-	// alongside the 0.65 shrink made things worse, not better -- padding a
-	// radius that was already close to half the doorway width just made
-	// "blocked" win the flip-flop more often. Back to 1.0 (no margin); the
-	// parameter stays in ghostPathClear/ghostSteer in case it's worth
-	// revisiting once the radius itself (ghostXZFitShrink, above) is confirmed
-	// comfortable, rather than stacked on top of a radius that was still
-	// riding the edge.
+	// No extra steering padding. Tried alongside the 0.65 shrink and made things
+	// worse: padding a radius already near half a doorway just let "blocked" win
+	// the flip-flop more often. The parameter stays in case it's worth revisiting.
 	static constexpr float ghostSteerMargin = 1.0f;
 	float ghostRadius = 0.5f;
 	float ghostBodyBottom = -1.80f;
@@ -6127,6 +5779,14 @@ class Castlescape : public BaseProject {
 			tf.color = huntCycle.flameColor(tf.baseColor)
 					   * huntCycle.warningPulse() * huntCycle.lightScale();
 
+			// Combustion instability: a slow wander in hue on top of the
+			// brightness spring, so a guttering flame shifts warm/cool the way
+			// burning fuel does instead of only dimming. Scaled by `gutter` so
+			// a steady flame is untouched and the hunt-cycle tint stays clean.
+			float hueWander = fireFbm(t * 0.9f + 53.0f) - 0.5f;
+			tf.color.r *= 1.0f + hueWander * 0.10f * gutter;
+			tf.color.b *= 1.0f - hueWander * 0.12f * gutter;
+
 			// Height: the same signal, compressed into a narrower band and
 			// chased much more slowly -- see TorchFlame::heightScale.
 			float hTarget = 0.78f + 0.31f * (target - 0.30f) / 1.10f;	// ~0.78..1.09
@@ -8579,10 +8239,28 @@ class Castlescape : public BaseProject {
 		// lag instead of oscillating.
 		eyeStepOffset *= std::exp(-deltaT / EYE_SMOOTH_TAU);
 
+		// Walk-bob signal shared by the camera and both hands: one accumulating
+		// phase, eased in/out by walkBobBlend so a start/stop doesn't snap the
+		// sway. Originally the torch's own state, now doubles for the key and
+		// the view, since all three swing with the same gait -- only how each
+		// reads the phase (see bobLateral's sign below) differs.
+		bool isWalking = grounded && (std::abs(m.x) > 0.01f || std::abs(m.z) > 0.01f);
+		float bobTarget = isWalking ? 1.0f : 0.0f;
+		walkBobBlend += (bobTarget - walkBobBlend) * (1.0f - std::exp(-deltaT / WALK_BOB_BLEND_TAU));
+		if(isWalking) {
+			walkBobPhase += WALK_BOB_SPEED * (sprinting ? 1.4f : 1.0f) * deltaT;
+		}
+
 		// View: rendered from the smoothed eye height. camPos itself is left
 		// untouched, so collisions, gravity and ground contact all keep working
 		// on the exact position; only what the player sees is eased.
-		glm::vec3 eyePos = camPos - glm::vec3(0.0f, eyeStepOffset, 0.0f);
+		//
+		// A small vertical head-bob rides on top, on the double-frequency
+		// signal (one dip per footstep) and well under the hand's own bob so
+		// the world barely nods while the torch swings. Presentation only, like
+		// eyeStepOffset.
+		float camBob = std::sin(walkBobPhase * 2.0f) * CAM_BOB_VERTICAL * walkBobBlend;
+		glm::vec3 eyePos = camPos - glm::vec3(0.0f, eyeStepOffset - camBob, 0.0f);
 		View = glm::lookAt(eyePos, eyePos + front, up);
 
 		// View-Projection
@@ -8599,17 +8277,8 @@ class Castlescape : public BaseProject {
 			glm::vec4(eyePos, 1.0f)
 		);
 
-		// Walk-bob signal shared by both hands: one accumulating phase, eased
-		// in/out by walkBobBlend so a start/stop doesn't snap the sway.
-		// Originally the torch's own state, now doubles for the key since
-		// both hands swing with the same gait -- only how each hand reads
-		// the phase (see bobLateral's sign below) differs between them.
-		bool isWalking = grounded && (std::abs(m.x) > 0.01f || std::abs(m.z) > 0.01f);
-		float bobTarget = isWalking ? 1.0f : 0.0f;
-		walkBobBlend += (bobTarget - walkBobBlend) * (1.0f - std::exp(-deltaT / WALK_BOB_BLEND_TAU));
-		if(isWalking) {
-			walkBobPhase += WALK_BOB_SPEED * (sprinting ? 1.4f : 1.0f) * deltaT;
-		}
+		// walkBobPhase / walkBobBlend are advanced just above the View matrix
+		// now (the camera reads them too), not here.
 
 		// Wall tuck for both hands (see applyTuck and the block of constants
 		// around it). Resolved here rather than inside each hand's own block

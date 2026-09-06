@@ -49,6 +49,17 @@ vec3 toneMap(vec3 c) {
 	return c / (Y + 1.0);
 }
 
+// Cheap per-pixel white noise for the dither below. Not a good RNG, but
+// enough for a pattern that only has to look unstructured.
+float hash21(vec2 p) {
+	p = fract(p * vec2(123.34, 456.21));
+	p += dot(p, p + 45.32);
+	return fract(p.x * p.y);
+}
+
+// Radial R/B channel split at the corner, in uv units, a few pixels wide.
+const float CA_STRENGTH = 0.008;
+
 void main() {
 	// bloomTex is quarter-res; sampling it at the full-res uv relies on its
 	// sampler's bilinear filtering to upsample smoothly back to full
@@ -66,7 +77,16 @@ void main() {
 	vec2 bloomTexel = 1.0 / vec2(textureSize(bloomTex, 0));
 	vec2 bloomUV = clamp(uv, bloomTexel * 0.5, 1.0 - bloomTexel * 0.5);
 
-	vec3 scene = texture(srcTex, uv).rgb;
+	// Chromatic aberration: pull R and B along the radial direction, scaled by
+	// distance from centre squared so the middle stays clean and only the edges
+	// smear. G keeps the true sample so the world still lines up with the
+	// crosshair and text composited later.
+	vec2 caDir = uv - vec2(0.5);
+	float caAmt = dot(caDir, caDir) * CA_STRENGTH;
+	vec3 scene = vec3(
+		texture(srcTex, uv + caDir * caAmt).r,
+		texture(srcTex, uv).g,
+		texture(srcTex, uv - caDir * caAmt).b);
 	vec3 bloom = texture(bloomTex, bloomUV).rgb;
 
 	vec3 color = scene + bloom * post.bloomIntensity;
@@ -78,6 +98,18 @@ void main() {
 	// menu toggle affects direct lighting and bloom together.
 	if((post.debugFlags & LIGHT_DEBUG_NO_TONEMAP) == 0) {
 		color = toneMap(color);
+	}
+
+	// Split-tone grade: shadows a touch cool, highlights a touch warm, so
+	// torchlight reads hotter against the stone without changing the lighting
+	// itself. Weighted by luminance and kept gentle.
+	{
+		float Yc = dot(color, vec3(0.2126, 0.7152, 0.0722));
+		const vec3  GRADE_SHADOW = vec3(0.96, 1.00, 1.06);
+		const vec3  GRADE_HIGH   = vec3(1.06, 1.01, 0.92);
+		const float GRADE_AMOUNT = 0.5;
+		vec3 grade = mix(GRADE_SHADOW, GRADE_HIGH, smoothstep(0.0, 0.6, Yc));
+		color *= mix(vec3(1.0), grade, GRADE_AMOUNT);
 	}
 
 	// Vignette: darkens the corners/edges of the frame, screen-space and
@@ -164,6 +196,13 @@ void main() {
 	}
 
 	color = mix(color, vec3(1.0), clamp(post.escapeFlash, 0.0, 1.0));
+
+	// Dither, last, in display space: one 8-bit LSB of triangular noise that
+	// breaks up banding in the dark gradients before the swapchain quantises
+	// them. time animates it so it doesn't sit as a fixed pattern.
+	float n1 = hash21(gl_FragCoord.xy + fract(post.time) * 431.0);
+	float n2 = hash21(gl_FragCoord.xy + fract(post.time) * 917.0 + 53.0);
+	color += (n1 - n2) * (1.0 / 255.0);
 
 	// Written linear, not gamma-encoded: the swapchain is B8G8R8A8_SRGB, so
 	// the hardware does the linear-to-sRGB encode on write. A manual curve
