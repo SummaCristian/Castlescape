@@ -668,6 +668,86 @@ class Castlescape : public BaseProject {
 	// loops below read a plain vector instead of going through the accessor.
 	std::vector<Collider *> allColliders;
 
+	// Uniform XZ grid over allColliders, built once (colliders never move).
+	// Lets the ghost queries below test only nearby colliders instead of
+	// scanning the whole castle every frame, per ghost.
+	struct ColliderGrid {
+		// World units per cell. Bigger than a ghost's radius so the 3x3
+		// neighbourhood queried below always covers a ghost-sized radius test
+		// without needing to grow each collider's footprint by the query
+		// radius.
+		static constexpr float CELL_SIZE = 3.0f;
+
+		struct Entry {
+			AABBextents E;
+		};
+		std::vector<Entry> entries;
+		std::unordered_map<int64_t, std::vector<int>> cells;
+
+		static int cellCoord(float v) { return (int)std::floor(v / CELL_SIZE); }
+		static int64_t cellKey(int cx, int cz) {
+			return (int64_t(uint32_t(cx)) << 32) | uint32_t(cz);
+		}
+
+		void build(const std::vector<Collider *> &colliders) {
+			entries.clear();
+			cells.clear();
+			entries.reserve(colliders.size());
+			for(Collider *c : colliders) {
+				int idx = (int)entries.size();
+				entries.push_back({c->getExtents()});
+				const AABBextents &E = entries.back().E;
+				int cx0 = cellCoord(E.xMin), cx1 = cellCoord(E.xMax);
+				int cz0 = cellCoord(E.zMin), cz1 = cellCoord(E.zMax);
+				for(int cx = cx0; cx <= cx1; cx++) {
+					for(int cz = cz0; cz <= cz1; cz++) {
+						cells[cellKey(cx, cz)].push_back(idx);
+					}
+				}
+			}
+		}
+
+		// Visits the cached extents of every collider registered in the 3x3
+		// cell neighbourhood around `p`. Always the 3x3 block rather than just
+		// p's own cell: the callers ask "is anything within some radius of
+		// p", and a collider registered one cell over can still be that
+		// close. A collider that spans several of those cells is visited once
+		// per cell it's in, which costs a few redundant (and cheap) AABB
+		// tests rather than needing a per-query dedup pass.
+		template<typename F>
+		void forEachNear(const glm::vec3 &p, F &&fn) const {
+			int cx = cellCoord(p.x), cz = cellCoord(p.z);
+			for(int dx = -1; dx <= 1; dx++) {
+				for(int dz = -1; dz <= 1; dz++) {
+					auto it = cells.find(cellKey(cx + dx, cz + dz));
+					if(it == cells.end()) continue;
+					for(int idx : it->second) {
+						fn(entries[idx].E);
+					}
+				}
+			}
+		}
+	};
+	ColliderGrid ghostColliderGrid;
+
+	// Colliders left OUT of the grid above because their Wm changes every
+	// frame -- door leaves and their lock hardware (see GameLogic()'s
+	// d.inst->C->setWorldMatrix() calls). A cached AABB for one of these
+	// would still be blocking a ghost long after the door swung open, so
+	// they're tested live instead, on top of the grid lookup. Short list, so
+	// a plain scan of it stays cheap.
+	std::vector<Collider *> ghostDynamicColliders;
+
+	// Every ghost collider query goes through here: the static grid first,
+	// then the movers above, read fresh each time.
+	template<typename F>
+	void ghostForEachNearbyCollider(const glm::vec3 &p, F &&fn) const {
+		ghostColliderGrid.forEachNear(p, fn);
+		for(Collider *c : ghostDynamicColliders) {
+			fn(c->getExtents());
+		}
+	}
+
 	// Debug/cheat toggles, isolated in a utility struct.
 	// Not persisted across runs, reset to default values on launch.
 	struct CheatFlags {
@@ -3729,6 +3809,29 @@ class Castlescape : public BaseProject {
 					glm::translate(glm::mat4(1.0f), glm::vec3(0.454f, 1.730f, -1.266f))
 				  * glm::rotate(glm::mat4(1.0f), glm::radians(180.0f), glm::vec3(0.0f, 1.0f, 0.0f))
 				  * glm::rotate(glm::mat4(1.0f), glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f)));
+
+		// Now that every door and lock prop exists, split allColliders into
+		// the movers (excluded from the grid, tested live every query) and
+		// everything else (cached in the grid, built once).
+		ghostDynamicColliders.clear();
+		for(Door &d : doors) {
+			if(d.inst != nullptr && d.inst->C != nullptr) {
+				ghostDynamicColliders.push_back(d.inst->C);
+			}
+			for(Door::LockProp &prop : d.lockProps) {
+				if(prop.inst->C != nullptr) {
+					ghostDynamicColliders.push_back(prop.inst->C);
+				}
+			}
+		}
+		std::vector<Collider *> staticColliders;
+		staticColliders.reserve(allColliders.size());
+		for(Collider *c : allColliders) {
+			bool isMover = std::find(ghostDynamicColliders.begin(), ghostDynamicColliders.end(), c)
+						 != ghostDynamicColliders.end();
+			if(!isMover) staticColliders.push_back(c);
+		}
+		ghostColliderGrid.build(staticColliders);
 
 		// The player's spawn pose, captured before anything can move it. See
 		// spawnPos's declaration: this is what restartRun() puts them back to.
@@ -6885,19 +6988,20 @@ class Castlescape : public BaseProject {
 	// physically stuck (ghostResolveWalls) keeps asking with the real body
 	// size. See ghostSteer for why that distinction exists.
 	bool ghostBlockedAt(const glm::vec3 &p, float radius) const {
-		for(Collider *C : allColliders) {
-			AABBextents E = C->getExtents();
-			if(E.yMax < p.y + ghostBodyBottom) continue;	// entirely underneath: floated over
-			if(E.yMin > p.y + ghostBodyTop) continue;	// entirely overhead: passed under
+		bool blocked = false;
+		ghostForEachNearbyCollider(p, [&](const AABBextents &E) {
+			if(blocked) return;
+			if(E.yMax < p.y + ghostBodyBottom) return;	// entirely underneath: floated over
+			if(E.yMin > p.y + ghostBodyTop) return;	// entirely overhead: passed under
 			float closestX = glm::clamp(p.x, E.xMin, E.xMax);
 			float closestZ = glm::clamp(p.z, E.zMin, E.zMax);
 			float dx = p.x - closestX;
 			float dz = p.z - closestZ;
 			if(dx * dx + dz * dz < radius * radius) {
-				return true;
+				blocked = true;
 			}
-		}
-		return false;
+		});
+		return blocked;
 	}
 
 	// Pushes `p` back out of anything it has ended up inside, horizontally.
@@ -6908,17 +7012,22 @@ class Castlescape : public BaseProject {
 	// for the player -- move first, then get pushed out along the shortest
 	// horizontal escape, and the component parallel to the wall survives.
 	void ghostResolveWalls(glm::vec3 &p) const {
-		for(Collider *C : allColliders) {
-			AABBextents E = C->getExtents();
-			if(E.yMax < p.y + ghostBodyBottom) continue;
-			if(E.yMin > p.y + ghostBodyTop) continue;
+		// The 3x3 neighbourhood is computed once, from `p` as it is on entry,
+		// before any push below can move it -- exactly like the old
+		// all-colliders scan, which also decided once which colliders exist
+		// and then mutated p while walking that fixed list. A push here is at
+		// most ghostRadius, well inside the CELL_SIZE margin, so p never
+		// actually leaves the neighbourhood that was queried for it.
+		ghostForEachNearbyCollider(p, [&](const AABBextents &E) {
+			if(E.yMax < p.y + ghostBodyBottom) return;
+			if(E.yMin > p.y + ghostBodyTop) return;
 
 			float closestX = glm::clamp(p.x, E.xMin, E.xMax);
 			float closestZ = glm::clamp(p.z, E.zMin, E.zMax);
 			float dx = p.x - closestX;
 			float dz = p.z - closestZ;
 			float dist = std::sqrt(dx * dx + dz * dz);
-			if(dist >= ghostRadius) continue;
+			if(dist >= ghostRadius) return;
 
 			if(dist > 1e-5f) {
 				float push = (ghostRadius - dist) / dist;
@@ -6936,7 +7045,7 @@ class Castlescape : public BaseProject {
 					p.z += (pushZNeg < pushZPos ? -1.0f : 1.0f) * (ghostRadius + minZ);
 				}
 			}
-		}
+		});
 	}
 
 	// Whether a ghost at `from` could travel `dist` along `dir` without hitting
@@ -6964,14 +7073,15 @@ class Castlescape : public BaseProject {
 	// table or chair along the way should only block it if the line is
 	// actually low enough to clip the furniture there.
 	bool ghostPointBlocked(const glm::vec3 &p) const {
-		for(Collider *C : allColliders) {
-			AABBextents E = C->getExtents();
-			if(p.x < E.xMin || p.x > E.xMax) continue;
-			if(p.z < E.zMin || p.z > E.zMax) continue;
-			if(p.y < E.yMin || p.y > E.yMax) continue;
-			return true;
-		}
-		return false;
+		bool blocked = false;
+		ghostForEachNearbyCollider(p, [&](const AABBextents &E) {
+			if(blocked) return;
+			if(p.x < E.xMin || p.x > E.xMax) return;
+			if(p.z < E.zMin || p.z > E.zMax) return;
+			if(p.y < E.yMin || p.y > E.yMax) return;
+			blocked = true;
+		});
+		return blocked;
 	}
 
 	// Roughly where a ghost's "eyes" are, relative to its hover pivot --
