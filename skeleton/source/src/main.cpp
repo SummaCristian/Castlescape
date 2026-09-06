@@ -527,6 +527,15 @@ class Castlescape : public BaseProject {
 	// the ground clamp on landing.
 	float camVerticalVelocity = 0.0f;
 
+	// Debug spectator orbit around the player (cheats.debugCam). Snapped
+	// behind the player each time the camera is switched on, then nudged by
+	// IJKL (orbit) and U/O (dolly). Yaw is a world angle in degrees, pitch is
+	// degrees above the player, dist is metres.
+	float dbgOrbitYaw = 0.0f;
+	float dbgOrbitPitch = DEBUG_CAM_PITCH0;
+	float dbgOrbitDist = DEBUG_CAM_DIST0;
+	bool dbgCamWasOn = false;
+
 	// Top of the "floor" instance, cached after load. Last-resort clamp while
 	// no-clipping, so falling under the map is never possible.
 	float worldFloorY = 0.0f;
@@ -621,6 +630,12 @@ class Castlescape : public BaseProject {
 		// axis-aligned), so it shows the same envelope the ground pass
 		// collides against -- an OOBB as its fattened box, not its true one.
 		bool showColliders = false;
+		// Third-person spectator view: pulls the rendered camera far back from
+		// the player while every visibility cull (geometry cone, torch-light
+		// list, shadow pool) keeps running from the real first-person eye. The
+		// cull boundary -- instances popping in and out at the cone edge -- is
+		// then visible from outside. DebugLines sketches the cone itself.
+		bool debugCam = false;
 		// Shader-side: recolors surfaces by incoming light intensity. See
 		// LIGHT_DEBUG_HEATMAP.
 		bool showLightHeatmap = false;
@@ -1476,6 +1491,19 @@ class Castlescape : public BaseProject {
 	// where it has one, else this flat allowance (sized to a floor tile, the
 	// largest un-collided thing).
 	static constexpr float GEOM_CULL_FALLBACK_RADIUS = 4.0f;
+
+	// Third-person debug camera (cheats.debugCam): the render view orbits the
+	// player at these starting spherical coords (I/K pitch, J/; yaw, U/O
+	// dolly at runtime). Only ViewPrj changes -- every cull runs from the real
+	// first-person eye, so culled instances visibly wink out when watched
+	// from here.
+	static constexpr float DEBUG_CAM_DIST0 = 17.0f;   // metres from the player
+	static constexpr float DEBUG_CAM_PITCH0 = 20.0f;  // degrees above the player
+	static constexpr float DEBUG_CAM_ORBIT_SPEED = 90.0f;  // deg/s, IJKL
+	static constexpr float DEBUG_CAM_DOLLY_SPEED = 14.0f;  // m/s, U/O
+	// How much clear space the debug camera's near plane leaves in front of
+	// the player after clipping away the room shell between them.
+	static constexpr float DEBUG_CAM_CLIP_MARGIN = 4.0f;
 
 	// True if the instance at worldPos (bounding radius objRadius) is close or
 	// aimed-at enough to draw. eyePos/forward are computed once per frame in
@@ -3150,6 +3178,7 @@ class Castlescape : public BaseProject {
 		hud.addToggle("Light Gizmos", &cheats.showLightGizmos);
 		hud.addToggle("Shadow Frustums", &cheats.showShadowFrustums);
 		hud.addToggle("Show Colliders", &cheats.showColliders);
+		hud.addToggle("Debug Camera", &cheats.debugCam);
 		hud.addToggle("Light Heatmap", &cheats.showLightHeatmap);
 
 		// Render Scale and MSAA, also on SettingsMenu with the same named
@@ -4941,6 +4970,49 @@ class Castlescape : public BaseProject {
 									 glm::vec4(0.2f, 0.6f, 1.0f, 1.0f), dbgPos, dbgColor);
 			}
 		}
+		// Debug-camera companion overlay: the geometry cull's shape drawn in
+		// world space, so from the pulled-back spectator view you can see
+		// exactly which side of it an instance is on when it winks out. Same
+		// eyePos/forward the cull itself uses (GEOM_CULL_*).
+		if(cheats.debugCam) {
+			const glm::vec4 nearCol(0.2f, 0.9f, 1.0f, 1.0f);   // always-drawn bubble
+			const glm::vec4 coneCol(1.0f, 0.8f, 0.15f, 1.0f);  // view cone
+			glm::vec3 f = forward;
+			glm::vec3 rr = glm::cross(f, glm::vec3(0.0f, 1.0f, 0.0f));
+			rr = glm::length(rr) > 1e-4f ? glm::normalize(rr) : glm::vec3(1, 0, 0);
+			glm::vec3 uu = glm::normalize(glm::cross(rr, f));
+			DebugLines::PushCross(eyePos, 0.4f, coneCol, dbgPos, dbgColor);
+
+			auto ring = [&](const glm::vec3 &c, float rad, const glm::vec3 &ax0,
+							const glm::vec3 &ax1, const glm::vec4 &col) {
+				const int N = 32;
+				glm::vec3 prev = c + ax0 * rad;
+				for(int i = 1; i <= N; i++) {
+					float a = (float)i / N * 2.0f * 3.14159265f;
+					glm::vec3 p = c + (ax0 * std::cos(a) + ax1 * std::sin(a)) * rad;
+					DebugLines::PushLine(prev, p, col, dbgPos, dbgColor);
+					prev = p;
+				}
+			};
+
+			// Always-drawn radius: a sphere sketched as three great circles.
+			ring(eyePos, GEOM_CULL_RADIUS, rr, uu, nearCol);
+			ring(eyePos, GEOM_CULL_RADIUS, rr, f, nearCol);
+			ring(eyePos, GEOM_CULL_RADIUS, uu, f, nearCol);
+
+			// View cone: half-angle straight from the cull's cosine, edge
+			// lines out to the cone distance plus a cap ring.
+			float half = std::acos(GEOM_CULL_CONE_COS);
+			float capR = GEOM_CULL_CONE_DIST * std::tan(half);
+			glm::vec3 capC = eyePos + f * GEOM_CULL_CONE_DIST;
+			for(int i = 0; i < 16; i++) {
+				float a = (float)i / 16 * 2.0f * 3.14159265f;
+				glm::vec3 edge = capC + (rr * std::cos(a) + uu * std::sin(a)) * capR;
+				DebugLines::PushLine(eyePos, edge, coneCol, dbgPos, dbgColor);
+			}
+			ring(capC, capR, rr, uu, coneCol);
+		}
+
 		debugLines.update(currentImage, ViewPrj, dbgPos, dbgColor);
 
 		// The gazed door's chains/padlock (Door::LockProp) glow along with the
@@ -6368,7 +6440,60 @@ class Castlescape : public BaseProject {
 		glm::vec3 eyePos = camPos - glm::vec3(0.0f, eyeStepOffset - camBob, 0.0f);
 		View = glm::lookAt(eyePos, eyePos + front, up);
 
-		ViewPrj = Prj * View;
+		// View stays the true first-person one -- billboards, held items and
+		// the light/geometry culls all read it (via inverse(View)) and must
+		// not follow the spectator. Only ViewPrj, what the frame is actually
+		// rasterised with, is rebased onto the pulled-back debug camera.
+		if(cheats.debugCam) {
+			// On the frame it turns on, snap the orbit behind the player's
+			// facing; after that IJKL/UO own it. camYaw 0 faces +X and the
+			// orbit yaw is measured the same way, so +180 sits it behind.
+			if(!dbgCamWasOn) {
+				dbgOrbitYaw = camYaw + 180.0f;
+				dbgOrbitPitch = DEBUG_CAM_PITCH0;
+				dbgOrbitDist = DEBUG_CAM_DIST0;
+			}
+			if(!overlayOpen()) {
+				// Yaw on J / ; -- not J / L, because L toggles the cheat HUD.
+				if(glfwGetKey(window, GLFW_KEY_J))
+					dbgOrbitYaw -= DEBUG_CAM_ORBIT_SPEED * deltaT;
+				if(glfwGetKey(window, GLFW_KEY_SEMICOLON))
+					dbgOrbitYaw += DEBUG_CAM_ORBIT_SPEED * deltaT;
+				if(glfwGetKey(window, GLFW_KEY_I))
+					dbgOrbitPitch += DEBUG_CAM_ORBIT_SPEED * deltaT;
+				if(glfwGetKey(window, GLFW_KEY_K))
+					dbgOrbitPitch -= DEBUG_CAM_ORBIT_SPEED * deltaT;
+				if(glfwGetKey(window, GLFW_KEY_U))
+					dbgOrbitDist -= DEBUG_CAM_DOLLY_SPEED * deltaT;
+				if(glfwGetKey(window, GLFW_KEY_O))
+					dbgOrbitDist += DEBUG_CAM_DOLLY_SPEED * deltaT;
+			}
+			// Clamp shy of straight up/down (lookAt gimbal) and keep the
+			// dolly range sane.
+			dbgOrbitPitch = glm::clamp(dbgOrbitPitch, -85.0f, 85.0f);
+			dbgOrbitDist = glm::clamp(dbgOrbitDist, 3.0f, 90.0f);
+
+			float oy = glm::radians(dbgOrbitYaw);
+			float op = glm::radians(dbgOrbitPitch);
+			glm::vec3 dbgOffset = glm::vec3(std::cos(oy) * std::cos(op),
+										   std::sin(op),
+										   std::sin(oy) * std::cos(op)) * dbgOrbitDist;
+			glm::vec3 dbgEye = eyePos + dbgOffset;
+			// The spectator sits outside the room, so the wall and ceiling
+			// between it and the player would fill the frame. Push its near
+			// plane out to just short of the player: everything nearer is
+			// clipped, leaving exactly the shell the real camera renders
+			// from the inside. DEBUG_CAM_CLIP_MARGIN keeps a little air
+			// around the player.
+			float dbgNear = glm::max(0.2f,
+				glm::length(dbgEye - eyePos) - DEBUG_CAM_CLIP_MARGIN);
+			glm::mat4 dbgPrj = glm::perspective(FOVy, Ar, dbgNear, farPlane);
+			dbgPrj[1][1] *= -1;
+			ViewPrj = dbgPrj * glm::lookAt(dbgEye, eyePos, worldUp);
+		} else {
+			ViewPrj = Prj * View;
+		}
+		dbgCamWasOn = cheats.debugCam;
 
 		// Camera-space basis for anything rigidly attached to the view (held
 		// torch, held key): right/up/-front columns, eyePos translation.
