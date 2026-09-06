@@ -5,6 +5,8 @@
 #include <limits>
 #include <array>
 #include <algorithm>
+#include <cstdlib>
+#include <cstdio>
 
 #include <json.hpp>
 
@@ -81,27 +83,41 @@ struct GlobalUniformBufferObject {
 	alignas(16) glm::vec3 ambientUpper;
 	alignas(16) glm::vec3 ambientLower;
 	alignas(16) glm::vec3 ambientDir;
-	// All four ride the padding std140 leaves before lights[], so the array
-	// still starts at offset 64 and four shaders' offsets are unchanged.
-	int debugFlags;       // LIGHT_DEBUG_* bits from the lighting cheats
-	float time;           // seconds since startup, for the held torch's flame
-	float ambientWeight;  // scene default indirect share, 0..1, from lights.json
-	float ambientBounce;  // share of a point/spot's radiance that returns as indirect
-	float fogDensity;     // exp-squared distance fog; derived from GEOM_CULL_CONE_DIST
+	// LIGHT_DEBUG_* bits from LightConstants.glsl, built from the lighting
+	// cheats below. Sits in the 4 bytes std140 pads ambientDir with, exactly
+	// like lightCount after eyePos, so the light array still starts at 64.
+	int debugFlags;
+	// Seconds since startup, for the held torch's flame (Flame.hpp): the one
+	// thing in the frame that animates on the GPU rather than being computed
+	// here and uploaded.
+	float time;
+	// The scene's default share of indirect light, 0..1, from lights.json.
+	// Rides in the same padding before lights[] that time and debugFlags do,
+	// so the array's offset is unchanged.
+	float ambientWeight;
+	// How much of a point/spot light's radiance comes back as indirect light.
+	// See AmbientLight::bounce in SceneLights.hpp.
+	//
+	// ambientDir ends at 60, debugFlags fills that slot, and
+	// time/ambientWeight/this take 64, 68 and 72.
+	float ambientBounce;
+	// Exponential-squared distance fog (fogFactor = exp(-(fogDensity*dist)^2)
+	// in CookTorrance.frag), meant to fade geometry toward black before the
+	// GEOM_CULL_* visibility cull above stops drawing it, rather than let it
+	// pop out of view -- see updateUniformBuffer() for how this is derived
+	// from GEOM_CULL_CONE_DIST. The one scalar that still fits here for
+	// free: ambientBounce ends at 76, and the array's own alignas(16) starts
+	// it at 80 either way. A second one here would move lights[] and every
+	// offset in four shaders with it.
+	float fogDensity;
 	LightData lights[MAX_LIGHTS];
 };
 
-// Set 2: shadow-sampling data for CookTorrance.frag. One view-projection per
-// 2D-shadow light (just the sun today), the same its shadow pass rendered
-// with. Torches need no matrix -- a cube map is sampled by direction.
-struct ShadowUniformBufferObject {
-	alignas(16) glm::mat4 lightSpace[NUM_SHADOW_MAPS_2D];
-};
-
-// One torch's cube shadow CAPTURE data (ShadowCube.vert/frag, PShadowCube).
-// A UBO, not a push constant, re-mapped every frame for every torch: the main
-// command buffer is recorded once and reused, so a push constant would freeze
-// at record time -- fatal for the held torch.
+// One torch's cube shadow CAPTURE data (ShadowCube.vert/frag, PShadowCube),
+// set 1 there. A uniform buffer and not a push constant, re-mapped every frame
+// for every torch including the static ones: the main command buffer is
+// recorded once per swapchain image and reused, so a push constant would stay
+// frozen at recording time -- fatal for the held torch, which moves each frame.
 struct ShadowCubeUniformBufferObject {
 	alignas(16) glm::mat4 lightViewProj[6];
 	alignas(16) glm::vec4 lightPos;	// xyz used, w is padding
@@ -205,23 +221,16 @@ class Castlescape : public BaseProject {
 	// ghosts ride the same per-instance UBO as every other prop.
 	Pipeline Pspectral;
 
-	// The ghosts' DEPTH PREPASS (SpectralDepth.frag), over the same instances
-	// just before Pspectral. Writes the nearest ghost depth and no colour, so
-	// the colour pass can reject the ghost's own interior instead of blending
-	// it under the body. Same DSLs, but the default LESS (not Pspectral's
-	// LESS_OR_EQUAL) -- LESS is what leaves the minimum in the depth buffer.
+	// The ghosts' DEPTH PREPASS (SpectralDepth.frag), drawn over the same
+	// instances immediately before Pspectral. It writes the depth of the nearest
+	// ghost surface and leaves the colour attachment untouched, so the colour
+	// pass can reject the ghost's own interior -- the feet inside the robe --
+	// instead of blending it under the body.
+	//w
+	// Same DSLs as Pspectral, and the default VK_COMPARE_OP_LESS rather than
+	// Pspectral's LESS_OR_EQUAL, which is the whole point: LESS is what leaves
+	// the minimum in the depth buffer.
 	Pipeline PspectralDepth;
-
-	// Shadow mapping, 2D branch: one depth-only render pass per 2D-shadow light
-	// (just the sun today) and ONE shared pipeline -- the passes have identical
-	// AT_DEPTH_ONLY attachments, so Vulkan's render-pass-compatibility rule
-	// lets one pipeline serve all. Created once in localInit(), never rebuilt
-	// on resize (an offscreen depth target doesn't depend on the window).
-	// Only the CookTorrance technique is drawn into these -- flames are
-	// translucent, so they neither occlude nor get shadow logic. Same for the
-	// cube branch.
-	RenderPass RPShadow2D[NUM_SHADOW_MAPS_2D];
-	Pipeline PShadow;
 
 	// Shadow mapping, CUBE branch (the torches): a real 6-face cube map per
 	// point light (CubeShadowMap.hpp: linear-distance storage, one flat bias).
@@ -246,17 +255,18 @@ class Castlescape : public BaseProject {
 	DescriptorSetLayout DSLshadowCubeCapture;
 	DescriptorSet DSshadowCube[NUM_SHADOW_CUBES];
 
-	// set 2 for the main pass's shadow sampling: the 2D light-space matrices
-	// plus one sampler per shadow map, read by shadowFactor(). No DescriptorSet
-	// of its own -- it rides Scene's per-instance machinery, so every instance
-	// gets a redundant copy. Wasteful but cheap, and avoids a third bind path.
+	// set 2 for the main pass's shadow sampling: one sampler binding per
+	// torch cube map, read by CookTorrance.frag's shadowFactor().
+	// DSLlocal/DSLglobal stay set 1/0.
+	//
+	// No DescriptorSet member of its own: this one rides Scene's ordinary
+	// per-instance machinery, so every CookTorrance instance gets an identical,
+	// redundant copy. Wasteful but cheap at this instance count, and it avoids
+	// hand-rolling a THIRD way to bind a descriptor set.
 	DescriptorSetLayout DSLshadowSample;
-	// View-projection each 2D shadow pass rendered with, index-matched to
-	// LightData::shadowIndex. Computed once (the sun is static), used both as
-	// Shadow.vert's push constant and the UBO CookTorrance.frag samples against.
-	glm::mat4 shadowLightSpace2D[NUM_SHADOW_MAPS_2D];
-	// The 6 face view-projections per torch cube map, index-matched
-	// [shadowIndex][face] (order: CUBE_FACE_DIR). Computed once.
+	// The six face view-projection matrices for each torch's cube map,
+	// index-matched [LightData::shadowIndex][face] (face order: see
+	// CUBE_FACE_DIR in CubeShadowMap.hpp). Computed once, same reasoning.
 	glm::mat4 torchFaceMatrices[NUM_SHADOW_CUBES][6];
 	// World position of each cube-mapped torch, index-matched to shadowIndex.
 	// Handed to the push constant by populateCommandBuffer().
@@ -522,10 +532,14 @@ class Castlescape : public BaseProject {
 	glm::mat4 ViewPrj;
 	glm::mat4 View;
 
-	// Free-look camera state, persisted across frames. Spawns in the dungeon
-	// hall clear of the table and torches.
-	glm::vec3 camPos = glm::vec3(-33.5f, 1.8f, 29.0f);
-	// Yaw around world up, degrees: 0 faces +X (down the hall), + turns right.
+	// Free-look camera state (position + orientation), persisted across frames.
+	// Spawns inside the dungeon hall (dh), clear of the table and both torches,
+	// now that the castle courtyard is gone -- there's no outdoor approach
+	// to walk in from anymore.
+	glm::vec3 camPos = glm::vec3(-20.2f, 1.8f, 18.0f);
+	// Yaw: rotation around world up axis, in degrees.
+	// yaw=0 faces +X; increasing yaw turns right, decreasing turns left.
+	// Faces +X so spawning looks straight down the hall toward the far door.
 	float camYaw = 0.0f;
 	// Pitch, degrees: -90 down, +90 up.
 	float camPitch = -10.0f;
@@ -560,7 +574,88 @@ class Castlescape : public BaseProject {
 	// colliderSet after load, so the per-frame loops read a plain vector.
 	std::vector<Collider *> allColliders;
 
-	// Debug/cheat toggles. Not persisted, reset to default on launch.
+	// Uniform XZ grid over allColliders, built once (colliders never move).
+	// Lets the ghost queries below test only nearby colliders instead of
+	// scanning the whole castle every frame, per ghost.
+	struct ColliderGrid {
+		// World units per cell. Bigger than a ghost's radius so the 3x3
+		// neighbourhood queried below always covers a ghost-sized radius test
+		// without needing to grow each collider's footprint by the query
+		// radius.
+		static constexpr float CELL_SIZE = 3.0f;
+
+		struct Entry {
+			AABBextents E;
+		};
+		std::vector<Entry> entries;
+		std::unordered_map<int64_t, std::vector<int>> cells;
+
+		static int cellCoord(float v) { return (int)std::floor(v / CELL_SIZE); }
+		static int64_t cellKey(int cx, int cz) {
+			return (int64_t(uint32_t(cx)) << 32) | uint32_t(cz);
+		}
+
+		void build(const std::vector<Collider *> &colliders) {
+			entries.clear();
+			cells.clear();
+			entries.reserve(colliders.size());
+			for(Collider *c : colliders) {
+				int idx = (int)entries.size();
+				entries.push_back({c->getExtents()});
+				const AABBextents &E = entries.back().E;
+				int cx0 = cellCoord(E.xMin), cx1 = cellCoord(E.xMax);
+				int cz0 = cellCoord(E.zMin), cz1 = cellCoord(E.zMax);
+				for(int cx = cx0; cx <= cx1; cx++) {
+					for(int cz = cz0; cz <= cz1; cz++) {
+						cells[cellKey(cx, cz)].push_back(idx);
+					}
+				}
+			}
+		}
+
+		// Visits the cached extents of every collider registered in the 3x3
+		// cell neighbourhood around `p`. Always the 3x3 block rather than just
+		// p's own cell: the callers ask "is anything within some radius of
+		// p", and a collider registered one cell over can still be that
+		// close. A collider that spans several of those cells is visited once
+		// per cell it's in, which costs a few redundant (and cheap) AABB
+		// tests rather than needing a per-query dedup pass.
+		template<typename F>
+		void forEachNear(const glm::vec3 &p, F &&fn) const {
+			int cx = cellCoord(p.x), cz = cellCoord(p.z);
+			for(int dx = -1; dx <= 1; dx++) {
+				for(int dz = -1; dz <= 1; dz++) {
+					auto it = cells.find(cellKey(cx + dx, cz + dz));
+					if(it == cells.end()) continue;
+					for(int idx : it->second) {
+						fn(entries[idx].E);
+					}
+				}
+			}
+		}
+	};
+	ColliderGrid ghostColliderGrid;
+
+	// Colliders left OUT of the grid above because their Wm changes every
+	// frame -- door leaves and their lock hardware (see GameLogic()'s
+	// d.inst->C->setWorldMatrix() calls). A cached AABB for one of these
+	// would still be blocking a ghost long after the door swung open, so
+	// they're tested live instead, on top of the grid lookup. Short list, so
+	// a plain scan of it stays cheap.
+	std::vector<Collider *> ghostDynamicColliders;
+
+	// Every ghost collider query goes through here: the static grid first,
+	// then the movers above, read fresh each time.
+	template<typename F>
+	void ghostForEachNearbyCollider(const glm::vec3 &p, F &&fn) const {
+		ghostColliderGrid.forEachNear(p, fn);
+		for(Collider *c : ghostDynamicColliders) {
+			fn(c->getExtents());
+		}
+	}
+
+	// Debug/cheat toggles, isolated in a utility struct.
+	// Not persisted across runs, reset to default values on launch.
 	struct CheatFlags {
 		bool collisionEnabled = true;   // false = no-clip
 		// Live readout of the camera's world position/yaw, for hand-placing
@@ -1853,38 +1948,91 @@ class Castlescape : public BaseProject {
 
 	// --- The way out, as a door ------------------------------------------
 	//
-	// Index into `doors` of the exit leaf, or -1. Everything below rides on how
-	// far THAT door has swung, not the exit box or the run state: the light
-	// outside is a fact about the door being open, and the swing is the payoff
-	// -- by the time the box triggers the run is over.
+	// Index into `doors` of the exit leaf (hbDoorE), or -1 if the scene
+	// didn't have it. Everything below rides on how far THAT door has swung,
+	// rather than on the exit box or on the run state: the light outside is a
+	// fact about the door being open, so it has to arrive while the leaf is
+	// still moving and the player is still a few metres short of winning. It
+	// is the swing that is the payoff -- by the time the box triggers, the run
+	// is already over.
 	int exitDoorIndex = -1;
 
-	// Where the daylight stands. The upright quad sits past the open leaf's
-	// reach, so the door is a silhouette against the light, not cut in half by
-	// it. Half-extents cover the arch with the quad's FLAT middle
-	// (ExitGlow.frag's border fade starts at 78%).
-	static constexpr glm::vec3 EXIT_GLOW_CENTER = glm::vec3(22.0f, 2.8f, 29.99f);
+	// Where the daylight stands. Two quads, and the reason there are two is
+	// the door: it swings OUTWARD, so nothing can be parked right behind the
+	// opening without the leaf sweeping through it.
+	//
+	// The wall slab is x 18.758..20 and the arch spans z 28.87..31.11. The
+	// open leaf reaches x 21.78 at the widest point of its swing (its hinge is
+	// at x 19.283 and its diagonal is 2.50 long), so the upright quad stands
+	// at 22.0 -- past the leaf by 22cm, which is what lets the door open into
+	// the light and be seen as a silhouette against it instead of being cut in
+	// half by it.
+	//
+	// That distance is also what forces the second quad. Two units of open
+	// ground between the threshold and the light are visible through the
+	// bottom of the arch (the sill hides only what is within about 35cm of the
+	// wall), and a strip of lit ground is exactly the "something out there"
+	// this effect exists to deny. So the second quad lies FLAT, 6cm above the
+	// ground plane, bridging from under the wall out to the upright one. The
+	// arch then frames white above and white below, with the door swinging
+	// between the two.
+	//
+	// Both overhang what they have to cover, generously, and the margins are
+	// worked from the worst viewing angle rather than guessed. A player can
+	// stand anywhere in the dv room, which reaches back to x 12.8, and the
+	// extreme sightlines project the arch onto the upright quad's plane over
+	// roughly z 27.0..33.0 and y -0.5..6.0 -- all of which has to fall inside
+	// the quad's flat middle, not its border fade, which ExitGlow.frag starts
+	// at 78% of the half-extent. Hence half-extents of 4.4 and 4.6 rather than
+	// something that merely covers the opening head-on. Everything past the
+	// arch is masked by the wall's own depth, and the part below y 0 is buried
+	// under the ground plane outside.
+	// Hub shrunk from 4x4 to 3x3 (see tools/build_scene.py): hbDoorE moved one
+	// tile west, so every X here is shifted by -7.2 from what the comments
+	// above still describe.
+	static constexpr glm::vec3 EXIT_GLOW_CENTER = glm::vec3(23.6f, 2.8f, 10.79f);
 	static constexpr float EXIT_GLOW_HALF_WIDTH = 4.4f;		// along world Z
 	static constexpr float EXIT_GLOW_HALF_HEIGHT = 4.6f;	// along world Y
 	// Faces back into the castle, i.e. west, so the player looking out through
 	// the doorway sees it square on.
 	static constexpr glm::vec3 EXIT_GLOW_NORMAL = glm::vec3(-1.0f, 0.0f, 0.0f);
-	// The ground quad. Both ends are deliberately buried -- the near one under the
-	// wall slab so its border fade is hidden by stone, the far one behind the
-	// upright quad so the two overlap instead of meeting at a seam. 6cm up: clear
-	// of z-fighting, still under the door's bottom edge at y 0.2.
-	static constexpr glm::vec3 EXIT_GLOW_FLOOR_CENTER = glm::vec3(21.1f, 0.06f, 29.99f);
+	// The ground quad, x 19.5..22.7. Both ends are deliberately buried: the
+	// near one runs back UNDER the wall slab, so its border fade (starting at
+	// x 19.85) is hidden by stone and the light is already at full strength by
+	// the time the threshold lets you see any of it; the far one passes behind
+	// the upright quad, so the two overlap instead of meeting at a seam.
+	//
+	// 6cm above the ground plane: far enough not to z-fight it, low enough
+	// that the door -- whose own bottom edge is at y 0.2 -- always sweeps
+	// above it rather than through it.
+	static constexpr glm::vec3 EXIT_GLOW_FLOOR_CENTER = glm::vec3(22.7f, 0.06f, 10.79f);
 	static constexpr float EXIT_GLOW_FLOOR_HALF_X = 1.6f;
 	static constexpr float EXIT_GLOW_FLOOR_HALF_Z = 3.6f;
 	static constexpr glm::vec3 EXIT_GLOW_FLOOR_NORMAL = glm::vec3(0.0f, 1.0f, 0.0f);
-	// The third quad: the floor trick upside down. The upright wall of light is
-	// FINITE, and a player at the threshold looking UP sees over its top into
-	// the skybox. No EXIT_GLOW_HALF_HEIGHT fixes it -- the sightline through
-	// the arch diverges as the player nears the wall. A ceiling closes the
-	// geometry: every upward ray through the arch crosses y = 4.9 eventually.
-	// y = 4.9 is 5cm above the doorway, so above the leaf's sweep and buried
-	// in stone. Same x extent as the floor quad, same two reasons.
-	static constexpr glm::vec3 EXIT_GLOW_CEILING_CENTER = glm::vec3(21.1f, 4.90f, 29.99f);
+	// The third quad: the same trick as the ground one, upside down, and it
+	// exists for the same reason the ground one does -- the upright wall of
+	// light is FINITE, and a player who walks up to the threshold and looks UP
+	// sees over the top of it, straight into the skybox.
+	//
+	// Raising the upright quad cannot fix that, and no value of
+	// EXIT_GLOW_HALF_HEIGHT can: the sightline through the top of the arch
+	// hits the plane x = 22 at
+	//     y = y_eye + (4.85 - y_eye) * (22 - x_eye) / (20 - x_eye)
+	// which diverges as the player approaches the wall's outer face at x = 20.
+	// The margins in EXIT_GLOW_CENTER's comment were worked from a player
+	// standing back in the room, where the ratio is small; pressed against the
+	// doorway it is unbounded. A ceiling closes the geometry instead of
+	// chasing it -- every upward ray through the arch crosses y = 4.9 sooner
+	// or later, and whichever of the two quads it reaches first is white.
+	//
+	// y = 4.9 is 5cm above the top of the doorway (the hole runs y 0..4.85,
+	// see the collider boxes for dvDoor), so it is above the leaf's sweep and
+	// buried in the stone over the arch for the whole stretch that lies inside
+	// the wall. Same x extent as the floor quad, for the same two reasons: the
+	// near end runs back under the wall so its border fade never shows, and
+	// the far end passes behind the upright quad rather than meeting it at a
+	// seam.
+	static constexpr glm::vec3 EXIT_GLOW_CEILING_CENTER = glm::vec3(22.7f, 4.90f, 10.79f);
 	static constexpr float EXIT_GLOW_CEILING_HALF_X = 1.6f;
 	static constexpr float EXIT_GLOW_CEILING_HALF_Z = 3.6f;
 	static constexpr glm::vec3 EXIT_GLOW_CEILING_NORMAL = glm::vec3(0.0f, -1.0f, 0.0f);
@@ -1901,13 +2049,20 @@ class Castlescape : public BaseProject {
 	static constexpr float EXIT_GLOW_INTENSITY = 60.0f;
 	// Daylight, warmed slightly. Pure white reads as a hole, not sky.
 	static constexpr glm::vec3 EXIT_GLOW_COLOR = glm::vec3(1.0f, 0.97f, 0.90f);
-	// The light thrown BACK into the room, a spot appended into gubo (like the
-	// torch flames), not a lights.json entry -- its brightness is a function
-	// of the door angle. A spot, not a point: a point out there would light
-	// the outside face of the east wall as brightly as the floor inside.
-	static constexpr glm::vec3 EXIT_SPILL_POS = glm::vec3(20.7f, 2.6f, 29.99f);
-	// Well over 1: a doorway onto daylight in a torchlit room, a spill that
-	// merely matched the torches would look like another one. HDR target.
+	// The light the doorway throws BACK into the room, as a spot appended
+	// straight into gubo (the same thing the torch loop does with its flames),
+	// not as a lights.json entry: its brightness is a function of the door's
+	// angle, and lights.json has no way to say that. A spot rather than a
+	// point because the light has to come through the opening -- a point light
+	// out there would wrap round and light the outside face of the east wall
+	// as brightly as the floor inside.
+	static constexpr glm::vec3 EXIT_SPILL_POS = glm::vec3(29.5f, 2.6f, 10.79f);
+	// Well over 1: this is a doorway onto open daylight standing in a room lit
+	// by torches, and a spill light that merely matched them would leave the
+	// stone around the opening looking like it was lit by another torch. The
+	// scene target is HDR, so overbright light colours are as legitimate here
+	// as they are on the flames -- and the bloom chain treats what this lights
+	// up the same way it treats the quad itself.
 	static constexpr glm::vec3 EXIT_SPILL_COLOR = glm::vec3(3.4f, 3.26f, 3.0f);
 	static constexpr float EXIT_SPILL_G = 9.0f;		// reaches across the dv room
 	static constexpr float EXIT_SPILL_BETA = 1.0f;	// inverse-linear, so it carries
@@ -2220,32 +2375,23 @@ class Castlescape : public BaseProject {
 					// third  element : the pipeline stage where it will be used
 					{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_ALL_GRAPHICS, sizeof(GlobalUniformBufferObject), 1}
 				  });
-		// Shadow sampling (set 2 of P, see CookTorrance.frag). One UBO, one
-		// separate sampler binding per map -- see the member declaration for why
+		// Shadow sampling (set 2 of P, see CookTorrance.frag). One separate
+		// sampler binding per cube map -- see the member declaration for why
 		// not one array binding. linkSize on the samplers is their own index
 		// into the flat VkDescriptorImageInfo list Scene builds per instance
 		// (see the texDefs passed to PRs[0].init below), the same role it plays
 		// for DSLlocal's single texture.
 		//
 		// Built in a loop rather than written out, so the count lives in
-		// exactly one place. Binding 0 is the UBO, then NUM_SHADOW_MAPS_2D
-		// sampler2D bindings, then NUM_SHADOW_CUBES samplerCube bindings --
-		// the same order and numbering CookTorrance.frag declares its
-		// shadowMap2D_*/shadowCube* with, which nothing but agreement here
-		// keeps true. linkSize follows the same 2D-then-cube order (see
-		// shadowMapDefs below).
-		std::vector<DescriptorSetLayoutBinding> shadowSampleBindings = {
-					{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(ShadowUniformBufferObject), 1}
-				  };
-		for(int i = 0; i < NUM_SHADOW_MAPS_2D; i++) {
-			shadowSampleBindings.push_back({(uint32_t)(i + 1),
+		// exactly one place: NUM_SHADOW_CUBES samplerCube bindings, the same
+		// order and numbering CookTorrance.frag declares its shadowCube*
+		// bindings with, which nothing but agreement here keeps true.
+		// linkSize follows the same order (see shadowMapDefs below).
+		std::vector<DescriptorSetLayoutBinding> shadowSampleBindings;
+		for(int i = 0; i < NUM_SHADOW_CUBES; i++) {
+			shadowSampleBindings.push_back({(uint32_t)i,
 											VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
 											VK_SHADER_STAGE_FRAGMENT_BIT, i, 1});
-		}
-		for(int i = 0; i < NUM_SHADOW_CUBES; i++) {
-			shadowSampleBindings.push_back({(uint32_t)(NUM_SHADOW_MAPS_2D + i + 1),
-											VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-											VK_SHADER_STAGE_FRAGMENT_BIT, NUM_SHADOW_MAPS_2D + i, 1});
 		}
 		DSLshadowSample.init(this, shadowSampleBindings);
 		VD.init(this, {
@@ -2270,19 +2416,6 @@ class Castlescape : public BaseProject {
 		maxMsaaLevel = std::log2((float)getMaxUsableSampleCount());
 
 		initRenderPasses();
-
-		// The 2D shadow passes (the sun's today), in LightData::shadowIndex
-		// order. AT_DEPTH_ONLY is a stock D32_SFLOAT usable as depth target and
-		// sampled texture; initSampler=true makes getViewAndSampler() valid.
-		// .create() runs here, not in pipelinesAndDescriptorSetsInit(): these
-		// survive a resize, and PRs[0].init() below needs the view+sampler now.
-		for(int i = 0; i < NUM_SHADOW_MAPS_2D; i++) {
-			RPShadow2D[i].init(this, SHADOW_MAP_RES, SHADOW_MAP_RES, -1,
-							  RenderPass::getStandardAttchmentsProperties(AT_DEPTH_ONLY, this),
-							  RenderPass::getStandardDependencies(ATDEP_DEPTH_TRANS),
-							  true);
-			RPShadow2D[i].create();
-		}
 
 		// The cube shadow render pass (torches) -- see the RPShadowCubeCompat
 		// member comment for why this is built once, shared, and only its
@@ -2425,27 +2558,17 @@ class Castlescape : public BaseProject {
 		memcpy(Mpost->vertices.data(), postCorners, sizeof(postCorners));
 		Mpost->initMesh(this, &VDpost, false);
 
-		// The 2D shadow pipeline (one shared, see the member comment). Its only
-		// set is DSLlocal, the same per-instance buffer the main pass reads,
-		// here at set 0. The light's view-projection is a push constant (it
-		// never changes frame to frame).
-		VkPushConstantRange shadowPushConstant{};
-		shadowPushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-		shadowPushConstant.offset = 0;
-		shadowPushConstant.size = sizeof(glm::mat4);
-		PShadow.init(this, &VD, "shaders/shadow/Shadow.vert.spv",
-								"shaders/shadow/Shadow.frag.spv",
-								{&DSLlocal}, {shadowPushConstant});
-		// Created against RPShadow2D[0], usable with all of them: identical
-		// AT_DEPTH_ONLY layout, and Vulkan only requires render-pass
-		// COMPATIBILITY, not the same object.
-		PShadow.create(&RPShadow2D[0]);
-
-		// The cube shadow pipeline (torches). Same DSLlocal reuse. Set 1 is
-		// DSLshadowCubeCapture, one UBO per cube slot (DSshadowCube[], mapped
-		// each frame) with the light's view-projections and position -- a UBO,
-		// not a push constant, or the held torch's shadow would freeze. Only
-		// the face index stays a push constant.
+		// The cube shadow pass's pipeline (torches). Same DSLlocal reuse
+		// idea as the main pass: set 0 is the SAME per-instance buffer the
+		// main pass's ubo.mMat comes from, reused here to read Wm again for a
+		// different projection. Set 1 is DSLshadowCubeCapture,
+		// one uniform buffer per torch cube slot (DSshadowCube[], mapped
+		// fresh every frame in updateUniformBuffer()) carrying the light's
+		// current view-projection matrices and world position -- NOT a push
+		// constant, see ShadowCube.vert's header for why that would silently
+		// freeze the held torch's shadow at whatever position it first
+		// rendered from. The push constant that remains only ever carries
+		// the face index, which genuinely is fixed at record time.
 		DSLshadowCubeCapture.init(this, {
 					{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 						VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -2482,13 +2605,13 @@ class Castlescape : public BaseProject {
 		VDRs.resize(1);
 		VDRs[0].init("VDposNormUV",  &VD);
 
-		// DSLshadowSample: none "fromInstance" -- the shadow maps are the same
-		// fixed images for every instance. 2D maps first, then cube maps, the
-		// order the binding list and CookTorrance.frag use.
+		// DSLshadowSample: none of these are "fromInstance" -- the shadow maps
+		// are the same fixed images for every instance, not per-instance
+		// textures like DSLlocal's albedo map. pos is unused on a
+		// non-fromInstance entry. In a loop for the same reason the layout
+		// above is. Same order the binding list above and CookTorrance.frag's
+		// declarations use.
 		std::vector<TextureDefs> shadowMapDefs;
-		for(int i = 0; i < NUM_SHADOW_MAPS_2D; i++) {
-			shadowMapDefs.push_back({false, 0, RPShadow2D[i].attachments[0].getViewAndSampler()});
-		}
 		for(int i = 0; i < NUM_SHADOW_CUBES; i++) {
 			shadowMapDefs.push_back({false, 0,
 				{cubeShadowSampler.getSampler(), torchCube[i].cubeView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}});
@@ -2622,59 +2745,58 @@ class Castlescape : public BaseProject {
 			d->promptBlocked = blocked;
 			d->secret = true;
 		};
-		// The door at the player's back (hall west wall). The first lock they
-		// meet, before they have a key -- which is where a padlock teaches
-		// best. Models built for the dl doors, turned round by the `true` on
-		// its addLockProp lines.
-		addDoor("dhDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f, "iron", "iron key");
-		// Second and third doors, gating the dl and dv rooms. The dc/dl
-		// boundary is two tiles wide, so two hole-wall + leaf pairs. Same leaf
-		// asset and hinge geometry, so promptOffset/openAngleDeg unchanged.
-		addDoor("dlDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f);
-		// The northern padlocked leaf of the pair -- the one the player walks
-		// straight into. Its twin is open, so a chained door with a way around
-		// it can't strand anyone. Takes "iron" like every other lock: keys are
-		// interchangeable (they're the same mesh), and scarcity is the COUNT --
-		// keys vs chained doors and the exit, only the exit giving its key back.
-		addDoor("dlDoorPanel2", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f, "iron", "iron key");
-		// The way out, in the dv room's east wall -- the only door onto the
-		// outside, the last thing before the win box.
+		// The level's doors, west to east along the intended route. All leaves
+		// share the same asset, hinge geometry and doorway centre, so the same
+		// promptOffset/openAngleDeg apply to every one -- the only things that
+		// differ per door are which wall it stands in (its yaw, carried from
+		// scene.json) and what key, if any, it wants. See tools/build_scene.py
+		// for the layout these ids come from.
 		//
-		// Its wall: dvCornSE (a corner, no hole to cut a doorway into) is
-		// replaced by two pieces reproducing its two arms, one a hole wall --
-		// the same substitution the dc/dl boundary makes. The two meshes don't
-		// share an origin convention, so the numbers differ while the geometry
-		// doesn't. The leaf sits at the same offset from its hole wall as
-		// dlDoorPanel2, putting the doorway centre at z 29.99.
+		// iaDoorPanel -- the threshold between the intro corridor and the hub.
+		// Unlocked: it exists to be a door the player opens once (learning [E])
+		// before any lock is in play, the same teaching role the hall door's
+		// padlock used to have but without the dead end.
+		addDoor("iaDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f);
+		// hbDoorN -- hub north wall, gates branch 1 / room A (the book). Opened
+		// with the "iron" key that sits on the hub table.
+		addDoor("hbDoorNPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f, "iron", "iron key");
+		// hbDoorS -- hub south wall, gates branch 3 / room C (the final key).
+		// Opened with "bronze", found in the dark of room B once the player has
+		// the torch to see it by.
+		addDoor("hbDoorSPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f, "bronze", "bronze key");
+		// hbDoorE -- hub east wall, the way out. The only door that opens onto
+		// the outside and the last thing between the player and the win box
+		// (see gameplay.json's "exit", which does not check a key of its own --
+		// this door does). Its hole wall carries no yaw (it stands in an EAST
+		// wall), so the leaf's local +X points OUTWARD, unlike every other leaf
+		// here -- hence the flipped lock props below and the NEGATIVE open
+		// angle, which is what "swing away from the player, into the daylight"
+		// means for this mirrored frame. Opened with "gold", the reward for
+		// room C's jump puzzle.
+		addDoor("hbDoorEPanel", glm::vec3(0.0f, 2.52f, -1.231f), -100.0f, "gold", "gold key");
+		// hbShelfPanel -- the secret passage: a bookcase standing in the hub's
+		// west wall (tile (0,0)), gating branch 2 / room B (the torch). It is a
+		// Door and nothing else -- same hinge convention, same swing, same
+		// padlock rule -- differing only in what pays it and what it says.
 		//
-		// The hole wall carries no yaw (it's in an EAST wall), so the leaf
-		// doesn't either, which flips its local +X to point outward. Hence the
-		// flipped lock props, and the NEGATIVE open angle -- "away from the
-		// player" for a leaf only reached from inside. Widest swing x 21.78
-		// sets where EXIT_GLOW_CENTER can stand.
-		addDoor("dvDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), -100.0f, "iron", "iron key");
-		// The secret passage: a bookcase in the dl room's north wall. A Door
-		// and nothing else -- same hinge, swing and padlock rule; only what it
-		// costs and what it says differ.
+		// tools/make_bookshelf.py builds SM_Bookshelf_01 in SM_Door_01's own
+		// local frame: origin on the hinge, panel hanging to local -Z, a
+		// silhouette that follows the hole wall's arch. It sits INSIDE the
+		// wall's thickness like every other leaf, which is what lets it swing
+		// either way. promptOffset X is 0.25, not 0: the range check should
+		// measure from the shelf FACE, not the hinge plane behind it.
 		//
-		// tools/make_bookshelf.py builds SM_Bookshelf_01 in SM_Door_01's local
-		// frame: origin on the hinge, panel to local -Z, silhouette following
-		// the hole wall's arch (rectangular to y 4.12, arched cap over it, so
-		// the lunette isn't left open). Sits inside the wall's thickness like
-		// every leaf, which is also what lets it swing either way.
-		//
-		// promptOffset X is 0.25, not 0: the range check measures from the
-		// shelf FACE, not the hinge plane behind it. Locked with "book", which
-		// nothing else takes and the exit doesn't accept, so the one book can
-		// only be spent here.
-		addDoor("dsShelfPanel", glm::vec3(0.25f, 2.20f, -1.231f), 100.0f, "book", "old book");
-		// What the bookcase says, and only with the book in hand -- until then
-		// it's furniture and doesn't glow (Door::secret), so "A book is missing
-		// from this shelf" agrees with the player after they've found the gap,
-		// it doesn't lead them to it. No "locked", no key named: a padlock can
-		// afford to, the player can see the padlock. No blocked line -- the far
-		// side is only reachable by having opened it, and it never re-locks.
-		setSecretDoor("dsShelfPanel",
+		// Locked with "book", which no other lock takes and which the exit
+		// does not accept (gameplay.json's exit.keyId is "gold"), so the one
+		// book in the level can only ever be spent here.
+		addDoor("hbShelfPanel", glm::vec3(0.25f, 2.20f, -1.231f), 100.0f, "book", "old book");
+		// What the bookcase says, and only ever with the book in hand (see
+		// Door::secret): until then the shelf is furniture and does not glow,
+		// so "A book is missing from this shelf" agrees with the player once
+		// they have worked the gap out, it does not lead them to it. No blocked
+		// line: the far side is unreachable without having opened it, and it
+		// never re-locks within a run.
+		setSecretDoor("hbShelfPanel",
 					  "[E] Slide the book into the gap",
 					  "A book is missing from this shelf");
 		// Hangs a scene instance on a door as lock hardware. Separate from
@@ -2731,36 +2853,52 @@ class Castlescape : public BaseProject {
 			// works from, so the prompt can't disagree with the screen.
 			d->lockFaceSign = flip ? -1.0f : 1.0f;
 		};
-		// Both instances carry the leaf's own translate/eulerAngles in
-		// scene.json; the models live in its local frame.
-		addLockProp("dlDoorPanel2", "dlDoorChains2");
-		addLockProp("dlDoorPanel2", "dlDoorPadlock2");
-		// Flipped: these leaves are approached from the opposite side to the
-		// dl ones, so the models as exported would hang on the far face.
-		addLockProp("dhDoorPanel", "dhDoorChains", true);
-		addLockProp("dhDoorPanel", "dhDoorPadlock", true);
-		addLockProp("dvDoorPanel", "dvDoorChains", true);
-		addLockProp("dvDoorPanel", "dvDoorPadlock", true);
+		// Both instances carry the SAME translate/eulerAngles as the leaf in
+		// scene.json (build_scene.py places them there), which is all the
+		// placement they need: the models live in its local frame.
+		//
+		// All three locked leaves take flip=true. The hardware is exported on
+		// the leaf's local +X face, and for each of these the player stands on
+		// the OTHER side of that: hbDoorN (yaw 90) is approached from the hub
+		// to its south, hbDoorS (yaw 270) from the hub to its north, hbDoorE
+		// (yaw 0) from the hub to its west while its +X points outward. The
+		// half turn lands the chains and lock on the face the player actually
+		// sees, and sets the side [E] works from with them.
+		addLockProp("hbDoorNPanel", "hbDoorNChains", true);
+		addLockProp("hbDoorNPanel", "hbDoorNPadlock", true);
+		addLockProp("hbDoorSPanel", "hbDoorSChains", true);
+		addLockProp("hbDoorSPanel", "hbDoorSPadlock", true);
+		addLockProp("hbDoorEPanel", "hbDoorEChains", true);
+		addLockProp("hbDoorEPanel", "hbDoorEPadlock", true);
 
 		// Cache which door is the way out, so the light outside is driven from
 		// its swing without a string compare per frame.
 		for(size_t i = 0; i < doors.size(); i++) {
-			if(doors[i].instanceId == "dvDoorPanel") {
+			if(doors[i].instanceId == "hbDoorEPanel") {
 				exitDoorIndex = (int)i;
 				break;
 			}
 		}
 		if(exitDoorIndex < 0) {
-			std::cout << "Exit door 'dvDoorPanel' not found: no daylight outside it\n";
+			std::cout << "Exit door 'hbDoorEPanel' not found: no daylight outside it\n";
 		}
 
-		// dlDoorPanel (southern leaf) is left unlocked: the way around its
-		// chained twin, so a wasted key can't strand the run.
+		// The key graph is strictly linear and every key opens exactly one
+		// lock: iron -> hbDoorN -> book -> hbShelfPanel -> bronze -> hbDoorS
+		// -> gold -> hbDoorE -> win. No spares, no soft-lock: each key is found
+		// in the room the previous lock opens onto.
 
-		// World pickups. worldPos is read from the instance's Wm (its position
-		// lives in scene.json). A keyId makes it a key: on the ring when
-		// collected, opens any matching Door (and the exit), spent on first
-		// use. handTiltDeg/handOffset default to the key pose.
+		// World pickups. worldPos is read from the instance's own Wm, since
+		// each key's position already lives in scene.json and shouldn't be
+		// repeated here.
+		// Passing a keyId makes the pickup a key: it goes on the ring when
+		// collected and opens any Door whose lockKeyId matches (and the exit,
+		// if exit.keyId names it). It is spent on first use -- one lock per
+		// key, no take-backs.
+		// handTiltDeg/handOffset are how this item sits in the hand once
+		// carried. Both have defaults because the key is the item this pose was
+		// built for and three of the four calls below are keys -- see
+		// HAND_KEY_TILT_DEG and HAND_KEY_OFFSET.
 		auto addPickup = [&](const char *id, const char *keyId = "",
 							 glm::vec3 handTiltDeg = HAND_KEY_TILT_DEG,
 							 glm::vec3 handOffset = HAND_KEY_OFFSET) {
@@ -2784,24 +2922,41 @@ class Castlescape : public BaseProject {
 			p.worldScale = glm::length(glm::vec3(p.inst->Wm[0]));
 			pickups.push_back(p);
 		};
-		// Three keys, deliberately the SAME id: all one mesh, so a lock
-		// accepting one and refusing another would read as a bug. keyRing
-		// stores instances, not ids, so they're still three distinct objects.
-		// Scarcity is arithmetic: three keys, three padlocks (two optional),
-		// the exit giving nothing back -- waste all three and the way out stays shut.
-		addPickup("dhKey", "iron");
-		addPickup("dcKey", "iron");
-		addPickup("dlKey", "iron");
-		// The fourth pickup is a key that doesn't look like one: the book on
-		// the hall table, opening the bookcase and nothing else. Same
-		// machinery as the keys on purpose. It inherits the one-free-hand rule
-		// -- picking it up while carrying a key drops the key at your feet.
+		// Three keys, three distinct ids -- iron, bronze, gold -- one per
+		// locked door, each found in the room the previous door opens onto.
+		// They are the same mesh but NOT interchangeable ids, because here the
+		// player always has exactly the key the next lock wants and never a
+		// choice of which to try: there is no spare to mismatch. The scarcity
+		// is the route, not the count.
+		addPickup("hbKeyIron", "iron");     // on the hub table
+		addPickup("rbKeyBronze", "bronze"); // dark NW corner of room B
+		addPickup("rcKeyGold", "gold");     // atop the barrels in room C
+		// The book on the hub table, which opens the bookcase and nothing
+		// else. It rides the SAME machinery as the
+		// keys (keyRing, findKeyInRing, consumeKey) on purpose -- "carry a
+		// thing to the lock that wants it, and spend it there" is already the
+		// rule of this level, and a second parallel system for one object would
+		// only be a second place for it to go wrong.
 		//
-		// The tilt stands the flat-lying mesh up, cover to camera. The offset
-		// is HAND_KEY_OFFSET + 0.16: the key's origin is near one end so it
-		// hangs up, the book's is at its middle so it straddles the anchor --
-		// the lift matches their screen heights.
-		addPickup("dhBook", "book", glm::vec3(84.0f, -24.0f, 0.0f),
+		// The rule it does inherit and is worth knowing about: one free hand.
+		// Picking the book up while carrying a key puts that key on the floor
+		// at the player's feet (see the pickup branch in GameLogic), which is
+		// not a bug to fix here -- the torch owns the other hand, and a player
+		// juggling the ring is the cost of that decision, not of this book.
+		//
+		// The tilt is the book's own: its mesh lies FLAT in its local frame (x
+		// spine to fore-edge, z the height of the page, y the thickness, see
+		// make_bookshelf.py), so ~90 about X is what stands it up with the
+		// cover toward the camera, and the rest is the same eyeballed turn the
+		// key carries.
+		//
+		// The offset is HAND_KEY_OFFSET raised by 0.16. Not a taste decision
+		// about books: the key's origin sits near one end of its mesh so the
+		// key hangs UP out of the anchor, while the book's sits at the middle
+		// of its page height (local Z is -0.170..0.170, symmetric) so the book
+		// straddles it and half of it hangs below. Same number, lower object.
+		// The lift puts the two at roughly the same height on screen.
+		addPickup("raBook", "book", glm::vec3(84.0f, -24.0f, 0.0f),
 				  HAND_KEY_OFFSET + glm::vec3(0.0f, 0.16f, 0.0f));
 
 		// Where the book ends up once spent: in the gap on the bookcase's
@@ -2836,10 +2991,33 @@ class Castlescape : public BaseProject {
 									local * glm::scale(glm::mat4(1.0f), glm::vec3(p->worldScale)),
 									true});
 		};
-		addSlotProp("dsShelfPanel", "dhBook",
+		addSlotProp("hbShelfPanel", "raBook",
 					glm::translate(glm::mat4(1.0f), glm::vec3(0.454f, 1.730f, -1.266f))
 				  * glm::rotate(glm::mat4(1.0f), glm::radians(180.0f), glm::vec3(0.0f, 1.0f, 0.0f))
 				  * glm::rotate(glm::mat4(1.0f), glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f)));
+
+		// Now that every door and lock prop exists, split allColliders into
+		// the movers (excluded from the grid, tested live every query) and
+		// everything else (cached in the grid, built once).
+		ghostDynamicColliders.clear();
+		for(Door &d : doors) {
+			if(d.inst != nullptr && d.inst->C != nullptr) {
+				ghostDynamicColliders.push_back(d.inst->C);
+			}
+			for(Door::LockProp &prop : d.lockProps) {
+				if(prop.inst->C != nullptr) {
+					ghostDynamicColliders.push_back(prop.inst->C);
+				}
+			}
+		}
+		std::vector<Collider *> staticColliders;
+		staticColliders.reserve(allColliders.size());
+		for(Collider *c : allColliders) {
+			bool isMover = std::find(ghostDynamicColliders.begin(), ghostDynamicColliders.end(), c)
+						 != ghostDynamicColliders.end();
+			if(!isMover) staticColliders.push_back(c);
+		}
+		ghostColliderGrid.build(staticColliders);
 
 		// The player's spawn pose, captured before anything can move it. See
 		// spawnPos's declaration: this is what restartRun() puts them back to.
@@ -2989,11 +3167,20 @@ class Castlescape : public BaseProject {
 			}
 		}
 
-		// Torch flames. DSglobal isn't populated yet, but its address is
-		// stable, so capturing a pointer now is safe. maxInstances raised past
-		// the default 8: held + 6 wall + 4 dl + 2 candles is already 13, and
-		// spawn() past the cap fails silently.
-		flame.init(this, &DSLglobal, &DSglobal, 16);
+		// Torch flames. DSglobal isn't populated yet (that happens in
+		// pipelinesAndDescriptorSetsInit(), after the descriptor pool
+		// exists), but its address is stable, so capturing a pointer to it
+		// now and reading through it later is safe -- same reasoning as
+		// handTorchInst above.
+		//
+		// maxInstances covers every torch AND candle mesh in the level (each
+		// dungeonCandle instance gets a TorchFlame too, burning or not -- see
+		// flames.json). The rebuilt level runs ~13 wall torches + the held
+		// torch + ~8 candles, so this is set well above that; spawn() past the
+		// cap fails silently (see addTorchFlame below), leaving a torch/candle
+		// with no fire and no light instead of an error. Still under MAX_LIGHTS
+		// (32) and NUM_SHADOW_CUBES (32), which the dynamic pool arbitrates.
+		flame.init(this, &DSLglobal, &DSglobal, 28);
 
 		// No DSLglobal/DSglobal here: the daylight quads aren't shaded and read
 		// nothing the app-wide uniform carries, so they bind sets of their
@@ -3302,39 +3489,39 @@ class Castlescape : public BaseProject {
 		return out;
 	}
 
-	// Builds the view-projection each shadow pass renders with, in
-	// LightData::shadowIndex order. Called once from localInit(): the sun and
-	// torches never move. Reads sceneLights.all() so instance+offset light
-	// positions aren't re-derived here.
+	// Builds the view-projection matrix each of the shadow passes renders
+	// with, in LightData::shadowIndex order. Called once, from localInit()
+	// right after sceneLights.init(): the torches never move, so there is
+	// nothing here that needs recomputing per frame.
+	//
+	// Reads sceneLights.all() rather than scene.json/InstanceIds directly: a
+	// point light's world position is instance-plus-offset (see
+	// SceneLights::init), and re-deriving that here would be a second copy of
+	// logic that already lives in exactly one place.
 	void computeShadowMatrices() {
-		// The sun has no position, only a direction, so its shadow camera
-		// needs a stand-in: back away from the middle of the playable area,
-		// far enough that the ortho box covers the courtyard and the dungeon.
-		// Hand-picked from scene.json coordinates; revisit first if it clips.
-		const glm::vec3 SUN_TARGET(-8.0f, 0.0f, 15.0f);
-		const float SUN_ORTHO_HALF_EXTENT = 55.0f;
-		const float SUN_DISTANCE = 80.0f;
+		// A torch's far plane (cubeFaceMatricesFor() -> TORCH_SHADOW_FAR_CONST):
+		// now sized to the dungeon's own footprint rather than "wherever the
+		// torch has faded to nothing", see that constant's own comment for
+		// why a falloff-sized far plane went wrong. createCubeShadowMaps()
+		// needs the same number for the color attachment's clear value,
+		// which is why it's a member and not a local here.
 
 		for(const LightData &L : sceneLights.all()) {
 			if(L.shadowIndex < 0) {
 				continue;
 			}
 
-			if(L.type == LIGHT_DIRECT) {
-				glm::vec3 pos = SUN_TARGET - L.dir * SUN_DISTANCE;
-				glm::mat4 view = glm::lookAt(pos, SUN_TARGET, glm::vec3(0.0f, 1.0f, 0.0f));
-				glm::mat4 proj = glm::ortho(-SUN_ORTHO_HALF_EXTENT, SUN_ORTHO_HALF_EXTENT,
-											-SUN_ORTHO_HALF_EXTENT, SUN_ORTHO_HALF_EXTENT,
-											1.0f, 200.0f);
-				// Same Vulkan Y-flip as the main camera's projection.
-				proj[1][1] *= -1;
-				shadowLightSpace2D[L.shadowIndex] = proj * view;
-				continue;
-			}
-
-			// A point light's cube map: six 90-degree faces covering the whole
-			// sphere, no per-torch aim. No Y-flip -- a cube map is sampled by
-			// direction, never rasterized, so there's no NDC mismatch.
+			// A point light's cube map: six 90-degree perspective faces,
+			// axis-aligned on world X/Y/Z (CUBE_FACE_DIR/CUBE_FACE_UP,
+			// CubeShadowMap.hpp), covering the WHOLE sphere with no seam and
+			// no hand-tuned aim per torch -- unlike the old two-map
+			// front/back workaround, this needs no per-torch authoring at
+			// all, so it drops TORCH_SHADOW_DIR entirely.
+			//
+			// No Y-flip here: a cube map is sampled by direction
+			// (samplerCube), never rasterized to the screen, so there is no
+			// Vulkan-vs-GL NDC mismatch to correct for -- flipping would
+			// only mis-rotate which face's texels land where.
 			std::array<glm::mat4, 6> faces = cubeFaceMatricesFor(L.pos);
 			for(int face = 0; face < 6; face++) {
 				torchFaceMatrices[L.shadowIndex][face] = faces[face];
@@ -3917,12 +4104,20 @@ class Castlescape : public BaseProject {
 		}
 	}
 
-	// Builds every torch's CubeShadowMap (colour cube + face views + per-torch
-	// depth + 36 face framebuffers) plus the shared sampler. From
-	// pipelinesAndDescriptorSetsInit(), after RPShadowCubeCompat.create() (the
-	// framebuffers are built against its .renderPass). Here, not in
-	// CubeShadowMap.hpp, because createImage/createImageView are protected
-	// members of BaseProject.
+	// Builds every torch's CubeShadowMap (colour cube image + face views +
+	// per-torch depth + the 36 face framebuffers), plus the one sampler they
+	// all share. Called from pipelinesAndDescriptorSetsInit(), right after
+	// RPShadowCubeCompat.create() -- these framebuffers are only valid once
+	// that render pass exists, since they're built against its .renderPass
+	// handle (see the RPShadowCubeCompat member comment for why that render
+	// pass is only used for this, never rendered into itself).
+	//
+	// Lives here rather than in CubeShadowMap.hpp because createImage/
+	// createImageView/findDepthFormat are PROTECTED members of BaseProject:
+	// only this class's own methods can call them (see CubeShadowMap.hpp's
+	// header comment), the same reason every other Vulkan resource in this
+	// file -- RP, the post chain -- is built in a method here
+	// rather than in a free-standing helper.
 	void createCubeShadowMaps() {
 		// Shared by every torch: same resolution and format. No mipmaps (a
 		// shadow lookup always samples level 0).
@@ -4158,16 +4353,11 @@ class Castlescape : public BaseProject {
 		PblurV.destroy();
 		Pcomposite.destroy();
 
-		// PShadow/RPShadow2D (and the cube branch) never go through
-		// pipelinesAndDescriptorSetsCleanup -- they don't depend on the
-		// swapchain -- so both .cleanup() and .destroy() happen here.
-		PShadow.cleanup();
-		PShadow.destroy();
-		for(int i = 0; i < NUM_SHADOW_MAPS_2D; i++) {
-			RPShadow2D[i].cleanup();
-			RPShadow2D[i].destroy();
-		}
-
+		// PShadowCube/RPShadowCubeCompat/torchCube[] never go through
+		// pipelinesAndDescriptorSetsCleanup (see the member declaration for
+		// why -- they don't depend on the swapchain, so a resize never tears
+		// them down), which is where P/RP normally get their .cleanup() half.
+		// Both halves have to happen somewhere, so both happen here instead.
 		PShadowCube.cleanup();
 		PShadowCube.destroy();
 		destroyCubeShadowMaps();
@@ -4208,45 +4398,16 @@ class Castlescape : public BaseProject {
 		// The text and HUD passes are separate buffers submitted after, so
 		// they draw on top of the composited frame.
 
-		// The 2D shadow passes, before the main pass that samples them. Not
-		// Scene::populateCommandBuffer (it walks Flame, and flames aren't
-		// occluders) -- this draws technique 0's instances itself.
-		for(int i = 0; i < NUM_SHADOW_MAPS_2D; i++) {
-			RPShadow2D[i].begin(commandBuffer, currentImage);
-			PShadow.bind(commandBuffer);
-			vkCmdPushConstants(commandBuffer, PShadow.pipelineLayout,
-							   VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4),
-							   &shadowLightSpace2D[i]);
-			for(int j = 0; j < SC.TI[0].InstanceCount; j++) {
-				Instance &inst = SC.TI[0].I[j];
-
-				// The light fixtures don't occlude (see Material::castsShadow).
-				// Same forModel() lookup the main pass does for the BRDF, so no
-				// extra per-frame work beyond the branch.
-				if(!materials.forModel(inst.Mid).castsShadow) {
-					continue;
-				}
-				// Held-torch exemption: this pass is recorded once and
-				// replayed, so a camera-anchored occluder would freeze at
-				// record time.
-				if(&inst == handTorchInst && handTorchCollected && cheats.handTorchEnabled
-				   && !cheats.handTorchModelCastsShadowWhenHeld) {
-					continue;
-				}
-
-				// set 0 is DSLlocal's per-instance buffer -- the same set the
-				// main pass binds at set 1, re-mapped with this Wm every frame.
-				inst.DS[0][1]->bind(commandBuffer, PShadow, 0, currentImage);
-				SC.M[inst.Mid]->bind(commandBuffer);
-				vkCmdDrawIndexed(commandBuffer,
-								 static_cast<uint32_t>(SC.M[inst.Mid]->indices.size()), 1, 0, 0, 0);
-			}
-			RPShadow2D[i].end(commandBuffer);
-		}
-
-		// No cube shadow pass here: every one is recorded and submitted per
-		// frame by submitCubeShadowCaptures() instead, since a buffer recorded
-		// once can't express "only the stale slots" or the per-face culling.
+		// No cube shadow pass here at all, the held torch's included: every one
+		// of them is recorded and submitted per frame by
+		// submitCubeShadowCaptures() instead, just before this buffer is
+		// submitted. This one is recorded once per swapchain image and replayed
+		// unmodified afterwards (see ShadowCubeUniformBufferObject's comment),
+		// which can express neither "only the slots that went stale this frame"
+		// nor the per-face culling that makes those re-captures affordable --
+		// a visible set decided at record time stops being true the moment the
+		// light or the occluders move, and the held torch's light moves with
+		// the camera every frame.
 		//
 		// 1. The scene, into the offscreen HDR target.
 		RP.begin(commandBuffer, currentImage);
@@ -4975,18 +5136,16 @@ class Castlescape : public BaseProject {
 		// defines the local parameters for the uniforms
 		UniformBufferObject ubo{};
 
-		// Every CookTorrance instance's set 2, built once. Static content, but
-		// re-mapped every frame: map() writes a per-swapchain-image slot, and
-		// mapping only image 0's would leave the others stale.
-		ShadowUniformBufferObject shadowUbo{};
-		for(int i = 0; i < NUM_SHADOW_MAPS_2D; i++) {
-			shadowUbo.lightSpace[i] = shadowLightSpace2D[i];
-		}
-
-		// Same for the cube capture pass: DSshadowCube[t] is a mapped UBO, not
-		// a push constant, so the held torch's slot (refreshed above by
-		// updateHandTorchShadow()) takes effect every frame. Mapping the static
-		// torches too is simpler than special-casing.
+		// DSshadowCube[t] feeds the shadow CAPTURE pass
+		// (PShadowCube/ShadowCube.vert/frag) its matrices/position through a
+		// mapped uniform buffer instead of a push constant, precisely so the
+		// held torch's slot -- refreshed a few lines above in this same
+		// function, by updateHandTorchShadow() -- actually takes effect every
+		// frame instead of freezing at whatever the "main" command buffer's
+		// one-time recording saw. The six static torches don't strictly need
+		// the re-map (their matrices never change after computeShadowMatrices()
+		// runs once), but mapping all of them uniformly is simpler than
+		// special-casing the held one, and costs nothing worth avoiding.
 		for(int t = 0; t < activeCubeShadows; t++) {
 			ShadowCubeUniformBufferObject cubeUbo{};
 			for(int face = 0; face < 6; face++) {
@@ -5225,10 +5384,10 @@ class Castlescape : public BaseProject {
 				inst.DS[0][0]->map(currentImage, &gubo, 0); // global (light/camera)
 				inst.DS[0][1]->map(currentImage, &ubo, 0); // camera MVPs
 				// set2=DSLshadowSample, on techniques whose pipeline layout
-				// declares a third set.
-				if(inst.NDs[0] >= 3) {
-					inst.DS[0][2]->map(currentImage, &shadowUbo, 0);
-				}
+				// declares a third set, is never mapped here: it holds only
+				// fixed samplerCube bindings, set once at descriptor-set
+				// creation (shadowMapDefs in localInit()), with no per-frame
+				// host-visible buffer behind it.
 			}
 		}
 
@@ -5435,36 +5594,42 @@ class Castlescape : public BaseProject {
 	// so ghostPathClear/ghostSteer can ask with extra padding while
 	// ghostResolveWalls asks with the real body size (see ghostSteer).
 	bool ghostBlockedAt(const glm::vec3 &p, float radius) const {
-		for(Collider *C : allColliders) {
-			AABBextents E = C->getExtents();
-			if(E.yMax < p.y + ghostBodyBottom) continue;	// entirely underneath: floated over
-			if(E.yMin > p.y + ghostBodyTop) continue;	// entirely overhead: passed under
+		bool blocked = false;
+		ghostForEachNearbyCollider(p, [&](const AABBextents &E) {
+			if(blocked) return;
+			if(E.yMax < p.y + ghostBodyBottom) return;	// entirely underneath: floated over
+			if(E.yMin > p.y + ghostBodyTop) return;	// entirely overhead: passed under
 			float closestX = glm::clamp(p.x, E.xMin, E.xMax);
 			float closestZ = glm::clamp(p.z, E.zMin, E.zMax);
 			float dx = p.x - closestX;
 			float dz = p.z - closestZ;
 			if(dx * dx + dz * dz < radius * radius) {
-				return true;
+				blocked = true;
 			}
-		}
-		return false;
+		});
+		return blocked;
 	}
 
 	// Pushes `p` horizontally out of anything it's inside. Same shape as the
 	// player's wall block -- move first, then push out along the shortest
 	// escape, so the wall-parallel component survives (sliding for free).
 	void ghostResolveWalls(glm::vec3 &p) const {
-		for(Collider *C : allColliders) {
-			AABBextents E = C->getExtents();
-			if(E.yMax < p.y + ghostBodyBottom) continue;
-			if(E.yMin > p.y + ghostBodyTop) continue;
+		// The 3x3 neighbourhood is computed once, from `p` as it is on entry,
+		// before any push below can move it -- exactly like the old
+		// all-colliders scan, which also decided once which colliders exist
+		// and then mutated p while walking that fixed list. A push here is at
+		// most ghostRadius, well inside the CELL_SIZE margin, so p never
+		// actually leaves the neighbourhood that was queried for it.
+		ghostForEachNearbyCollider(p, [&](const AABBextents &E) {
+			if(E.yMax < p.y + ghostBodyBottom) return;
+			if(E.yMin > p.y + ghostBodyTop) return;
 
 			float closestX = glm::clamp(p.x, E.xMin, E.xMax);
 			float closestZ = glm::clamp(p.z, E.zMin, E.zMax);
 			float dx = p.x - closestX;
 			float dz = p.z - closestZ;
 			float dist = std::sqrt(dx * dx + dz * dz);
-			if(dist >= ghostRadius) continue;
+			if(dist >= ghostRadius) return;
 
 			if(dist > 1e-5f) {
 				float push = (ghostRadius - dist) / dist;
@@ -5482,7 +5647,7 @@ class Castlescape : public BaseProject {
 					p.z += (pushZNeg < pushZPos ? -1.0f : 1.0f) * (ghostRadius + minZ);
 				}
 			}
-		}
+		});
 	}
 
 	// Whether a ghost at `from` could travel `dist` along `dir` unobstructed.
@@ -5505,14 +5670,15 @@ class Castlescape : public BaseProject {
 	// (not a slab off another height) -- what a sightline needs, so a table
 	// only blocks the ray if the line is actually low enough to clip it.
 	bool ghostPointBlocked(const glm::vec3 &p) const {
-		for(Collider *C : allColliders) {
-			AABBextents E = C->getExtents();
-			if(p.x < E.xMin || p.x > E.xMax) continue;
-			if(p.z < E.zMin || p.z > E.zMax) continue;
-			if(p.y < E.yMin || p.y > E.yMax) continue;
-			return true;
-		}
-		return false;
+		bool blocked = false;
+		ghostForEachNearbyCollider(p, [&](const AABBextents &E) {
+			if(blocked) return;
+			if(p.x < E.xMin || p.x > E.xMax) return;
+			if(p.z < E.zMin || p.z > E.zMax) return;
+			if(p.y < E.yMin || p.y > E.yMax) return;
+			blocked = true;
+		});
+		return blocked;
 	}
 
 	// Roughly where a ghost's "eyes" are, relative to its hover pivot --
@@ -6263,19 +6429,18 @@ class Castlescape : public BaseProject {
 					if(d > 1e-4f) {
 						moveDir = ghostSteer(g, toPlayer / d);
 						if(moveDir != glm::vec2(0.0f)) {
-							// min(step, d): don't overshoot a player already
-							// reached -- overshooting passes through them
-							// without the catch test seeing them close.
+							// min(step, d): stops the ghost overshooting
+							// straight past a player it has already reached
 							float step = std::min(g.chaseSpeed * deltaT, d);
 							g.pos.x += moveDir.x * step;
 							g.pos.z += moveDir.y * step;
-							ghostResolveWalls(g.pos);
 						}
+						// Out of the loop to avoid getting stuck in objects when hunt starts
+						ghostResolveWalls(g.pos);
 					}
 
-					// Giving up: a ghost pinned against a door and one on a
-					// stale lastKnownPlayerPos both cover no ground, so one
-					// timer catches both.
+					// Giving up: a ghost pinned against a closed wall or on the lastKnownPlayerPos
+					// will return to normal patrol after a timer
 					float moved = glm::length(glm::vec2(g.pos.x - g.stuckCheckPos.x, g.pos.z - g.stuckCheckPos.z));
 					if(moved >= GHOST_STUCK_EPS) {
 						g.stuckCheckPos = g.pos;
@@ -6288,18 +6453,14 @@ class Castlescape : public BaseProject {
 						}
 					}
 
-					// Breadcrumb. Dropped by distance travelled, not by time,
-					// so the trail's density doesn't depend on the frame rate.
+					// Breadcrumb. Dropped by distance travelled, not by time, (trail density not dependant on frame rate)
 					if(g.trail.empty()) {
 						g.trail.push_back(g.pos);
 					} else if(glm::length(glm::vec2(g.pos.x - g.trail.back().x,
 													g.pos.z - g.trail.back().z)) >= GHOST_TRAIL_SPACING) {
-						// Does this land back on a stretch already walked? Then
-						// that older crumb is the shortest way home and the
-						// detour since is thrown away. Oldest-first cuts the
-						// biggest loop. The last two crumbs are excluded (always
-						// within the prune radius, so matching them prunes to
-						// nothing every step).
+						// Loop check: if this point revisits an earlier crumb, drop
+						// everything after it (oldest match = biggest loop cut).
+						// Skip last 2 crumbs, always within prune radius.
 						int cut = -1;
 						for(int i = 0; i + 2 < (int)g.trail.size(); i++) {
 							glm::vec2 delta(g.pos.x - g.trail[i].x, g.pos.z - g.trail[i].z);

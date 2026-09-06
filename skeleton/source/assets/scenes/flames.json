@@ -69,6 +69,14 @@
 		}
 	},
 
+	// The hub is the lived-in centre of the level, so its candles are already
+	// burning when the player arrives -- they light the banquet table and the
+	// corner clutter that would otherwise be lost in the dark. Every other
+	// candle in the castle stays unlit for the player to light with the torch.
 	"overrides": {
+		"hbCandleC":  {"burning": true},
+		"hbT2Cndl":   {"burning": true},
+		"raCandleL":  {"burning": true},
+		"raCandleR":  {"burning": true}
 	}
 }

@@ -41,14 +41,6 @@ vec3 toneMap(vec3 c) {
 	return c / (Y + 1.0);
 }
 
-// Cheap per-pixel white noise for the dither below. Not a good RNG, but
-// enough for a pattern that only has to look unstructured.
-float hash21(vec2 p) {
-	p = fract(p * vec2(123.34, 456.21));
-	p += dot(p, p + 45.32);
-	return fract(p.x * p.y);
-}
-
 // Radial R/B channel split at the corner, in uv units, a few pixels wide.
 const float CA_STRENGTH = 0.008;
 
@@ -150,13 +142,8 @@ void main() {
 
 	color = mix(color, vec3(1.0), clamp(post.escapeFlash, 0.0, 1.0));
 
-	// Dither, last: one 8-bit LSB of triangular noise to break up banding in
-	// the dark gradients before the swapchain quantises. time animates it.
-	float n1 = hash21(gl_FragCoord.xy + fract(post.time) * 431.0);
-	float n2 = hash21(gl_FragCoord.xy + fract(post.time) * 917.0 + 53.0);
-	color += (n1 - n2) * (1.0 / 255.0);
-
 	// Linear, not gamma-encoded: the swapchain is B8G8R8A8_SRGB, so the
-	// hardware does the encode. A manual curve here would double it.
+	// hardware does the linear-to-sRGB encode on write. A manual curve here
+	// would double-encode and wash the image out.
 	outColor = vec4(color, 1.0);
 }

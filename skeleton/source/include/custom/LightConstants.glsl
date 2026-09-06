@@ -15,19 +15,6 @@
 // lightCount saying how much of it is real.
 #define MAX_LIGHTS 32
 
-// How many 2D (depth-only) shadow maps exist: one per DIRECT or SPOT
-// shadow-casting light. A point light does NOT take a slot here -- it gets a
-// genuine cube shadow map instead (NUM_SHADOW_CUBES below), because a single
-// perspective map covers at most a hemisphere and a torch radiates in every
-// direction. Today only the sun uses this array; the +1 over that is
-// headroom for a future shadow-casting spot.
-//
-// Sized as an array bound (shadow map samplers, light-space matrices), so it
-// has to be a compile-time constant like MAX_LIGHTS. SceneLights::init hands
-// out slots in lights.json order and warns if a "castsShadow" light finds
-// none left.
-#define NUM_SHADOW_MAPS_2D 2
-
 // Slots for point-light cube shadow maps (CubeShadowMap.hpp), each a real
 // 6-face cube. The LAST slot is fixed: main.cpp reserves it for the held
 // torch, which moves with the camera and never goes through lights.json
@@ -44,7 +31,7 @@
 // main.cpp. Nothing else needs touching.
 //
 // These share the fragment stage's sampled-image budget with
-// NUM_SHADOW_MAPS_2D and the albedo map, and 32 + 2 + 1 is well past the 16
+// the albedo map, and 32 + 1 is well past the 16
 // that Vulkan GUARANTEES (maxPerStageDescriptorSampledImages). Deliberate:
 // real desktop GPUs allow far more, and the headroom means a level with many
 // torches doesn't have every extra one instantly lose the shadow contest. On a

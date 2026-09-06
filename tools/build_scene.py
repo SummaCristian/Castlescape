@@ -1,262 +1,534 @@
 #!/usr/bin/env python3
 """
-Genera il blocco di istanze del dungeon Dracula dentro scene.json.
+Generatore del livello: riscrive il blocco di istanze del dungeon dentro
+scene.json e le collisioni autorate dentro colliders.json.
 
-Il kit e' modulare su una griglia di 7.2 con muri spessi 1.24 appoggiati sul
-bordo interno della piastrella. Le convenzioni sotto sono ricavate dalla
-geometria reale dei modelli, non assunte:
+Il kit Dracula e' modulare su una griglia di 7.2 unita'. Le convenzioni qui
+sotto sono ricavate dalla geometria reale dei modelli (accessor POSITION),
+non assunte:
 
-  piastrella (i,j) -> x in [X0+7.2i, X0+7.2(i+1)], z in [Z0+7.2j, Z0+7.2(j+1)]
+  piastrella (i,j) -> x in [7.2 i, 7.2 (i+1)], z in [7.2 j, 7.2 (j+1)]
+  i cresce verso EST (+X), j cresce verso SUD (+Z), come il resto del motore.
 
-  SM_StoneFloor_01    occupa x [-7.2,0], z [0,7.2]      rispetto al translate
-  SM_WallStraight_01  occupa x [-1.24,0], z [0,7.2]     -> lastra sul lato est
-  SM_WallCorner_01    occupa la piastrella x [-7.2,0], z [-7.2,0] e fornisce
-                      insieme il lato est e il lato sud di quella piastrella
+  SM_StoneFloor_02    x [-7.2,0]  z [0,7.2]     rispetto al translate
+  SM_StoneCeiling_02  idem, a y = 6.213
+  SM_WallStraight_02  x [-1.242,0] z [0,7.2]    -> lastra sul lato EST della cella
+  SM_WallCorner_02    x [-7.2,0]  z [-7.2,0]    -> due bracci, lato E e lato S
+  SM_WallDoor_Hole_02 come lo straight ma con l'arcata scavata (z 2.47..4.71)
+  SM_Door_01          pende da un cardine: z [-2.462, 0], x [-0.037, 0.430]
 
-Da cui le rotazioni: 0 = est, 90 = nord, 180 = ovest, 270 = sud.
+Rotazioni (eulerAngles Y): 0 = est, 90 = nord, 180 = ovest, 270 = sud.
 
-Lo script controlla che ogni bordo esterno delle stanze sia coperto una volta
-sola e che ogni prop stia dentro l'area calpestabile, poi riscrive in scene.json
-tutte le istanze il cui modello inizia per "dungeon".
+STRUTTURA DEL LIVELLO (vedi memory/level-course-rebuild.md):
 
-Uso:  python build_scene.py
+        ROOM A  (studio -- il LIBRO)
+           |  porta N "iron"
+  ROOM B --+---------- HUB 3x3 --- porta E "gold" -> USCITA (ExitGlow)
+ (torcia,  | libreria "book"  (chiave "iron" sul tavolo)
+  "bronze")|  porta S "bronze"
+        ROOM C  (puzzle di salto -- la chiave "gold")
+           ^
+    ALLEY INTRO (spawn, un barile da scavalcare) entra da OVEST
+
+HUB e ROOM B sono state rimpicciolite da 4x4 a 3x3 celle (il resto della
+mappa -- ia/b3/room C -- e' stato traslato di una tessera per restare
+attaccato all'hub) e gli arredi da riempimento (barili/teschi a raffica,
+le due tavolate extra dell'hub, le file di barili lungo i muri generate
+da _line()) sono stati tagliati per tenere la scena piccola e leggibile.
+
+Grafo chiavi (lineare, nessun soft-lock):
+  iron (hub) -> porta N -> book (A) -> libreria -> torcia + bronze (B)
+  -> porta S -> gold (C) -> porta E -> box di vittoria fuori.
+
+Uso:  python tools/build_scene.py
 """
 
-import glob
 import json
+import math
 import os
 
-import numpy as np
+TS = 7.2
+Y = 0.02
+CEIL_Y = 6.213
 
-TS = 7.2      # lato della piastrella
-Y = 0.02      # alzata comune, per non litigare col piano grande a y=0
-X0, Z0 = -21.6, -46.8
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SCENE = os.path.join(ROOT, "skeleton/source/assets/scenes/scene.json")
+COLLIDERS = os.path.join(ROOT, "skeleton/source/assets/scenes/colliders.json")
 
-# La griglia sopra e' costruita a nord del castello; SHIFT trasla l'intera stanza
-# (struttura, arredi e bounding degli interni) al momento della scrittura. Qui la
-# porta in campo aperto a sud-ovest, a ~14 unita' dallo spawn (0,1,5): ci si gira
-# di ~180 gradi e la si vede. A ovest di x=0 per non accavallarsi alla strada.
-SHIFT = (-16.0, 66.0)
-
-SCENE = "skeleton/source/assets/scenes/scene.json"
-MODELS = "skeleton/source/assets/models/Dracula"
-
-FILE = {
-    "Floor": "SM_StoneFloor_01", "Wall": "SM_WallStraight_01",
-    "Corner": "SM_WallCorner_01", "Door": "SM_WallDoor_01",
-    "Carpet": "SM_Carpet_01", "Table": "SM_Table_01", "Chair": "SM_Chair_01",
-    "Plate": "SM_PlateAndCutlery_01", "Candle": "SM_Candle_01",
-    "Skull": "SM_Skull_01", "Barrel": "SM_Barrel_01", "Torch": "SM_Torch_01",
-    "Banner": "SM_CastleBanners_01",
+# --- il kit: chiave logica -> (id modello, id texture) -----------------------
+KIT = {
+    "Floor":   ("dungeonFloor",     "dungeonFloorTex"),
+    "Ceiling": ("dungeonCeiling",   "dungeonCeilingTex"),
+    "Wall":    ("dungeonWall",      "dungeonWallTex"),
+    "Corner":  ("dungeonCorner",    "dungeonCornerTex"),
+    "DoorWall":("dungeonDoorWall",  "dungeonDoorWallTex"),
+    "Panel":   ("dungeonDoorPanel", "dungeonDoorPanelTex"),
+    "Chains":  ("doorChains01",     "dungeonDoorPanelTex"),
+    "Padlock": ("padlock01",        "keyTex"),
+    "Shelf":   ("bookshelf01",      "dungeonBookshelfTex"),
+    "Book":    ("book01",           "dungeonBannerTex"),
+    "Key":     ("key",              "keyTex"),
+    "Barrel":  ("dungeonBarrel",    "dungeonBarrelTex"),
+    "Torch":   ("dungeonTorch",     "dungeonTorchTex"),
+    "HandTorch":("dungeonTorchHeld","dungeonTorchTex"),
+    "Carpet":  ("dungeonCarpet",    "dungeonCarpetTex"),
+    "Table":   ("dungeonTable",     "dungeonTableTex"),
+    "Chair":   ("dungeonChair",     "dungeonChairTex"),
+    "Plate":   ("dungeonPlate",     "dungeonPlateTex"),
+    "Candle":  ("dungeonCandle",    "dungeonCandleTex"),
+    "Skull":   ("dungeonSkull",     "dungeonSkullTex"),
+    "Banner":  ("dungeonBanner",    "dungeonBannerTex"),
 }
-STRUCTURAL = ("Floor", "Wall", "Corner", "Door")
 
-inst = []
-edges = {}
+# scala umana per i pezzi del kit modellati troppo grandi (dal vecchio build_scene)
+SCALES = {"Table": 0.60, "Chair": 0.86, "Barrel": 0.48, "Skull": 0.46, "Candle": 0.41}
+
+inst = []          # CookTorrance elements
+ghosts = []        # Spectral elements
+colliders = {}     # colliders.json
+
+_ids = set()
+_used_models = set()
 
 
-def add(id, key, pos, rot=None, scale=None):
-    e = {"id": id, "model": "dungeon" + key, "texture": ["dungeon" + key + "Tex"],
-         "translate": [round(pos[0] + SHIFT[0], 2), round(pos[1], 2),
-                       round(pos[2] + SHIFT[1], 2)]}
+def add(id, key, pos, rot=None, scale=None, tex=None):
+    assert id not in _ids, "id duplicato: %s" % id
+    _ids.add(id)
+    model, texture = KIT[key]
+    _used_models.add(model)
+    e = {"id": id, "model": model, "texture": [tex or texture],
+         "translate": [round(pos[0], 3), round(pos[1], 3), round(pos[2], 3)]}
     if rot is not None:
         e["eulerAngles"] = [0.0, float(rot), 0.0]
     if scale is not None:
         e["scale"] = [float(scale)] * 3
     inst.append(e)
+    return e
 
 
-def floor(id, i, j):
-    add(id, "Floor", (X0 + TS * (i + 1), Y, Z0 + TS * j))
-
-
-def claim(i, j, side):
-    key = (i, j, side)
-    assert key not in edges, "bordo coperto due volte: %s" % (key,)
-    edges[key] = True
-
-
-def wall(id, i, j, side, key="Wall"):
-    claim(i, j, side)
-    if side == "E":
-        pos, rot = (X0 + TS * (i + 1), Y, Z0 + TS * j), None
-    elif side == "N":
-        pos, rot = (X0 + TS * i, Y, Z0 + TS * j), 90
-    elif side == "W":
-        pos, rot = (X0 + TS * i, Y, Z0 + TS * (j + 1)), 180
-    else:
-        pos, rot = (X0 + TS * (i + 1), Y, Z0 + TS * (j + 1)), 270
-    add(id, key, pos, rot)
-
-
-CORNER = {"SE": (None, ("E", "S")), "NE": (90, ("N", "E")),
-          "NW": (180, ("W", "N")), "SW": (270, ("S", "W"))}
-
-
-def corner(id, i, j, kind):
-    rot, sides = CORNER[kind]
-    for s in sides:
-        claim(i, j, s)
-    if kind == "SE":
-        pos = (X0 + TS * (i + 1), Y, Z0 + TS * (j + 1))
-    elif kind == "NE":
-        pos = (X0 + TS * (i + 1), Y, Z0 + TS * j)
-    elif kind == "NW":
-        pos = (X0 + TS * i, Y, Z0 + TS * j)
-    else:
-        pos = (X0 + TS * i, Y, Z0 + TS * (j + 1))
-    add(id, "Corner", pos, rot)
-
-
-# ---------------------------------------------------------------- grande sala
-HALL = {(i, j) for i in range(3) for j in range(3)}
-for i, j in sorted(HALL):
-    floor("dhFloor%d%d" % (i, j), i, j)
-corner("dhCornNW", 0, 0, "NW")
-corner("dhCornNE", 2, 0, "NE")
-corner("dhCornSW", 0, 2, "SW")
-corner("dhCornSE", 2, 2, "SE")
-wall("dhWallN", 1, 0, "N")
-wall("dhWallS", 1, 2, "S")
-# SM_WallDoor_01 e' un muro pieno con una porta chiusa modellata sopra, non un
-# varco: verificato proiettando i triangoli sul piano del muro, copre tutta la
-# superficie come SM_WallStraight_01. Va quindi su un muro esterno, come
-# ingresso decorativo, e il collegamento fra le stanze si fa lasciando aperto
-# il bordo condiviso.
-wall("dhDoor", 0, 1, "W", "Door")
-
-# ---------------------------------------------------------------- anticamera
-CHAM = {(i, j) for i in (3, 4) for j in (0, 1)}
-for i, j in sorted(CHAM):
-    floor("dcFloor%d%d" % (i, j), i, j)
-corner("dcCornNE", 4, 0, "NE")
-corner("dcCornSE", 4, 1, "SE")
-wall("dcWallN", 3, 0, "N")
-wall("dcWallS", 3, 1, "S")
-
-# il lato ovest dell'anticamera e' il lato est della sala: l'angolo NE della
-# sala copre j=0, la porta copre j=1, quindi non servono pezzi dedicati.
-
-ROOMS = HALL | CHAM
+# --- geometria delle celle ---------------------------------------------------
 NEIGH = {"N": (0, -1), "S": (0, 1), "E": (1, 0), "W": (-1, 0)}
-missing = [(i, j, s) for (i, j) in ROOMS for s, (di, dj) in NEIGH.items()
-           if (i + di, j + dj) not in ROOMS and (i, j, s) not in edges]
-assert not missing, "bordi esterni scoperti: %s" % missing
+WALL_ROT = {"E": 0, "N": 90, "W": 180, "S": 270}
 
-# ---------------------------------------------------------------- arredamento
-# interni calpestabili, ricavati dai bordi meno lo spessore del muro, gia' shiftati
-INT = {"dh": (-20.36 + SHIFT[0], -1.24 + SHIFT[0], -45.56 + SHIFT[1], -26.44 + SHIFT[1]),
-       "dc": (0.0 + SHIFT[0], 13.16 + SHIFT[0], -45.56 + SHIFT[1], -33.64 + SHIFT[1])}
 
-# Il kit Dracula e' modellato a una scala molto piu' grande dell'omino
-# (EYE_HEIGHT del player e' 1.8): tavolo, sedia, barile e teschio grezzi
-# arrivano quasi o oltre l'altezza occhi. Questi fattori li riportano a
-# proporzioni umane realistiche (tavolo ~1.0m, sedia ~0.95m, barile ~0.9m,
-# teschio ~0.22m, candela ~0.3m); il resto del kit (muri, porta, torcia,
-# stendardo, tappeto, piatto) e' gia' in scala e resta a 1.0.
-SCALE = {"Table": 0.60, "Chair": 0.86, "Barrel": 0.48, "Skull": 0.46, "Candle": 0.41}
+def wall_pos(i, j, side):
+    if side == "E":
+        return (TS * (i + 1), Y, TS * j)
+    if side == "N":
+        return (TS * i, Y, TS * j)
+    if side == "W":
+        return (TS * i, Y, TS * (j + 1))
+    return (TS * (i + 1), Y, TS * (j + 1))          # S
 
+
+CORNER = {"SE": (0,   (TS, TS)), "NE": (90, (TS, 0)),
+          "NW": (180, (0, 0)),   "SW": (270, (0, TS))}
+CORNER_SIDES = {"NE": ("N", "E"), "NW": ("N", "W"),
+                "SE": ("S", "E"), "SW": ("S", "W")}
+
+
+def corner_pos(i, j, kind):
+    _, (ox, oz) = CORNER[kind]
+    return (TS * i + ox, Y, TS * j + oz)
+
+
+def rot_xz(dx, dz, deg):
+    r = math.radians(deg)
+    c, s = math.cos(r), math.sin(r)
+    return (dx * c + dz * s, -dx * s + dz * c)
+
+
+# offset del battente dal proprio muro-arcata, nel frame locale del muro
+# (verificato: dhDoor rot180 + questo == dhDoorPanel in scena)
+PANEL_OFF = (-0.717, 4.821)
+# La libreria segreta NON usa la stessa posa del battente: il suo mesh
+# (make_bookshelf.py) ha il fronte -- dove stanno i libri e va infilato quello
+# mancante -- sul +X locale, quindi va ruotata di 180 rispetto al muro perche'
+# il fronte guardi DENTRO la stanza da cui la si apre, non il passaggio segreto.
+# Offset e rotazione verificati contro il vecchio dsDoor(rot90)/dsShelfPanel(rot270).
+SHELF_OFF = (-0.66, 2.359)
+SHELF_ROT_ADD = 180
+
+# SM_WallStraight_02 NON e' una lastra piatta: agli estremi ha due PILASTRI che
+# sporgono (faccia a -1.242), in mezzo un pannello piatto RIENTRATO (~-0.855).
+# Le torce vanno sul pannello piatto centrale, non sul pilastro: along = 3.6
+# (centro tessera) le tiene lontane dai pilastri.
+TORCH_ALONG = 3.6
+# TORCH_EMBED: l'origine del mesh torcia arretra rispetto alla staffa, e in piu'
+# il pannello centrale e' rientrato ~0.39 rispetto al piano nominale del muro.
+# Questo e' l'UNICA manopola: spinge ogni torcia, di questa quantita', verso la
+# pietra del pannello piatto. ~0.5 la mette a filo; alzare se resta staccata,
+# abbassare se sprofonda.
+TORCH_EMBED = 0.75
+
+ARCH_BOXES = [
+    [-1.242, 0.00, 0.00,  0.0, 6.19, 2.47],
+    [-1.242, 0.00, 4.71,  0.0, 6.19, 7.20],
+    [-1.242, 4.85, 2.47,  0.0, 6.19, 4.71],
+]
+CORNER_BOXES = [
+    [-1.242, 0.00, -7.20,  0.0, 6.19, 0.0],
+    [-7.20,  0.00, -1.242, 0.0, 6.19, 0.0],
+]
+
+
+# =========================================================================
+#  DEFINIZIONE DEL LIVELLO
+# =========================================================================
+# ogni area: prefisso -> lista di celle (i,j)
+AREAS = {
+    "ia": [(i, 2) for i in range(-3, 0)],                       # alley intro (SO del hub)
+    "hb": [(i, j) for i in range(0, 3) for j in range(0, 3)],   # hub 3x3
+    "b1": [(1, -2), (1, -1)],                                   # alley nord
+    "ra": [(i, j) for i in range(0, 4) for j in range(-5, -2)], # room A 4x3
+    "b2": [(-2, 0), (-1, 0)],                                   # alley ovest
+    "rb": [(i, j) for i in range(-5, -2) for j in range(-2, 1)],# room B 3x3
+    "b3": [(1, 3), (1, 4)],                                     # alley sud
+    "rc": [(i, j) for i in range(0, 4) for j in range(5, 8)],   # room C 4x3
+}
+UNION = {c for cells in AREAS.values() for c in cells}
+assert len(UNION) == sum(len(c) for c in AREAS.values()), "celle sovrapposte fra aree"
+
+# varchi: (cella, lato) del muro-arcata -> (prefisso id, tipo, keyId, label)
+#   tipo: "open"  battente semplice, si apre e basta
+#         "lock"  battente + catene + lucchetto
+#         "exit"  come lock ma si apre verso l'ESTERNO (verso la luce)
+#         "shelf" libreria segreta
+PORTALS = {
+    ((0, 2), "W"): ("iaDoor",  "open",  "",       ""),
+    ((1, 0), "N"): ("hbDoorN", "lock",  "iron",   "iron key"),
+    ((1, 2), "S"): ("hbDoorS", "lock",  "bronze", "bronze key"),
+    ((2, 1), "E"): ("hbDoorE", "exit",  "gold",   "gold key"),
+    ((0, 0), "W"): ("hbShelf", "shelf", "book",   "old book"),
+}
+
+# barili da scavalcare (callback: intro insegna il salto, room C lo richiede)
+BARRELS = [
+    ("iaJump",  (-14.4, Y, 18.0), 0.48),      # ostacolo tutorial, meta' alley
+    ("rcStep1", (10.8,  Y, 43.2), 0.48),      # puzzle room C: appoggi verso la chiave
+    ("rcStep2", (14.4,  Y, 44.8), 0.48),
+    ("rcStep3", (18.0,  Y, 43.2), 0.48),
+]
+
+# torce a muro: (id, cella_i, cella_j, lato, along)  -- il muro su `lato` di quella
+# tessera; along = offset lungo il muro dal suo spigolo (0..7.2). Ogni (cella,lato)
+# DEVE essere un bordo con muro (o un portale): validato in gen_props().
+A = TORCH_ALONG
+TORCHES = [
+    ("iaTorch",   -3, 2, "S", A),              # unica luce dell'alley, fioca
+    ("hbTorchN1",  0, 0, "N", A),
+    ("hbTorchN2",  2, 0, "N", A),
+    ("hbTorchW",   0, 1, "W", A),
+    ("hbTorchE",   2, 2, "E", A),
+    ("raTorchW",   0, -4, "W", A),
+    ("raTorchE",   3, -4, "E", A),
+    ("raTorchN1",  1, -5, "N", A),
+    ("rbTorch",   -4, 0, "S", A),              # una sola, presso l'ingresso: l'angolo NO resta buio
+    ("rcTorchW",   0, 6, "W", A),
+    ("rcTorchE",   3, 6, "E", A),
+]
+
+# raccoglibili
+PICKUPS = [
+    ("hbKeyIron",   "Key", (9.6,   1.28, 10.7),  0.0032),   # hub, posata dentro un piatto sul tavolo
+    ("raBook",      "Book", (14.4,  1.22, -25.2), 1.0),     # room A, sullo scrittoio
+    ("rbKeyBronze", "Key", (-33.0, 0.05, -11.0), 0.0032),   # room B, a terra nell'angolo NO buio
+    ("rcKeyGold",   "Key", (18.0,  1.12, 43.2),  0.0032),   # room C, sopra il barile rcStep3
+]
+
+GHOSTS = [
+    ("ghost",  (3.0, 2.2, 3.0)),      # hub (lontano dal tavolo centrale)
+    ("ghost2", (-30.0, 2.2, 5.0)),    # room B
+    ("ghost3", (20.0, 2.2, 39.8)),    # room C
+]
+
+# Superficie dei piani: TABLE scala 0.6, translate y 0.26 -> il ripiano sta a
+# y ~= 1.20 e la sua impronta e' x +-1.36, z +-0.79. Quindi i piatti/candele/
+# chiavi sopra vanno a y 1.20 ENTRO x +-1.1, z +-0.55 dal centro del tavolo,
+# se no restano per aria oltre il bordo.
+TTOP = 1.20
+BTOP = 1.09       # cima di un barile (scala 0.48): ci si appoggia una candela
+
+# arredi: (id, chiave_kit, x, y, z, rot, scala)  -- scala None = SCALES.get o 1.0
 PROPS = [
-    # grande sala: tavolata al centro sul tappeto, torce e stendardi alle pareti
-    ("dhCarpet",  "Carpet", -10.80, Y + 0.01,   -36.0, None),
-    ("dhTable",   "Table",  -10.80, Y + 0.24,   -36.0, None),
-    ("dhChairW",  "Chair",  -14.60, Y,          -36.0, 90),
-    ("dhChairE",  "Chair",   -7.00, Y,          -36.0, -90),
-    ("dhPlate1",  "Plate",  -12.00, Y + 1.2009, -36.0, None),
-    ("dhPlate2",  "Plate",   -9.60, Y + 1.2009, -36.0, 180),
-    ("dhCandle",  "Candle", -10.80, Y + 1.2009, -36.0, None),
-    ("dhBarrel1", "Barrel", -18.50, Y,          -43.5, None),
-    ("dhBarrel2", "Barrel", -18.50, Y,          -28.5, 25),
-    ("dhBarrel3", "Barrel",  -3.50, Y,          -43.5, -40),
-    ("dhSkull",   "Skull",  -17.00, Y,          -31.5, -35),
-    ("dhTorchW1", "Torch",  -20.36, 3.5,        -42.0, 180),
-    ("dhTorchW2", "Torch",  -20.36, 3.5,        -30.0, 180),
-    ("dhTorchE1", "Torch",   -1.24, 3.5,        -42.0, None),
-    ("dhTorchE2", "Torch",   -1.24, 3.5,        -30.0, None),
-    ("dhBanner1", "Banner", -20.36, Y,          -40.0, 180),
-    ("dhBanner2", "Banner", -20.36, Y,          -32.0, 180),
-    # anticamera: candela sopra il barile, sedia rovesciata contro la parete
-    ("dcCarpet",  "Carpet",   6.58, Y + 0.01,   -39.6, None),
-    ("dcBarrel1", "Barrel",   2.00, Y,          -35.5, None),
-    ("dcCandle",  "Candle",   2.00, Y + 1.0802, -35.5, None),
-    ("dcBarrel2", "Barrel",  11.50, Y,          -44.0, 15),
-    ("dcChair",   "Chair",   10.00, Y,          -36.5, 200),
-    ("dcSkull",   "Skull",    3.00, Y,          -43.5, 20),
-    ("dcTorchE",  "Torch",   13.16, 3.5,        -39.6, None),
-    ("dcBanner",  "Banner",  13.16, Y,          -43.0, None),
-]
-for id, key, x, y, z, rot in PROPS:
-    add(id, key, (x, y, z), rot, SCALE.get(key))
-
-# controllo di contenimento: un prop che sfora finisce dentro o oltre il muro
-bbox = {}
-for g in glob.glob(os.path.join(MODELS, "*.gltf")):
-    a = json.load(open(g))["accessors"][0]
-    bbox[os.path.basename(g)[:-5]] = (np.array(a["min"]), np.array(a["max"]))
-
-bad = []
-for e in inst:
-    key = e["model"].replace("dungeon", "")
-    if key in STRUCTURAL:
-        continue
-    mn, mx = bbox[FILE[key]]
-    sc = e.get("scale", [1.0, 1.0, 1.0])[0]
-    mn, mx = mn * sc, mx * sc
-    th = np.radians(e.get("eulerAngles", [0, 0, 0])[1])
-    c, s = np.cos(th), np.sin(th)
-    corners = [(px * c + pz * s, -px * s + pz * c)
-               for px in (mn[0], mx[0]) for pz in (mn[2], mx[2])]
-    t = e["translate"]
-    xs = [t[0] + p[0] for p in corners]
-    zs = [t[2] + p[1] for p in corners]
-    ix0, ix1, iz0, iz1 = INT[e["id"][:2]]
-    tol = 0.40   # torce e stendardi sono appesi e mordono il muro di proposito
-    if min(xs) < ix0 - tol or max(xs) > ix1 + tol or min(zs) < iz0 - tol or max(zs) > iz1 + tol:
-        bad.append(e["id"])
-assert not bad, "prop fuori dall'area calpestabile: %s" % bad
-
-# ---------------------------------------------------------------- scrittura
-# Inserimento testuale invece di un json.dump: riserializzare toccherebbe anche
-# le righe del castello, allineate a mano, sporcando il diff di tutto il file.
-MODEL_ENTRIES = [
-    {"id": "dungeon" + k, "VD": "VDposNormUV",
-     "model": "assets/models/Dracula/%s.gltf" % FILE[k], "format": "GLTF",
-     **({"collider": "AABB"} if k in ("Wall", "Door") else {})}
-    for k in FILE
-]
-TEX_ENTRIES = [
-    {"id": "dungeon" + k + "Tex",
-     "texture": "assets/textures/Dracula/%s.png" % FILE[k], "format": "C"}
-    for k in FILE
+    # ============================ HUB: sala del banchetto (3x3, rimpicciolita) =
+    ("hbCarpet",  "Carpet", 10.8, 0.03, 10.8, 0, 1.0),
+    ("hbTable",   "Table",  10.8, 0.26, 10.8, 0, None),
+    ("hbChairW",  "Chair",  8.9,  0.02, 10.8, 90, None),
+    ("hbChairE",  "Chair",  12.7, 0.02, 10.8, -90, None),
+    ("hbChairN",  "Chair",  10.8, 0.02, 9.1,  0, None),
+    ("hbChairS",  "Chair",  10.8, 0.02, 12.5, 180, None),
+    ("hbPlate1",  "Plate",  10.8, TTOP, 10.4, 90, None),
+    ("hbCandleC", "Candle", 10.8, TTOP, 10.8, 0, None),
+    ("hbBarNW",   "Barrel", 4.0,  0.02, 4.5, 15, None),
+    ("hbSkullNW", "Skull",  5.4,  0.02, 5.4, -30, None),
+    ("hbBarSE",   "Barrel", 18.6, 0.02, 18.6, -20, None),
+    ("hbSkullSE", "Skull",  17.2, 0.02, 17.4, 40, None),
+    # ============================ ROOM A: lo studio (invariata) ============
+    ("raCarpet",  "Carpet", 14.4, 0.03, -25.2, 0, 1.0),
+    ("raTable",   "Table",  14.4, 0.26, -25.2, 0, None),
+    ("raChair",   "Chair",  14.4, 0.02, -22.7, 180, None),
+    ("raChair2",  "Chair",  16.6, 0.02, -25.2, -90, None),
+    ("raCandleL", "Candle", 13.5, TTOP, -25.4, 0, None),
+    ("raCandleR", "Candle", 15.3, TTOP, -25.0, 0, None),
+    ("raPlate",   "Plate",  14.4, TTOP, -24.75, 0, None),
+    ("raBar1",    "Barrel", 3.1,  0.02, -33.4, 0, None),
+    ("raBar4",    "Barrel", 25.6, 0.02, -16.8, -30, None),
+    ("raSkull1",  "Skull",  4.7,  0.02, -33.5, 25, None),
+    ("raChairC",  "Chair",  6.5,  0.02, -18.5, 220, None),
+    # ============================ ROOM B: cupa (3x3, rimpicciolita) ========
+    ("rbCarpet",  "Carpet", -24.0, 0.03, 2.0, 90, 1.0),
+    ("rbChair",   "Chair",  -19.5, 0.02, -6.0, 200, None),
+    ("rbChair2",  "Chair",  -17.5, 0.02, -4.5, 20, None),
+    ("rbBar1",    "Barrel", -16.4, 0.02, -2.0, 20, None),
+    ("rbCandleB", "Candle", -16.4, BTOP, -2.0, 0, None),
+    ("rbSkull1",  "Skull",  -18.2, 0.02, -1.0, 30, None),
+    # ============================ ROOM C: puzzle (spostata) ================
+    ("rcBarA",    "Barrel", 3.4,  0.02, 38.8, 0, None),
+    ("rcBarC",    "Barrel", 25.0, 0.02, 48.0, 30, None),
+    ("rcCandleB", "Candle", 3.4,  BTOP, 38.8, 0, None),
+    ("rcChair",   "Chair",  6.4,  0.02, 46.4, 130, None),
+    ("rcSkull1",  "Skull",  5.6,  0.02, 40.4, 25, None),
+    # ============================ corridoi ================================
+    ("iaBar",     "Barrel", -18.2, 0.02, 15.4, 10, None),
+    ("iaSkull",   "Skull",  -14.6, 0.02, 20.6, -25, None),
+    ("b1Bar",     "Barrel", 8.6,  0.02, -12.2, 0, None),
+    ("b2Bar",     "Barrel", -11.0, 0.02, 4.8, -15, None),
+    ("b3Bar",     "Barrel", 8.6,  0.02, 26.8, 0, None),
 ]
 
+# stendardi a muro: (id, i, j, lato, along) -- come le torce ma appesi in alto
+BANNERS = [
+    ("raBanN",  2, -5, "N", A),
+    ("raBanW",  0, -3, "W", A),
+    ("raBanE",  3, -3, "E", A),
+    ("raBanS1", 0, -3, "S", A),
+    ("raBanS2", 3, -3, "S", A),
+    ("rbBanS",  -5, 0, "S", A),
+    ("rbBanE",  -3, -1, "E", A),
+    ("rbBanN",  -5, -2, "N", A),
+    ("rcBanW",  0, 7, "W", A),
+    ("rcBanN",  2, 5, "N", A),
+    ("rcBanE",  3, 7, "E", A),
+]
 
-def splice(lines, open_marker, close_marker, depth, new_entries):
-    """Sostituisce le righe dungeon di un array lasciando intatte le altre."""
-    s = next(i for i, l in enumerate(lines) if open_marker in l)
-    e = next(i for i in range(s + 1, len(lines)) if lines[i].strip() == close_marker)
-    body = [l for l in lines[s + 1:e] if "dungeon" not in l]
-    while body and not body[-1].strip():
-        body.pop()
-    if body and not body[-1].rstrip().endswith(","):
-        body[-1] = body[-1].rstrip() + ","
+# camera di spawn: estremita' ovest dell'alley, guarda +X lungo il corridoio
+SPAWN = (TS * -3 + 1.4, 1.8, TS * 2 + 3.6)      # (-20.2, 1.8, 18.0)
+HAND_TORCH = ("handTorch", (-28.8, -0.12, 0.0), [0.0, 35.0, -90.0])
+
+
+def wall_mount(id, key, i, j, side, along, y, embed, rot_add=0, scale=None):
+    """Appende un pezzo alla faccia interna del muro su `side`, spinto `embed`
+    dentro la pietra."""
+    rot = (WALL_ROT[side] + rot_add) % 360
+    if side == "E":
+        pos = (TS * (i + 1) - 1.242 + embed, y, TS * j + along)
+    elif side == "W":
+        pos = (TS * i + 1.242 - embed, y, TS * j + along)
+    elif side == "N":
+        pos = (TS * i + along, y, TS * j + 1.242 - embed)
+    else:  # S
+        pos = (TS * i + along, y, TS * (j + 1) - 1.242 + embed)
+    add(id, key, pos, rot, scale)
+
+
+BANNER_EMBED = 0.15
+
+
+def torch_on(id, i, j, side, along=3.6, y=3.5):
+    wall_mount(id, "Torch", i, j, side, along, y, TORCH_EMBED)
+
+
+def banner_on(id, i, j, side, along=3.6, y=Y):
+    wall_mount(id, "Banner", i, j, side, along, y, BANNER_EMBED)
+
+
+# =========================================================================
+#  GENERAZIONE
+# =========================================================================
+def gen_structure():
+    for i, j in sorted(UNION):
+        floor_i = "%sF_%d_%d" % (area_of(i, j), i, j)
+        add(floor_i, "Floor", (TS * (i + 1), Y, TS * j))
+        add(floor_i.replace("F_", "C_"), "Ceiling", (TS * (i + 1), CEIL_Y, TS * j))
+
+    covered = set()          # (i,j,side) gia' chiusi
+
+    # 1) angoli: solo celle con ESATTAMENTE due lati di bordo adiacenti
+    for i, j in sorted(UNION):
+        b = boundary_sides(i, j)
+        for kind, sides in CORNER_SIDES.items():
+            if set(sides) == b and not any((i, j, s) in PORTALS_BY_CELL for s in sides):
+                cid = "%sK_%d_%d" % (area_of(i, j), i, j)
+                add(cid, "Corner", corner_pos(i, j, kind), CORNER[kind][0])
+                colliders[cid] = {"boxes": [list(x) for x in CORNER_BOXES]}
+                for s in sides:
+                    covered.add((i, j, s))
+
+    # 2) varchi
+    for (i, j), side in PORTALS:
+        gen_portal(i, j, side)
+        covered.add((i, j, side))
+
+    # 3) muri dritti su ogni bordo rimasto scoperto
+    for i, j in sorted(UNION):
+        for s in boundary_sides(i, j):
+            if (i, j, s) in covered:
+                continue
+            add("%sW_%d_%d_%s" % (area_of(i, j), i, j, s), "Wall",
+                wall_pos(i, j, s), WALL_ROT[s])
+            covered.add((i, j, s))
+
+    # verifica: nessun bordo del livello resta aperto
+    missing = [(i, j, s) for (i, j) in UNION for s in NEIGH
+               if (i + NEIGH[s][0], j + NEIGH[s][1]) not in UNION
+               and (i, j, s) not in covered]
+    assert not missing, "bordi esterni scoperti: %s" % missing
+
+
+def gen_portal(i, j, side):
+    prefix, kind, keyid, _ = PORTALS[((i, j), side)]
+    rot = WALL_ROT[side]
+    wp = wall_pos(i, j, side)
+    wall_id = prefix + "Wall"
+    add(wall_id, "DoorWall", wp, rot)
+    colliders[wall_id] = {"boxes": [list(x) for x in ARCH_BOXES]}
+
+    if kind == "shelf":
+        dx, dz = rot_xz(SHELF_OFF[0], SHELF_OFF[1], rot)
+        add(prefix + "Panel", "Shelf", (wp[0] + dx, wp[1], wp[2] + dz),
+            (rot + SHELF_ROT_ADD) % 360)
+        return
+    dx, dz = rot_xz(PANEL_OFF[0], PANEL_OFF[1], rot)
+    ppos = (wp[0] + dx, wp[1], wp[2] + dz)
+    add(prefix + "Panel", "Panel", ppos, rot)
+    if kind in ("lock", "exit"):
+        add(prefix + "Chains", "Chains", ppos, rot)
+        add(prefix + "Padlock", "Padlock", ppos, rot)
+
+
+def gen_props():
+    inst.insert(0, {"id": "floor", "model": "floor", "texture": ["groundTex"],
+                    "translate": [0.0, 0.0, 0.0], "scale": [100.0, 100.0, 100.0]})
+    _ids.add("floor")
+    e = {"id": "handTorch", "model": "dungeonTorchHeld", "texture": ["dungeonTorchTex"],
+         "translate": [round(v, 3) for v in HAND_TORCH[1]],
+         "eulerAngles": HAND_TORCH[2], "scale": [1.0, 1.0, 1.0]}
+    _ids.add("handTorch")
+    inst.append(e)
+
+    for id, pos, sc in BARRELS:
+        assert in_union(pos[0], pos[2]), "%s fuori dalle stanze: %s" % (id, pos)
+        assert door_clear(pos[0], pos[2]), "%s davanti a un varco: %s" % (id, pos)
+        add(id, "Barrel", pos, None, sc)
+
+    for id, i, j, side, along in TORCHES + BANNERS:
+        assert (i, j) in UNION, "%s: cella (%d,%d) non esiste" % (id, i, j)
+        assert side in boundary_sides(i, j) or (i, j, side) in PORTALS_BY_CELL, \
+            "%s: (%d,%d) lato %s non e' un muro (bordo interno: nel vuoto)" \
+            % (id, i, j, side)
+    for id, i, j, side, along in TORCHES:
+        torch_on(id, i, j, side, along)
+    for id, i, j, side, along in BANNERS:
+        banner_on(id, i, j, side, along)
+
+    for id, key, x, y, z, rot, sc in PROPS:
+        assert in_union(x, z), "%s fuori dalle stanze: (%.1f, %.1f)" % (id, x, z)
+        assert key == "Carpet" or door_clear(x, z), \
+            "%s davanti a un varco: (%.1f, %.1f)" % (id, x, z)
+        scale = sc if sc is not None else SCALES.get(key, 1.0)
+        add(id, key, (x, y, z), rot if rot else None, scale)
+
+    for id, key, pos, sc in PICKUPS:
+        add(id, key, pos, None, sc)
+
+    for id, pos in GHOSTS:
+        ghosts.append({"id": id, "model": "ghost", "texture": ["ghostTex"],
+                       "translate": [round(v, 3) for v in pos]})
+
+
+# --- utilita' --------------------------------------------------------------
+PORTALS_BY_CELL = {(i, j, s) for ((i, j), s) in PORTALS}
+
+# centro di ogni varco, per tenere sgombra la soglia (tranne i tappeti)
+def _door_center(i, j, side):
+    if side == "E":
+        return (TS * (i + 1), TS * j + 3.6)
+    if side == "W":
+        return (TS * i, TS * j + 3.6)
+    if side == "N":
+        return (TS * i + 3.6, TS * j)
+    return (TS * i + 3.6, TS * (j + 1))
+
+DOOR_CENTERS = [_door_center(i, j, s) for ((i, j), s) in PORTALS]
+
+
+def door_clear(x, z, r=3.6):
+    return all((x - cx) ** 2 + (z - cz) ** 2 > r * r for cx, cz in DOOR_CENTERS)
+_AREA_LOOKUP = {}
+for _pref, _cells in AREAS.items():
+    for _c in _cells:
+        _AREA_LOOKUP[_c] = _pref
+
+
+def area_of(i, j):
+    return _AREA_LOOKUP[(i, j)]
+
+
+def boundary_sides(i, j):
+    return {s for s, (di, dj) in NEIGH.items() if (i + di, j + dj) not in UNION}
+
+
+def in_union(x, z, slack=0.6):
+    """Vero se (x,z) sta dentro una tessera calpestabile (rete anti-vuoto, non
+    un vero controllo di contenimento contro i muri)."""
+    return any(TS * i - slack <= x <= TS * (i + 1) + slack
+               and TS * j - slack <= z <= TS * (j + 1) + slack
+               for (i, j) in UNION)
+
+
+# --- scrittura ------------------------------------------------------------
+def splice_array(text, marker, close, depth, entries):
+    lines = text.split("\n")
+    s = next(k for k, l in enumerate(lines) if marker in l)
+    e = next(k for k in range(s + 1, len(lines)) if lines[k].strip() == close)
     pad = "\t" * depth
-    block = [""] + [pad + json.dumps(x, ensure_ascii=False) + ","
-                    for x in new_entries]
+    block = [pad + json.dumps(x, ensure_ascii=False) + "," for x in entries]
     block[-1] = block[-1].rstrip(",")
-    return lines[:s + 1] + body + block + lines[e:]
+    return "\n".join(lines[:s + 1] + block + lines[e:])
 
 
-lines = open(SCENE, encoding="utf-8").read().split("\n")
-lines = splice(lines, '"models": [', "],", 2, MODEL_ENTRIES)
-lines = splice(lines, '"textures": [', "],", 2, TEX_ENTRIES)
-lines = splice(lines, '"elements": [', "]}", 3, inst)
-open(SCENE, "w", encoding="utf-8", newline="\n").write("\n".join(lines))
+def main():
+    gen_structure()
+    gen_props()
 
-doc = json.load(open(SCENE, encoding="utf-8"))   # rilettura: deve restare valido
+    text = open(SCENE, encoding="utf-8").read()
+    text = splice_array(text, '"technique": "CookTorrance"', "]},", 3, inst)
+    text = splice_array(text, '"technique": "Spectral"', "]}", 3, ghosts)
+    open(SCENE, "w", encoding="utf-8", newline="\n").write(text)
+    json.load(open(SCENE, encoding="utf-8"))            # deve restare valido
 
-n_struct = sum(1 for e in inst if e["model"].replace("dungeon", "") in STRUCTURAL)
-print("bordi esterni coperti : %d" % len(edges))
-print("istanze strutturali   : %d" % n_struct)
-print("prop                  : %d" % (len(inst) - n_struct))
-print("istanze totali in scena: %d" % len(doc["instances"][0]["elements"]))
+    with open(COLLIDERS, "w", encoding="utf-8", newline="\n") as f:
+        f.write("{\n")
+        keys = sorted(colliders)
+        for n, k in enumerate(keys):
+            boxes = ",\n".join("\t\t\t[%s]" % ", ".join("%.3f" % v for v in b)
+                               for b in colliders[k]["boxes"])
+            f.write('\t"%s": {\n\t\t"boxes": [\n%s\n\t\t]\n\t}%s\n'
+                    % (k, boxes, "," if n < len(keys) - 1 else ""))
+        f.write("}\n")
+
+    n_ceil = sum(1 for e in inst if e["model"] == "dungeonCeiling")
+    n_wall = sum(1 for e in inst if e["model"] in
+                 ("dungeonWall", "dungeonCorner", "dungeonDoorWall"))
+    print("celle              : %d" % len(UNION))
+    print("muri (+angoli+archi): %d" % n_wall)
+    print("soffitti           : %d" % n_ceil)
+    print("istanze CookTorrance: %d" % len(inst))
+    print("fantasmi            : %d" % len(ghosts))
+    print("collider autorati   : %d" % len(colliders))
+    print("SPAWN camPos = (%.2f, %.2f, %.2f)  yaw 0" % SPAWN)
+
+
+if __name__ == "__main__":
+    main()
