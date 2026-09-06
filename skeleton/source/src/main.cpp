@@ -1475,7 +1475,7 @@ class Castlescape : public BaseProject {
 	// Geometry visibility: a radius around the player plus a longer view cone.
 	// GEOMETRY only, never the light list. Carries headroom past the real
 	// frustum rather than tracking it.
-	static constexpr float GEOM_CULL_RADIUS = 16.0f;  // always drawn this close, any facing
+	static constexpr float GEOM_CULL_RADIUS = 12.0f;  // always drawn this close, any facing
 	static constexpr float GEOM_CULL_CONE_DIST = 50.0f;  // dungeon's longest sightline is ~60
 	// Keeps a drawn torch bracket always a lit one.
 	static_assert(TORCH_LIGHT_CULL_DIST >= GEOM_CULL_CONE_DIST,
