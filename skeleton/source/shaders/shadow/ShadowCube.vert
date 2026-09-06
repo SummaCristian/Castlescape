@@ -1,33 +1,17 @@
 // VERTEX SHADER for one FACE of a point light's cube shadow map (see
 // CubeShadowMap.hpp / PShadowCube in main.cpp). Run 6 times per torch per
-// frame (once per face), over every opaque scene instance -- same
-// occluder set Shadow.vert uses for the sun, same reason the flames are
-// skipped (see Shadow.vert's header).
+// frame, over the same occluder set Shadow.vert uses, flames skipped.
 //
-// Field-for-field the same reuse trick Shadow.vert documents: `ubo` here is
-// the SAME per-instance buffer the main pass's PosNormUV.vert/
-// CookTorrance.frag read (DSLlocal, set 1 there, set 0 here), so a moving
-// occluder still casts a shadow that follows it.
+// `ubo` is the same per-instance buffer the main pass reads (set 0 here), so
+// a moving occluder still casts a following shadow. Unlike Shadow.vert this
+// also hands the fragment shader the world position: ShadowCube.frag needs it
+// for the linear distance to the light (see that file for why linear).
 //
-// Unlike Shadow.vert this stage also has to hand the fragment shader the
-// world-space position of the vertex: ShadowCube.frag needs it to compute
-// the linear distance to the light (see that file's header for why linear
-// distance, not raw projective depth, is what gets stored here).
-//
-// lightViewProj/lightPos come from a UNIFORM BUFFER (set 1, cubeData below),
-// not a push constant, even though every torch except the held one is
-// static and a push constant would work fine for those: the "main" command
-// buffer is recorded ONCE per swapchain image and then reused every frame
-// (see submitCommandBuffer()/updateCommandBuffers() in Starter.hpp) -- a
-// push constant's value is baked in at THAT record time and never
-// re-evaluated, so it can't track a torch that moves after the buffer was
-// first recorded. A uniform buffer's CONTENTS, by contrast, are read fresh
-// at draw time regardless of when the command that binds it was recorded --
-// the same reason every per-instance Wm survives being re-mapped every
-// frame instead of re-recorded. See main.cpp's updateUniformBuffer(), which
-// maps cubeData for every torch (not just the held one) each frame, the
-// same way ShadowUniformBufferObject gets re-mapped for the always-static
-// sun.
+// lightViewProj/lightPos come from a UNIFORM BUFFER, not a push constant:
+// the main command buffer is recorded once and reused, and a push constant
+// would freeze at record time and never track the held torch. A UBO's
+// contents are read fresh at draw time. updateUniformBuffer() maps cubeData
+// for every torch each frame.
 
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
@@ -53,10 +37,8 @@ layout(binding = 0, set = 1) uniform ShadowCubeUniformBufferObject {
 	vec4 lightPos;	// xyz used, w is padding to keep the block 16-aligned
 } cubeData;
 
-// Which of the 6 faces this draw is for. Safe as a push constant unlike the
-// matrix/position above: it's a fixed property of WHERE in the recorded
-// command buffer this draw call sits (always face 0, then face 1, ...),
-// never something that needs to change after the buffer is recorded.
+// Which of the 6 faces this draw is for. Safe as a push constant, unlike the
+// matrix above: it's fixed by where this draw sits in the command buffer.
 layout(push_constant) uniform ShadowCubeFacePushConstant {
 	int face;
 } pc;

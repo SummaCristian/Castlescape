@@ -9,7 +9,8 @@ Dalla Parte 1 in poi c'è il progetto vero, e ogni sezione ha in fondo un blocco
 
 Complementare a `notes.md`, che è il diario delle decisioni (*perché* abbiamo
 fatto una scelta e cosa abbiamo provato prima). Questo file spiega invece *come
-funziona adesso*.
+funziona adesso*. `GLOSSARY.md` raccoglie le definizioni brevi dei termini di
+Computer Graphics usati qui.
 
 Dove sta il codice, tutto sotto `skeleton/source/`:
 

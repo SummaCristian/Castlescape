@@ -1,6 +1,5 @@
-// FRAGMENT SHADER for the light/shadow debug line overlay. Nothing to shade:
-// DebugLines.vert already resolved each vertex's color, so this just carries
-// the interpolated value to the framebuffer.
+// FRAGMENT SHADER for the debug line overlay. DebugLines.vert already set each
+// vertex's colour; this just writes the interpolated value.
 
 #version 450
 #extension GL_ARB_separate_shader_objects : enable

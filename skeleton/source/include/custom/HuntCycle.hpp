@@ -1,34 +1,25 @@
 // ***** CUSTOM *****
 
-// The hunt cycle: the clock the whole game is built around.
+// The hunt cycle: the clock the whole game is built around. Three phases,
+// looping forever:
 //
-// The castle sits in one of three phases, looping forever:
+//   Calm      torches burn orange, ghosts walk their patrols and ignore the player.
+//   Warning   a short telegraph: the flames bleed toward the hunt colour and
+//             pulse, but the ghosts are still patrolling. So being hunted is
+//             never a surprise -- a couple of seconds to reach a door first.
+//   Hunt      flames fully changed, every ghost drops its patrol and comes for
+//             the player. Touching one ends the run.
 //
-//   Calm      the torches burn their authored orange, the ghosts walk their
-//             patrol loops and ignore the player entirely.
-//   Warning   a short telegraph. The flames bleed toward the hunt colour and
-//             pulse, but the ghosts are still on patrol. This phase exists
-//             purely so being hunted is never a surprise: the player gets a
-//             couple of seconds to find a door or a corner before anything
-//             starts moving toward them.
-//   Hunt      the flames are fully changed, and every ghost drops its patrol
-//             and comes for the player. Touching one ends the run.
+// After a hunt the colour eases back to orange over `recoverDuration` while the
+// phase is already Calm: the danger ends the instant the phase flips, the fade
+// is only cosmetic. That's why the blend is its own value, not derived from
+// the phase.
 //
-// After a hunt the colour eases back to orange over `recoverDuration` while
-// the phase is already Calm again: the danger is over the instant the phase
-// flips, and the fade is only there so the room doesn't snap back to orange in
-// a single frame. That's why the colour blend is its own value rather than
-// something derived from the phase.
+// This class owns only the clock and that blend -- it never touches a torch, a
+// light or a ghost. main.cpp asks it "what colour" and "hunting?" and does the
+// work, same split as SceneLights.
 //
-// This class owns NOTHING but the clock and that blend. It doesn't know what a
-// torch is, doesn't touch the lights, and never looks at a ghost. main.cpp asks
-// it "what colour should a flame be" and "should the ghosts be hunting", and
-// does the work itself -- same split as SceneLights, which builds LightData and
-// leaves the uploading to main.cpp.
-//
-// Header-only module like the rest of custom/, implementation gated behind
-// HUNTCYCLE_IMPLEMENTATION (defined once in Libs.cpp). Assumes
-// modules/Starter.hpp (for glm) and json.hpp are already included.
+// Header-only, implementation gated behind HUNTCYCLE_IMPLEMENTATION (Libs.cpp).
 
 #include <algorithm>
 #include <cmath>
@@ -40,36 +31,23 @@ enum class HuntPhase {
 	Hunt
 };
 
-// Everything tunable, all of it overridable from assets/scenes/gameplay.json so
-// the pacing can be played with without a recompile. The defaults here are what
-// the game runs with if that file is missing or its "hunt" block is.
+// Everything tunable, all overridable from gameplay.json's "hunt" block so
+// the pacing can change without a recompile.
 struct HuntConfig {
-	// Seconds of quiet between hunts. The long one: this is most of the game,
-	// and it's when the player is meant to actually explore.
-	float calmDuration = 45.0f;
-	// The telegraph. Short enough to be alarming, long enough to reach a door.
-	float warningDuration = 3.0f;
-	// How long the ghosts chase. Deliberately far shorter than calmDuration:
-	// a hunt is an interruption, not the normal state of the game.
-	float huntDuration = 18.0f;
-	// How long the flames take to fade back to orange once a hunt ends. Not a
-	// phase of its own -- see the file header.
-	float recoverDuration = 4.0f;
+	float calmDuration = 45.0f;     // quiet between hunts; most of the game, when the player explores
+	float warningDuration = 3.0f;   // the telegraph: alarming, but long enough to reach a door
+	float huntDuration = 18.0f;     // how long the ghosts chase; an interruption, not the norm
+	float recoverDuration = 4.0f;   // flame fade-back after a hunt; not a phase, see the header
 
-	// What the flames turn into. Violet reads as "wrong" against stone and
-	// firelight without going so dark the room stops being navigable.
+	// Violet: reads as "wrong" against stone and firelight without going so
+	// dark the room stops being navigable.
 	glm::vec3 huntColor = glm::vec3(0.42f, 0.10f, 1.0f);
-	// Hunt light output relative to calm. Below 1 so the room genuinely gets
-	// harder to read during a hunt; not much below, because a player who can't
-	// see the walls can't dodge a ghost either, and that's just unfair.
+	// Hunt light output vs calm. Below 1 so the room is harder to read, but not
+	// much -- a player who can't see the walls can't dodge either.
 	float huntLightScale = 0.8f;
 
-	// Depth of the extra flicker during Warning, as a fraction of the flame's
-	// brightness. This is the part the player notices out of the corner of an
-	// eye before they consciously register the colour change.
-	float warningPulseDepth = 0.35f;
-	// Pulses per second during Warning. Fast enough to read as an alarm.
-	float warningPulseHz = 4.0f;
+	float warningPulseDepth = 0.35f; // extra Warning flicker, fraction of flame brightness
+	float warningPulseHz = 4.0f;     // pulses/sec, fast enough to read as an alarm
 };
 
 class HuntCycle {
@@ -92,9 +70,8 @@ class HuntCycle {
 	// are still patrolling, which is the whole point of Warning.
 	bool hunting() const { return current == HuntPhase::Hunt; }
 
-	// True for exactly the one frame the phase changed, with the phase it
-	// changed INTO available from phase(). This is the hook a music system
-	// would hang off: one call site, one event, no polling.
+	// True for the one frame the phase changed; phase() gives the new one. The
+	// hook a music system would hang off.
 	bool phaseJustChanged() const { return justChanged; }
 
 	// Seconds left in the current phase. Feeds the on-screen warning countdown.
@@ -104,26 +81,20 @@ class HuntCycle {
 	// sits at 1 through Hunt, eases back down across recoverDuration.
 	float colorBlend() const { return blend; }
 
-	// The colour a flame authored as `base` should actually be right now, and
-	// the multiplier its light output should carry. Both are pure functions of
-	// colorBlend(), kept here rather than in main.cpp so the blend curve lives
-	// in one place.
+	// The colour a flame authored as `base` should be now, and the multiplier
+	// its light should carry. Both pure functions of colorBlend(), kept here
+	// so the blend curve lives in one place.
 	glm::vec3 flameColor(const glm::vec3 &base) const;
 	float lightScale() const;
 
-	// Extra brightness multiplier for the Warning pulse, 1.0 outside Warning.
-	// Multiplied on TOP of a flame's own flicker envelope, not instead of it:
-	// the fire keeps behaving like fire, it just also throbs.
+	// Warning-pulse brightness multiplier, 1.0 outside Warning. On TOP of the
+	// flame's own flicker: the fire keeps behaving like fire, it just throbs.
 	float warningPulse() const;
 
-	// Skips whatever is left of the current phase and drops straight into
-	// Warning. Wired to the cheat menu, so a hunt can be watched on demand
-	// instead of waiting out calmDuration every time.
+	// Skips the rest of the current phase into Warning. Wired to the cheat menu.
 	void triggerHunt();
 
-	// Holds the cycle in Hunt for as long as it's set. Flipped by the cheat
-	// menu (a bool* the HUD writes in place, same as every other toggle), so
-	// it's public state rather than a setter.
+	// Holds the cycle in Hunt while set. A bool* the cheat HUD writes in place.
 	bool forceHunt = false;
 
 	const HuntConfig &config() const { return cfg; }

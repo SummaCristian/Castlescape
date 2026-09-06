@@ -3,22 +3,17 @@
 // A reusable animated flame. Nothing here is torch-specific: a caller spawn()s
 // a flame and feeds it a billboard matrix every frame.
 //
-// The flame is not modelled geometry, it is a volume shaded in the fragment
-// shader: three camera-facing quads at slightly different depths, through which
-// Flame.frag renders a domain-warped FBM fire field with real alpha. Shape,
-// internal structure, soft edges and detaching wisps all come from that field;
-// the geometry is six triangles.
+// It's not modelled geometry but a volume shaded in the fragment shader: three
+// camera-facing quads at slightly different depths, through which Flame.frag
+// renders a domain-warped FBM fire field with real alpha. Shape, structure,
+// soft edges and wisps all come from that field; the geometry is six triangles.
+// No glow billboard -- the flame writes values above 1.0 into the HDR
+// attachment and the bloom chain makes the halo.
 //
-// There is no glow billboard: the flame writes color values above 1.0 into the
-// HDR attachment and the bloom chain downstream turns them into a halo.
+// Drawn inside the main scene pass after the scene's own draws, so it
+// depth-tests against the level for free.
 //
-// Drawn inside the main scene pass (main.cpp calls populateCommandBuffer()
-// right after the scene's own), so it depth-tests against the level geometry
-// for free, unlike UiQuad which needs its own render pass.
-//
-// Header-only like the rest of custom/: the implementation is compiled only
-// where FLAME_IMPLEMENTATION is defined (Libs.cpp). Assumes modules/Starter.hpp
-// was included first.
+// Header-only, implementation gated behind FLAME_IMPLEMENTATION (Libs.cpp).
 
 #include <cmath>
 #include <cstdint>
@@ -27,14 +22,12 @@
 #include <vector>
 
 // One corner of one billboard layer. corner.x is -1..1 across the half-width,
-// corner.y is 0..1 from the wick to the tip - not -1..1, because a flame is
-// anchored at its base, and having y=0 mean "the wick" lets the shaders scale
-// the height and lean it over without undoing a centred quad first.
+// corner.y is 0..1 from wick to tip -- not -1..1, so the shaders can scale the
+// height and lean it without undoing a centred quad.
 struct FlameVertex {
 	glm::vec2 corner;
-	// Which depth layer this quad belongs to (0..2). Flame.vert uses it to
-	// offset the quad along the view axis and to give each layer its own noise
-	// phase and scroll speed, so they never sync up and read as one card.
+	// Which depth layer (0..2). Flame.vert offsets the quad along the view
+	// axis and gives each layer its own noise phase, so they never sync up.
 	float layer;
 };
 
@@ -60,36 +53,27 @@ struct FlameUniformBufferObject {
 
 class Flame {
 	public:
-	// maxInstances is fixed here because descriptor sets come out of
-	// BaseProject's single pool, which is sized before it is created: the
-	// number of flames that will ever exist has to be known up front.
-	// _DSglobal is main.cpp's own global descriptor set, bound directly as
-	// set 0 instead of keeping a duplicate.
+	// maxInstances is fixed here: descriptor sets come from BaseProject's
+	// single pool, sized before creation. _DSglobal is main.cpp's own global
+	// set, bound directly as set 0.
 	void init(BaseProject *_BP, DescriptorSetLayout *_DSLglobal, DescriptorSet *_DSglobal,
 			  int maxInstances = 8);
 
-	// Claims one instance slot and returns its id, or -1 if none are left.
-	// `seed` offsets that instance's noise so several flames don't animate in
-	// lockstep.
+	// Claims one instance slot, returns its id or -1. `seed` offsets its noise
+	// so flames don't animate in lockstep.
 	int spawn(float seed);
 
-	// Call every frame for every spawned id.
-	//
-	//   mvpMat       billboard basis times ViewPrj, built by main.cpp
-	//   intensity    brightness envelope, ~0.30..1.40. Simulated on the CPU,
-	//                not in the shader, because the point light the torch
-	//                casts has to flicker off the same signal
-	//   heightScale  height envelope, ~0.78..1.09. The same signal compressed
-	//                and chased more slowly, since a flame's height varies
-	//                less, and later, than its brightness
-	//   lean         how far the flame is dragged over by the hand carrying it
-	//   glareBoost   1.0 + emphasis when this flame is stared at
-	//   color        target hue, hue-rotated onto the fire gradient in
-	//                Flame.frag. The cast light reads the same value, so flame
-	//                and light always agree
-	//
-	// Only the buffer contents change per frame; the command buffer is recorded
-	// once.
+	// Every frame, for every spawned id.
+	//   mvpMat       billboard basis * ViewPrj, from main.cpp
+	//   intensity    brightness envelope ~0.30..1.40, simulated on the CPU so
+	//                the cast point light can flicker off the same signal
+	//   heightScale  height envelope ~0.78..1.09; the same signal, chased more
+	//                slowly, since height varies less and later than brightness
+	//   lean         how far the carrying hand drags the flame over
+	//   glareBoost   1.0 + emphasis when stared at
+	//   color        target hue, hue-rotated onto the fire gradient; the cast
+	//                light reads the same value
+	// Only the buffer contents change per frame.
 	void update(int id, const glm::mat4 &mvpMat, float intensity, float heightScale,
 				const glm::vec2 &lean, float glareBoost, const glm::vec3 &color,
 				int currentImage);
@@ -112,11 +96,9 @@ class Flame {
 	Pipeline P;
 	Model *M = nullptr;
 
-	// Spark particles. They need no descriptor set of their own: each spark's
-	// whole lifecycle is computed in Spark.vert from gubo.time and a seed baked
-	// into the mesh, so the only per-flame data they use is the same
-	// mvp/intensity/lean already in DS[]. Just another vertex format, pipeline
-	// and mesh, reusing DSLflame's layout.
+	// Spark particles. No descriptor set of their own: each spark's lifecycle
+	// is computed in Spark.vert from gubo.time and a baked seed, so they reuse
+	// DS[] -- just another vertex format, pipeline and mesh.
 	VertexDescriptor VDspark;
 	Pipeline Pspark;
 	Model *Mspark = nullptr;
@@ -126,10 +108,9 @@ class Flame {
 	// is the only cost this effect has.
 	static constexpr int LAYER_COUNT = 3;
 
-	// Purely aesthetic: enough that the eye reads a stream instead of counting
-	// them. Each is 2 triangles and fully procedural, so this costs no CPU
-	// time. Spark.vert splits the set by seed: ~40% drift as dust motes, the
-	// rest fly off as sparks, so the count covers both.
+	// Enough that the eye reads a stream, not individual sparks. Each is 2
+	// procedural triangles, no CPU cost. Spark.vert splits the set by seed:
+	// ~40% dust motes, the rest sparks, so the count covers both.
 	static constexpr int SPARK_COUNT = 80;
 
 	int maxInstances = 0;
@@ -161,9 +142,8 @@ void Flame::init(BaseProject *_BP, DescriptorSetLayout *_DSLglobal, DescriptorSe
 	maxInstances = _maxInstances;
 	seeds.resize(maxInstances, 0.0f);
 
-	// OTHER, not POSITION: the element type only matters when Starter.hpp
-	// fills a vertex buffer from a model file, and these meshes are built by
-	// hand below. `corner` isn't a position anyway, it's a quad parameter.
+	// OTHER, not POSITION: the element type only matters when Starter.hpp fills
+	// a vertex buffer from a model file, and these are built by hand.
 	VD.init(BP, {
 			  {0, sizeof(FlameVertex), VK_VERTEX_INPUT_RATE_VERTEX}
 			}, {
@@ -188,9 +168,8 @@ void Flame::init(BaseProject *_BP, DescriptorSetLayout *_DSLglobal, DescriptorSe
 						 sizeof(float), OTHER}
 				});
 
-	// Book one uniform block and one descriptor set per instance in the shared
-	// pool. Set 0 isn't counted: it is main.cpp's existing DSglobal, and the
-	// sparks reuse DS[] rather than allocating their own.
+	// One uniform block and one set per instance. Set 0 isn't counted (it's
+	// main.cpp's DSglobal), and the sparks reuse DS[].
 	BP->DPSZs.uniformBlocksInPool += maxInstances;
 	BP->DPSZs.setsInPool += maxInstances;
 
@@ -215,15 +194,10 @@ void Flame::init(BaseProject *_BP, DescriptorSetLayout *_DSLglobal, DescriptorSe
 }
 
 void Flame::createMesh() {
-	// LAYER_COUNT quads, all in the same place in local space: Flame.vert is
-	// what pushes each along the view axis and scales it, so the mesh carries
-	// only which layer a corner belongs to.
-	//
-	// Emitted back to front (layer 0 is farthest). This order matters: the
-	// quads are alpha-blended, and Starter.hpp always enables depth writes, so
-	// a nearer layer drawn first would write depth and reject the ones behind
-	// it. Flame.frag also discards near-zero alpha, so the invisible fringe
-	// never writes depth either.
+	// LAYER_COUNT quads, all co-located in local space; Flame.vert pushes each
+	// along the view axis. Emitted back to front (layer 0 farthest): the quads
+	// are alpha-blended with depth writes on, so a nearer layer drawn first
+	// would reject the ones behind it.
 	std::vector<FlameVertex> verts;
 	std::vector<uint32_t> idx;
 	verts.reserve(LAYER_COUNT * 4);
@@ -361,9 +335,8 @@ void Flame::populateCommandBuffer(VkCommandBuffer commandBuffer, int currentImag
 		vkCmdDrawIndexed(commandBuffer, (uint32_t)M->indices.size(), 1, 0, 0, 0);
 	}
 
-	// Sparks after the bodies: they are thrown clear of the flame and so end up
-	// in front of it, and drawing them second lets them blend over the flame
-	// pixels they do overlap. They reuse DS[], the flame body's uniform block.
+	// Sparks after the bodies: thrown clear of the flame, so drawing them
+	// second lets them blend over the flame pixels they overlap. Reuse DS[].
 	Pspark.bind(commandBuffer);
 	Mspark->bind(commandBuffer);
 	DSglobal->bind(commandBuffer, Pspark, 0, currentImage);

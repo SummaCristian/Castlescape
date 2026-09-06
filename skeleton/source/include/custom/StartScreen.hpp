@@ -1,57 +1,38 @@
 // ***** CUSTOM *****
 
-// The launch screen: an opaque full-screen backdrop plus two centered
-// buttons, Play and Quit. Open by default from the very first frame (see
-// main.cpp's init), so the app boots into this instead of dropping the
-// player straight into the castle; Play hands control to GameLogic() the
-// same way closing PauseMenu does.
+// The launch screen: an opaque full-screen backdrop plus three centered
+// buttons, Play / Settings / Quit. Open from the first frame, so the app boots
+// into this instead of straight into the castle; Play hands control to
+// GameLogic() like closing PauseMenu does.
 //
-// Deliberately near-identical to PauseMenu.hpp (same TextMaker + UiQuad
-// overlay approach, same keyboard/mouse hit-testing idiom as CheatHud) --
-// the two aren't merged into one shared widget because they differ in the
-// two things that matter here: this one's backdrop is fully opaque (nothing
-// of the scene behind it should show, unlike pause's deliberate dim-not-hide)
-// and its Quit is a real, working quit (there is nothing "behind" the start
-// screen to return to, unlike pause's Quit).
+// Near-identical to PauseMenu.hpp, kept separate because this backdrop is
+// fully opaque (nothing behind it should read through) and its Quit really
+// quits (nothing to return to).
 //
-// Same header-only "module" pattern as TextMaker/CheatHud/PauseMenu:
-// declarations + implementation gated behind STARTSCREEN_IMPLEMENTATION
-// (defined once in Libs.cpp). Assumes "modules/Starter.hpp",
-// "modules/TextMaker.hpp" and "custom/UiQuad.hpp" are already included by
-// whoever includes this one.
+// Header-only, implementation gated behind STARTSCREEN_IMPLEMENTATION
+// (Libs.cpp). Assumes Starter.hpp, TextMaker.hpp and UiQuad.hpp came first.
 
 #include <algorithm>
 #include <string>
 #include <vector>
 
 struct StartScreen {
-	// title: shown as-is, so main.cpp passes its own windowTitle -- one
-	// string to change instead of two going out of sync.
+	// title: shown as-is; main.cpp passes its own windowTitle.
 	void init(TextMaker *txt, UiQuad *quads, const std::string &title);
 	bool isOpen() const { return open; }
 
-	// Opens or closes the screen and (re)renders it immediately to match.
-	// Called from main.cpp: once at startup (open), once when update() below
-	// reports Play was clicked (close), and once more if a run is later
-	// abandoned back to this screen (open again) -- see PauseMenu::setOpen's
-	// identical reasoning for why the open/close write lives in one place
-	// called from every trigger, rather than each caller toggling "open"
-	// itself.
+	// Opens/closes the screen and re-renders. Called from main.cpp at startup,
+	// on a Play click, and again if a run is abandoned back here. Like
+	// PauseMenu::setOpen.
 	void setOpen(bool isOpen, int screenW, int screenH);
 
-	// Reads keyboard/mouse input, moves the hover/selection between the two
-	// buttons, and re-renders if anything changed. Does nothing while
-	// closed. Called once per frame from GameLogic(), same spot/reasoning as
-	// CheatHud::update and PauseMenu::update (BEFORE getSixAxis).
+	// Reads input, moves selection, re-renders if changed. Once per frame from
+	// GameLogic(), BEFORE getSixAxis.
 	void update(GLFWwindow *window, int screenW, int screenH);
 
-	// True for exactly the frame Play/Settings/Quit was clicked or
-	// Enter-confirmed. None of the three buttons' actual effects live in
-	// here -- Play's is closing this screen (main.cpp calls setOpen),
-	// Settings' is opening SettingsMenu instead (main.cpp remembers to come
-	// back here), Quit's is closing the window (main.cpp calls
-	// glfwSetWindowShouldClose) -- same division of responsibility as
-	// PauseMenu's resumeClicked()/settingsClicked()/quitClicked().
+	// True for the frame a button was clicked or Enter-confirmed. The effects
+	// live in main.cpp: Play closes this, Settings opens SettingsMenu, Quit
+	// closes the window.
 	bool playClicked() const { return wantsPlay; }
 	bool settingsClicked() const { return wantsSettings; }
 	bool quitClicked() const { return wantsQuit; }
@@ -80,9 +61,7 @@ struct StartScreen {
 
 	bool dirty = true;
 
-	// Layout, in pixels, centered on screen -- same constants/reasoning as
-	// PauseMenu's own layout section, including buttonHeight() being
-	// measured rather than a guessed constant (see its own comment there).
+	// Layout in pixels, centered -- same as PauseMenu, buttonHeight() measured.
 	static constexpr float BUTTON_WIDTH = 240.0f;
 	static constexpr float BUTTON_GAP = 20.0f;
 	static constexpr float TITLE_GAP = 60.0f;
@@ -90,9 +69,7 @@ struct StartScreen {
 	static constexpr float BUTTON_TEXT_SCALE = 1.0f;
 	static constexpr float BUTTON_LINE_GAP = 16.0f;
 
-	// Text-block ids handed to TextMaker::print/removeText. Start past both
-	// CheatHud's and PauseMenu's own ranges so none of the three can ever
-	// collide, even though at most one of them is ever open at a time.
+	// Text-block ids, past CheatHud's and PauseMenu's ranges.
 	static constexpr int TITLE_TEXT_ID = 300;
 	static constexpr int FIRST_BUTTON_TEXT_ID = 301;
 
@@ -236,9 +213,8 @@ void StartScreen::update(GLFWwindow *window, int screenW, int screenH) {
 void StartScreen::render(int screenW, int screenH) {
 	float ax, ay;
 
-	// Fully opaque backdrop (alpha 1.0): unlike PauseMenu's dim-over-the-
-	// game overlay, nothing behind this one should read through, since the
-	// point is a distinct launch screen rather than a frozen glimpse of play.
+	// Fully opaque backdrop: nothing behind this should read through, unlike
+	// PauseMenu's deliberate dim.
 	std::vector<UiRect> rects;
 	rects.push_back({0.0f, 0.0f, (float)screenW, (float)screenH, {0.03f, 0.03f, 0.05f, 1.0f}});
 	for(int i = 0; i < NUM_BUTTONS; i++) {
@@ -258,10 +234,8 @@ void StartScreen::render(int screenW, int screenH) {
 	for(int i = 0; i < NUM_BUTTONS; i++) {
 		bool selected = (i == selectedIndex);
 		float top = buttonTop(i, screenH);
-		// TRV_TOP, not TRV_MIDDLE -- same reasoning as SettingsMenu's
-		// identical change: anchor at the button's own top edge, matching
-		// CheatHud's rows, rather than trusting TextMaker to center text
-		// around a computed midpoint.
+		// TRV_TOP, not TRV_MIDDLE: anchor at the button's top edge rather than
+		// trusting TextMaker to center around a computed midpoint.
 		pixelToAnchor((float)screenW / 2.0f, top, screenW, screenH, ax, ay);
 		glm::vec4 labelColor = selected ? glm::vec4(1.0f, 1.0f, 0.3f, 1.0f)
 										 : glm::vec4(0.9f, 0.9f, 0.9f, 1.0f);

@@ -1,41 +1,19 @@
-// FRAGMENT SHADER for one FACE of a point light's cube shadow map. Unlike
-// Shadow.frag (depth-only, writes nothing itself) this pass has a real color
-// attachment -- a single VK_FORMAT_R32_SFLOAT channel per face of
-// CubeShadowMap.hpp's cube image -- and this is what fills it: the LINEAR
-// distance from the light to the fragment, world units, not a projective
-// 0..1 depth.
+// FRAGMENT SHADER for one FACE of a point light's cube shadow map. It has a
+// real color attachment (one R32_SFLOAT channel per face) and fills it with
+// the LINEAR distance from the light to the fragment, in world units.
 //
-// Why linear distance instead of the depth buffer's own value (as Shadow.vert/
-// frag do for the sun): CookTorrance.frag samples this cube by DIRECTION
-// (fragPos - lightPos) with an ordinary samplerCube, which is what makes a
-// point light's shadow a single lookup instead of the old pick-the-covering-
-// map dance. That lookup has no notion of which face answered, so whatever
-// gets compared against it has to mean the same thing on every face -- true
-// for a Euclidean distance, false for a perspective-projected depth (which
-// warps differently near the center of a face than near its edge, and
-// differently again on the ADJACENT face sharing that edge).
-
-// lightPos comes from the same per-torch uniform buffer ShadowCube.vert
-// reads (set 1, binding 0) instead of a push constant -- see that file's
-// header for why: a push constant is frozen into the command buffer at
-// record time, which happens once and is then reused every frame, so it
-// can't track a torch (the held one) that keeps moving after that.
+// Linear, not projective depth: CookTorrance.frag samples the cube by
+// DIRECTION with an ordinary samplerCube, and that lookup doesn't know which
+// face answered, so the stored value has to mean the same on every face --
+// true for a Euclidean distance, false for a perspective depth (which warps
+// across a face and again on the adjacent one).
 //
-// The distance stored is the raw one, with no bias of any kind folded into
-// it, and that is deliberate.
-//
-// A slope-scaled bias used to be added here, on the theory that shadow acne
-// belongs to the surface being sampled and should be paid for by it rather
-// than by whatever it shades. The theory is right and the practice was not:
-// a bias baked into the map is invisible to everything downstream, including
-// LIGHT_DEBUG_SHADOW_GAP, which computes its gap from the stored value and
-// so reported every fragment that bias forgave as geometrically unoccluded.
-// It hid the very artifact it was contributing to. Whatever a shadow map
-// stores should be a measurement; slack belongs where it can still be seen.
-//
-// Acne is dealt with upstream of all of it now, by culling FRONT faces in
-// this pass so a lit surface is never in the map to compare against itself.
-// See PShadowCube.setCullMode() in main.cpp.
+// The distance stored is raw, with NO bias folded in. A slope-scaled bias
+// here would be invisible downstream -- including to LIGHT_DEBUG_SHADOW_GAP,
+// which reads the stored value -- so it would hide the artifact it caused.
+// A shadow map should store a measurement; slack belongs where it can be
+// seen. Acne is handled upstream instead, by culling FRONT faces so a lit
+// surface is never in its own map (PShadowCube.setCullMode() in main.cpp).
 
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
