@@ -77,13 +77,10 @@ struct Light {
     float cosIn;    // spot: cosine of the half inner angle
     float cosOut;   // spot: cosine of the half outer angle
     int type;
-    // -1: unshadowed. Every light in the current lights.json casts a shadow,
-    // so nothing hits that path now, but it stays for lights added past
-    // NUM_SHADOW_MAPS_2D/NUM_SHADOW_CUBES. Else the slot -- in the 2D array
-    // for a direct/spot light, in the cube array for a point light, see
-    // shadowFactor() below -- holding this light's shadow map. Set by
-    // SceneLights from lights.json's "castsShadow", see the struct comment
-    // there.
+    // -1: unshadowed, or a light past NUM_SHADOW_CUBES slots. Else the cube
+    // array slot (a point light only, see shadowFactor() below) holding this
+    // light's shadow map. Set by SceneLights from lights.json's
+    // "castsShadow", see the struct comment there.
     int shadowIndex;
 };
 
@@ -111,16 +108,10 @@ layout(binding = 0, set = 0) uniform GlobalUniformBufferObject {
 
 // Shadow sampling, set 2: its own descriptor set because it belongs to
 // neither "once a frame" (set 0) nor "once an object" (set 1) -- it's once
-// per SHADOW-CASTING LIGHT. Two separate families of slots now, one per
-// projection kind a shadow can use (see LightConstants.glsl):
-//   2D depth maps   NUM_SHADOW_MAPS_2D slots, direct/spot lights (the sun
-//                   today). lightSpace is the view-projection matrix
-//                   Shadow.vert rendered that map with.
-//   cube maps       NUM_SHADOW_CUBES slots, one real 6-face cube per point
-//                   light (the torches). No matrix needed here: a samplerCube
-//                   lookup is by DIRECTION, and the light's own position
-//                   (gubo.lights[i].pos) is already available where
-//                   shadowFactor() is called.
+// per SHADOW-CASTING LIGHT. NUM_SHADOW_CUBES slots, one real 6-face cube per
+// point light (the torches, see LightConstants.glsl). No matrix needed here:
+// a samplerCube lookup is by DIRECTION, and the light's own position
+// (gubo.lights[i].pos) is already available where shadowFactor() is called.
 //
 // SEPARATE sampler bindings rather than one binding declared as an array:
 // Scene::init's descriptor-pool accounting (Scene.hpp, the loop that
@@ -129,59 +120,45 @@ layout(binding = 0, set = 0) uniform GlobalUniformBufferObject {
 // this project has count 1. An array binding would silently under-reserve
 // the pool. Ordinary one-per-map bindings sidestep that instead of relying on
 // a path nothing else here exercises.
-layout(binding = 0, set = 2) uniform ShadowUniformBufferObject {
-    mat4 lightSpace[NUM_SHADOW_MAPS_2D];
-} shadowUbo;
-
-layout(binding = 1, set = 2) uniform sampler2D shadowMap2D_0;
-layout(binding = 2, set = 2) uniform sampler2D shadowMap2D_1;
-
+//
 // shadowCube0..18: the dynamic pool (main.cpp's
 // dynamicShadowSlotBase..HAND_TORCH_SHADOW_INDEX, currently the whole 0..18
 // range) -- whichever wall/dl/candle point light is currently nearest the
 // player, reassigned at runtime by updateDynamicShadowSlots(). None of these
 // belongs to a particular torch; which torch's cube map lands in which
 // binding changes as the player moves.
-layout(binding = 3, set = 2) uniform samplerCube shadowCube0;
-layout(binding = 4, set = 2) uniform samplerCube shadowCube1;
-layout(binding = 5, set = 2) uniform samplerCube shadowCube2;
-layout(binding = 6, set = 2) uniform samplerCube shadowCube3;
-layout(binding = 7, set = 2) uniform samplerCube shadowCube4;
-layout(binding = 8, set = 2) uniform samplerCube shadowCube5;
-layout(binding = 9, set = 2) uniform samplerCube shadowCube6;
-layout(binding = 10, set = 2) uniform samplerCube shadowCube7;
-layout(binding = 11, set = 2) uniform samplerCube shadowCube8;
-layout(binding = 12, set = 2) uniform samplerCube shadowCube9;
-layout(binding = 13, set = 2) uniform samplerCube shadowCube10;
-layout(binding = 14, set = 2) uniform samplerCube shadowCube11;
-layout(binding = 15, set = 2) uniform samplerCube shadowCube12;
-layout(binding = 16, set = 2) uniform samplerCube shadowCube13;
-layout(binding = 17, set = 2) uniform samplerCube shadowCube14;
-layout(binding = 18, set = 2) uniform samplerCube shadowCube15;
-layout(binding = 19, set = 2) uniform samplerCube shadowCube16;
-layout(binding = 20, set = 2) uniform samplerCube shadowCube17;
-layout(binding = 21, set = 2) uniform samplerCube shadowCube18;
-layout(binding = 22, set = 2) uniform samplerCube shadowCube19;
-layout(binding = 23, set = 2) uniform samplerCube shadowCube20;
-layout(binding = 24, set = 2) uniform samplerCube shadowCube21;
-layout(binding = 25, set = 2) uniform samplerCube shadowCube22;
-layout(binding = 26, set = 2) uniform samplerCube shadowCube23;
-layout(binding = 27, set = 2) uniform samplerCube shadowCube24;
-layout(binding = 28, set = 2) uniform samplerCube shadowCube25;
-layout(binding = 29, set = 2) uniform samplerCube shadowCube26;
-layout(binding = 30, set = 2) uniform samplerCube shadowCube27;
-layout(binding = 31, set = 2) uniform samplerCube shadowCube28;
-layout(binding = 32, set = 2) uniform samplerCube shadowCube29;
-layout(binding = 33, set = 2) uniform samplerCube shadowCube30;
-layout(binding = 34, set = 2) uniform samplerCube shadowCube31;	// the held torch, fixed
-
-// Stands in for shadowMaps2D[idx], which the separate-bindings choice above
-// rules out. NUM_SHADOW_MAPS_2D is 2 (LightConstants.glsl); if that ever
-// changes, a case has to be added or removed here by hand.
-float sampleShadowMap2D(int idx, vec2 uv) {
-    if(idx == 0) return texture(shadowMap2D_0, uv).r;
-    return texture(shadowMap2D_1, uv).r;
-}
+layout(binding = 0, set = 2) uniform samplerCube shadowCube0;
+layout(binding = 1, set = 2) uniform samplerCube shadowCube1;
+layout(binding = 2, set = 2) uniform samplerCube shadowCube2;
+layout(binding = 3, set = 2) uniform samplerCube shadowCube3;
+layout(binding = 4, set = 2) uniform samplerCube shadowCube4;
+layout(binding = 5, set = 2) uniform samplerCube shadowCube5;
+layout(binding = 6, set = 2) uniform samplerCube shadowCube6;
+layout(binding = 7, set = 2) uniform samplerCube shadowCube7;
+layout(binding = 8, set = 2) uniform samplerCube shadowCube8;
+layout(binding = 9, set = 2) uniform samplerCube shadowCube9;
+layout(binding = 10, set = 2) uniform samplerCube shadowCube10;
+layout(binding = 11, set = 2) uniform samplerCube shadowCube11;
+layout(binding = 12, set = 2) uniform samplerCube shadowCube12;
+layout(binding = 13, set = 2) uniform samplerCube shadowCube13;
+layout(binding = 14, set = 2) uniform samplerCube shadowCube14;
+layout(binding = 15, set = 2) uniform samplerCube shadowCube15;
+layout(binding = 16, set = 2) uniform samplerCube shadowCube16;
+layout(binding = 17, set = 2) uniform samplerCube shadowCube17;
+layout(binding = 18, set = 2) uniform samplerCube shadowCube18;
+layout(binding = 19, set = 2) uniform samplerCube shadowCube19;
+layout(binding = 20, set = 2) uniform samplerCube shadowCube20;
+layout(binding = 21, set = 2) uniform samplerCube shadowCube21;
+layout(binding = 22, set = 2) uniform samplerCube shadowCube22;
+layout(binding = 23, set = 2) uniform samplerCube shadowCube23;
+layout(binding = 24, set = 2) uniform samplerCube shadowCube24;
+layout(binding = 25, set = 2) uniform samplerCube shadowCube25;
+layout(binding = 26, set = 2) uniform samplerCube shadowCube26;
+layout(binding = 27, set = 2) uniform samplerCube shadowCube27;
+layout(binding = 28, set = 2) uniform samplerCube shadowCube28;
+layout(binding = 29, set = 2) uniform samplerCube shadowCube29;
+layout(binding = 30, set = 2) uniform samplerCube shadowCube30;
+layout(binding = 31, set = 2) uniform samplerCube shadowCube31;	// the held torch, fixed
 
 // Same idea for the cube maps, sampled by direction rather than by UV, with
 // one difference that matters: this returns FOUR taps, not one.
@@ -232,42 +209,6 @@ vec4 sampleShadowCube4(int idx, vec3 d0, vec3 d1, vec3 d2, vec3 d3) {
     if(idx == 29) return CUBE_TAP4(shadowCube29);
     if(idx == 30) return CUBE_TAP4(shadowCube30);
     return CUBE_TAP4(shadowCube31);
-}
-
-// The sun/spot path: unchanged from the single-perspective-map technique,
-// just renamed now that it's not sharing a namespace with the torches'
-// former (and now gone) second map.
-float shadowFromMap2D(int idx, vec3 pos, float bias) {
-    vec4 lightClip = shadowUbo.lightSpace[idx] * vec4(pos, 1.0);
-
-    // Behind this map's camera. For a perspective matrix w is the view-space
-    // distance in FRONT of the camera, so w <= 0 puts `pos` on the far side of
-    // the plane through the light. The divide below would mirror such a point
-    // back into the map's 0..1 range and sample a depth belonging to a
-    // completely different direction, so it has to be caught here. The sun's
-    // orthographic matrix always yields w = 1 and never trips this.
-    if(lightClip.w <= 0.0) {
-        return 1.0;
-    }
-
-    vec3 lightNDC = lightClip.xyz / lightClip.w;
-
-    // GLM_FORCE_DEPTH_ZERO_TO_ONE (Starter.hpp) means lightNDC.z is already
-    // Vulkan's 0..1 depth range, same as what's stored in the shadow map; only
-    // XY need remapping from NDC's -1..1 to a texture's 0..1.
-    vec2 shadowUV = lightNDC.xy * 0.5 + 0.5;
-
-    // Outside the map (the sun's fixed ortho box doesn't reach here): nothing
-    // to compare against. Missing this check would sample garbage at the
-    // map's clamped edge instead.
-    if(shadowUV.x < 0.0 || shadowUV.x > 1.0 ||
-       shadowUV.y < 0.0 || shadowUV.y > 1.0 ||
-       lightNDC.z < 0.0 || lightNDC.z > 1.0) {
-        return 1.0;
-    }
-
-    float closestDepth = sampleShadowMap2D(idx, shadowUV);
-    return (lightNDC.z - bias > closestDepth) ? 0.0 : 1.0;
 }
 
 // The torch path: one samplerCube lookup by direction, compared against the
@@ -497,10 +438,12 @@ float shadowFromCube(int idx, vec3 pos, vec3 N, vec3 lightPos, float NdotL) {
 // 1.0: fully lit. 0.0: this light's shadow map says something else is closer
 // to the light than `pos` is, i.e. `pos` is in shadow. shadowIndex < 0 skips
 // the lookup and lights unconditionally, which is why a light without a slot
-// leaks through every wall it reaches.
+// leaks through every wall it reaches. Only LIGHT_POINT ever has a real
+// shadowIndex (see LightData::shadowIndex in SceneLights.hpp) -- a direct or
+// spot light always lights unconditionally through this same early-out.
 //
-// NdotL picks the 2D-map bias below; on the cube path it also scales the
-// normal offset, which is why N has to come along too.
+// NdotL scales the cube path's normal offset, which is why N has to come
+// along too.
 float shadowFactor(int shadowIndex, int type, vec3 pos, vec3 N, vec3 lightPos, float NdotL) {
     // Shadows off (cheat menu): light everything as if no map existed. Reads
     // gubo.debugFlags directly rather than through debugOn(), which is
@@ -509,34 +452,13 @@ float shadowFactor(int shadowIndex, int type, vec3 pos, vec3 N, vec3 lightPos, f
         return 1.0;
     }
 
-    if(type == LIGHT_POINT) {
-        // Bias, softening band and normal offset all live inside
-        // shadowFromCube() now: they are derived from the distance to the
-        // light, which is the one thing this function doesn't have and that
-        // one computes anyway. N and NdotL are what scale them, see there.
-        return shadowFromCube(shadowIndex, pos, N, lightPos, NdotL);
-    }
-
-    // The bias is per PROJECTION KIND, because one number cannot serve both.
-    // These are offsets in the map's 0..1 depth, and how many centimetres that
-    // buys depends entirely on how the projection distributes depth:
-    //
-    //   the sun's orthographic box spreads 1..200 linearly, so a fixed 0.0015
-    //   is a fixed ~30cm everywhere. Left exactly as it was, since it works.
-    //
-    //   a hypothetical shadow-casting spot would crowd most of its range into
-    //   the first metre the way the torches' old perspective maps did, hence
-    //   the slope-scaled pair kept below for that branch.
-    float bias;
-    if(type == LIGHT_DIRECT) {
-        bias = 0.0015;
-    } else {
-        const float BIAS_MIN = 0.0004;   // head-on
-        const float BIAS_MAX = 0.0030;   // edge-on
-        bias = mix(BIAS_MIN, BIAS_MAX, clamp(1.0 - NdotL, 0.0, 1.0));
-    }
-
-    return shadowFromMap2D(shadowIndex, pos, bias);
+    // type is always LIGHT_POINT here: a direct or spot light never gets a
+    // shadowIndex >= 0 (SceneLights::init), so the check above already
+    // caught it. Bias, softening band and normal offset all live inside
+    // shadowFromCube() now: they are derived from the distance to the
+    // light, which is the one thing this function doesn't have and that
+    // one computes anyway. N and NdotL are what scale them, see there.
+    return shadowFromCube(shadowIndex, pos, N, lightPos, NdotL);
 }
 
 // Whether one of the debug views from LightConstants.glsl is on. All of them
