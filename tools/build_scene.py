@@ -277,7 +277,7 @@ PROPS = [
     ("raSkull1",  "Skull",  4.7,  0.02, -33.5, 25, None),
     ("raChairC",  "Chair",  6.5,  0.02, -18.5, 220, None),
     # ============================ ROOM B: cupa (3x3, rimpicciolita) ========
-    ("rbCarpet",  "Carpet", -24.0, 0.03, 2.0, 90, 1.0),
+    ("rbCarpet",  "Carpet", -25.2, 0.03, -3.6, 90, 1.0),
     ("rbChair",   "Chair",  -19.5, 0.02, -6.0, 200, None),
     ("rbChair2",  "Chair",  -17.5, 0.02, -4.5, 20, None),
     ("rbBar1",    "Barrel", -16.4, 0.02, -2.0, 20, None),
