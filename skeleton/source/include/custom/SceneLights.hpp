@@ -125,8 +125,8 @@ struct AmbientLight {
 	// short of the baked AO (or a real GI pass) neither of them can have.
 	//
 	// This is a SHARE of the same indirect bucket `weight` sizes, not an
-	// addition on top of it, so turning the Ambient Light cheat off still
-	// removes all of it -- see CookTorrance.frag's blend.
+	// addition on top of it -- see CookTorrance.frag's blend. Toggled
+	// independently of the hemisphere term by the Torch Bounce cheat.
 	float bounce = 0.35f;
 };
 
@@ -155,7 +155,7 @@ class SceneLights {
 	const std::vector<LightData> &all() const { return lights; }
 
 	// Not animated, so it skips update(). Returned as authored: the
-	// ambientEnabled switch below is applied in the shader, not here.
+	// bounceEnabled switch below is applied in the shader, not here.
 	AmbientLight ambient() const;
 
 	// Debug switches, wired to the cheat menu in main.cpp, which flips these
@@ -168,11 +168,11 @@ class SceneLights {
 	bool directEnabled = true;	// the sun
 	bool pointEnabled = true;	// the torches and candles
 	bool spotEnabled = true;	// none authored today, kept for completeness
-	// The whole indirect term, hemisphere AND per-light bounce, since the two
-	// share one bucket. Off, the only light is what the sources above put there
-	// directly -- which is how you tell an unlit surface from a merely dim one.
-	// main.cpp turns it into the shader's LIGHT_DEBUG_NO_AMBIENT.
-	bool ambientEnabled = true;
+	// The scene's only indirect light (main.cpp turns this into
+	// LIGHT_DEBUG_NO_BOUNCE): torch/candle radiance returned off nearby
+	// surfaces, for diffuse materials and metals alike -- there is no sun and
+	// no separately authored ambient standing in for one anymore.
+	bool bounceEnabled = true;
 
 	// Forces an orbit onto the directional lights that were authored static
 	// (orbitSpeed 0, which is every one of them right now, see lights.json).
@@ -368,7 +368,7 @@ AmbientLight SceneLights::ambient() const {
 	// As authored, cheat or no cheat. Blacking the colors here used to be the
 	// switch, and was only half the job: it missed the per-light bounce and any
 	// model overriding the share in materials.json. It now lives downstream of
-	// both, in the shader's ambientShare() (LIGHT_DEBUG_NO_AMBIENT).
+	// both, in the shader (LIGHT_DEBUG_NO_BOUNCE).
 	return ambientLight;
 }
 

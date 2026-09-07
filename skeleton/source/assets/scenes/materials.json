@@ -100,15 +100,15 @@
 		// it down to 50, so it is literally the wall's stone at the wall's
 		// tone. Hence the same BRDF values as "dungeonWall".
 		//
-		// "interior" is the flag that actually made it match: without it the
-		// hemispheric ambient hands a downward-facing surface ambientLower on
-		// its own, which lights.json wrote as bounce off a dirt courtyard --
-		// 1.80x darker than what the walls get, and brown against their cool.
-		// No texture can compensate for that, which is why two earlier attempts
-		// at re-tinting this ceiling failed. See Material::interiorAmbient in
-		// SceneMaterials.hpp for the measurement behind it. The floor
-		// has the mirrored problem (it collects pure ambientUpper, i.e. sky,
-		// indoors) but it reads fine, so it is left alone.
+		// "interior" used to be the flag that made this match, back when a
+		// diffuse surface still read the hemispheric ambient: without it a
+		// downward-facing ceiling got the darker, brown-toned "ground" half
+		// on its own, 1.80x darker than what the walls got. That indirect
+		// path is gone now (diffuse surfaces take torch bounce only, see
+		// CookTorrance.frag), so this ceiling's brightness today comes from
+		// bounce reaching it same as any other surface, and "interior" here
+		// is a leftover no-op for a non-metal material -- harmless, kept for
+		// the history above rather than pulled for its own sake.
 		//
 		// Instances sit at y = 6.213,
 		// i.e. 0.02 (the common riser) + 6.1929, the exact height of

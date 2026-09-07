@@ -11,133 +11,47 @@
 // Positions are world coordinates, and "instance" + "offset" hangs a light off a
 // scene.json instance instead of repeating its coordinates.
 {
-	// Indirect lighting, hemispheric (E07 slides 47-54): two colors blended by
-	// which way a surface faces. "upper" is what a surface pointing at the sky
-	// receives, "lower" what one pointing at the ground receives, "direction" is
-	// the axis they blend along, i.e. world up.
+	// Indirect lighting. A diffuse surface's indirect light is "bounce" alone
+	// now: the hemispheric sky/ground split (E07 s.47-54) made sense outdoors
+	// with a sun, but the sun is gone (see the empty "lights" array below) and
+	// this dungeon is sealed -- no window, no grate, no sky -- so a term that
+	// claims light arrives from "above" and "below" independent of any actual
+	// source had degenerated into exactly the flat constant the project rules
+	// say barely counts as indirect lighting. "bounce" doesn't have that
+	// problem: it reads each point/spot light's own radiance and shadow
+	// visibility (CookTorrance.frag), so a corridor with no torch in it
+	// collects nothing, the way an unlit dungeon corridor actually looks.
 	//
-	// WARM, because the torches are the only thing burning in here.
+	// "upper"/"lower"/"direction" are now UNUSED -- CookTorrance.frag no
+	// longer reads them, metals included: metalAmbient() was rewired to
+	// reflect the same torch bounce everything else gets (through Fresnel),
+	// rather than sampling a separately authored two-color environment, so a
+	// metal can't show ambient light the actual torches/candles didn't put
+	// there. Left authored here rather than deleted, since removing them
+	// means touching AmbientLight's parsing and the global UBO layout for
+	// zero behavior change. Safe to ignore.
 	//
-	// These used to be sky-blue above and courtyard-brown below, which was
-	// correct while the scene had a sun: the hemisphere is a directional light's
-	// indirect half, which is exactly why CookTorrance.frag excludes direct
-	// lights from the per-light "bounce" term -- feeding the sun in there would
-	// have doubled what these two colors already said. The sun is gone (see the
-	// empty "lights" array below) and the dungeon is sealed: scene.json has
-	// floor, ceiling, straight walls and corners, and its only "Hole" is
-	// SM_WallDoor_Hole_01, the doorway. No window, no grate, no sky. So there is
-	// no source in this level that could put blue light on anything, and the
-	// blue survived here purely because nobody re-derived it after the sun left.
+	// "weight" (aw) is the blend share CookTorrance.frag gives the whole
+	// ambient bucket against the direct term: direct keeps (1-weight), ambient
+	// takes weight. Bumped from E17's enclosed-maze value of 0.05 now that
+	// bounce is carrying the mandatory-indirect-lighting requirement alone --
+	// 0.05 made it nearly invisible even right next to a lit torch. Treat this
+	// as a starting point to tune by eye, not a derived constant.
 	//
-	// What there IS is TORCH_LIGHT_COLOR (1.0, 0.5, 0.16, main.cpp) bouncing off
-	// grey-brown stone. A bounce keeps the hue, loses a little saturation and a
-	// lot of energy, which is what these two now describe.
-	//
-	// The separation between a lit room and a dead corridor therefore has to
-	// come from LUMINANCE, not from hue -- everything down here is the same
-	// color of fire, and only the amount of it changes. That is the honest
-	// version of the warm/cool contrast the blue was faking, and it is why
-	// these are darker than the values they replace (midpoint luminance ~0.38
-	// against ~0.46) rather than just re-tinted: a warm ambient at the old
-	// brightness reads as a second light source instead of as spill.
-	//
-	// Which is which: hemisphereColor() blends with w = (dot(N, direction) + 1)
-	// / 2 and returns mix(lower, upper, w), so "upper" is what a surface facing
-	// UP receives -- the floor, the carpet, the tabletop, the top of a barrel --
-	// and "lower" what a surface facing DOWN receives, the ceiling and the
-	// underside of things. Named for the direction the surface looks at, not for
-	// where the surface sits, which is easy to get backwards.
-	//
-	// upper is the brighter of the two because an upward-facing surface in this
-	// dungeon is looking at the flames: the torches are bracketed high on the
-	// walls and burn upward, so the top half of the room is where the light is.
-	// lower is darker because a downward-facing surface is looking at the floor,
-	// which is the far end of every bounce in here.
-	//
-	// The split only reaches the models that actually blend. Material::
-	// interiorAmbient pins the enclosed ones at w = 0.5 and hands them the
-	// midpoint instead -- today that is 6 models (dungeonCeiling, the bookshelf
-	// and book, and the three metals), against 13 that take the real blend,
-	// dungeonFloor and dungeonWall among them. So these two values are not a
-	// detail: getting them the wrong way round darkens every floor in the level.
-	//
-	// Read the pair as this renderer's stand-in ENVIRONMENT rather than as a
-	// light with a name: besides being the diffuse indirect term, they are what
-	// metalAmbient() reflects, the cheapest form of a split-sum IBL with two
-	// colors where a real one has a prefiltered cube map. Which is also why
-	// blacking them was the worst thing to try: it told every metal in the
-	// scene it was standing in a void, and it made the ambient cheat INVERTED on
-	// them -- switching it on cost them their share of the frame and returned
-	// nothing. Warm is also the right answer for them: a steel chain in this
-	// room reflects firelight, not daylight.
-	//
-	// These are COLORS ONLY, not the radiance itself, so they carry hue and
-	// relative brightness while "weight" below sets how much of the frame they
-	// get. They no longer run near 1 the way the sky ones did: with the whole
-	// room one color of fire, how DARK the indirect term is at the bottom of
-	// its range is the thing doing the work, so some of that is authored here
-	// rather than all of it in a single scene-wide weight.
-	// "weight" carries the brightness, because CookTorrance.frag blends the
-	// ambient against the direct light (E17's LambertBlinnTexture.frag) instead
-	// of adding it on top: direct keeps (1 - weight), ambient takes weight.
-	// Adding it was what made the ambient a floor under every pixel -- see the
-	// shader's comment at the blend for why a ceiling could not stop it.
-	//
-	// "weight" is the scene DEFAULT, and it is the INDOOR value, because the
-	// game is played indoors: the player is inside the dungeon from the start
-	// and only leaves it by winning. So the common case is an enclosed room,
-	// the default matches it, and the handful of models under the open sky
-	// carry an override in materials.json instead. The other way round -- which
-	// this file briefly had -- leaves anything not listed there, i.e. the small
-	// dungeon props, silently lit as if the ceiling weren't there.
-	//
-	// 0.05 is E17's value for its enclosed maze, and it is the one of the two
-	// that gets looked at: the game is played indoors from spawn to win. The
-	// outdoor override in materials.json (0.20) is untouched and untuned since
-	// the sun was removed -- the exterior now has no direct light at all, so if
-	// anyone ever does go and look at it, that number and the missing sun are
-	// the same conversation, not this one.
-	//
-	// "bounce" is the OTHER half of the indirect term. Both halves are now the
-	// same firelight off the same stone; what separates them is whether they
-	// know WHERE the fire is. The hemisphere above is the part that does not --
-	// a floor under the whole level, the light that has bounced enough times to
-	// have forgotten its source. This is the part that does: every point and
-	// spot light feeds the indirect bucket at this fraction of its radiance,
-	// with its own decay, colour and flicker, so the room with a torch in it
-	// gets more indirect light than the dead end down the corridor, and gets it
-	// from the right direction.
-	//
-	// Wrapped rather than clamped -- (dot + 1) / 2, no terminator -- because
-	// bounced light arrives from most of the hemisphere rather than from the
-	// flame itself. Shadowed, though, like the direct term and by the same
-	// visibility: a fragment that cannot see the flame should not collect a
-	// fill sized by its distance to it, which is what put a glow at the near
-	// end of every shadow before.
-	//
-	// 0.35 is an authored stand-in for "how much of what hits a stone wall
-	// comes back", in the same spirit as upper/lower being authored colours.
-	// It is a share of "weight", not an addition to it: the two sources are
-	// summed inside the ambient bucket, which still cannot exceed weight of
-	// the frame, so turning the Ambient Light cheat off removes both.
-	//
-	// What it fixes: with the hemisphere alone, Material::interiorAmbient pins
-	// the blend at 0.5 and every dungeon surface gets the same flat midpoint,
-	// identical in a lit room and in a dead-end corridor, because a constant
-	// cannot tell them apart. Now the corridor with no torch collects the
-	// midpoint and nothing else, while the lit room gets that plus the bounce
-	// of the torch actually in it.
-	//
-	// With both halves warm, this is also the whole of the scene's contrast: the
-	// two rooms differ in how MUCH firelight they hold, not in its colour. Which
-	// is what a dungeon lit only by torches actually looks like, and is why the
-	// midpoint here (0.60, 0.34, 0.15) is deliberately dark -- it is the bottom
-	// of the range, the value a room reaches when no flame reaches it at all.
+	// "bounce" is a share of "weight", not an addition to it (turning the
+	// Torch Bounce cheat off removes it from the bucket entirely). 0.35 is an
+	// authored stand-in for "how much of what hits a stone wall comes back" --
+	// plausible for a matte masonry albedo -- and is wrapped rather than
+	// clamped ((dot+1)/2, no terminator) because bounced light arrives from
+	// most of the hemisphere, not from the flame's own direction. It is
+	// shadowed by the same visibility as the direct term: a fragment that
+	// cannot see the flame shouldn't collect a fill sized by its distance to
+	// it.
 	"ambient": {
 		"upper": [0.75, 0.42, 0.18],
 		"lower": [0.45, 0.26, 0.12],
 		"direction": [0.0, 1.0, 0.0],
-		"weight": 0.05,
+		"weight": 0.12,
 		"bounce": 0.35
 	},
 

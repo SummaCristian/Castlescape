@@ -72,9 +72,6 @@ struct Light {
 layout(binding = 0, set = 0) uniform GlobalUniformBufferObject {
     vec3 eyePos;
     int lightCount;
-    vec3 ambientUpper;   // indirect light from the sky
-    vec3 ambientLower;   // indirect light bounced off the ground
-    vec3 ambientDir;     // axis the two blend along, i.e. world up
     int debugFlags;      // LIGHT_DEBUG_* bits, set by the cheat menu
     float time;          // seconds since startup, unused here
     // All four ride the padding before lights[]:
@@ -337,50 +334,24 @@ vec3 heatmapRamp(float intensity) {
 
 const float PI = 3.14159265359;
 
-// Hemispheric ambient, E07 s.47-54. Indirect light blended by which way the
-// surface faces: aligned with ambientDir is all sky, opposite is all ground.
-//
-// interiorAmbient pins the blend at 0.5 (a vertical surface's weight) instead
-// of deriving it from the normal: indoors there is no sky above a ceiling and
-// no courtyard below it, and the ground end alone came out 1.80x darker than
-// the walls and brown where they are cool. Opt-in per material.
-//
-// Split in two: hemisphereColor() is the incoming light along a direction,
-// with no surface -- the metals below sample it along the REFLECTED direction.
-// hemisphericAmbient() is that light landing on a diffuse surface.
-vec3 hemisphereColor(vec3 dir) {
-    float w = (dot(dir, gubo.ambientDir) + 1.0) / 2.0;   // dot is -1..1, w is 0..1
-    if(ubo.interiorAmbient == 1) w = 0.5;
-    return mix(gubo.ambientLower, gubo.ambientUpper, w);
-}
-
-vec3 hemisphericAmbient(vec3 N, vec3 mD) {
-    return hemisphereColor(N) * mD;
-}
-
-// The indirect term for a METAL, replacing hemisphericAmbient() where
-// ubo.metallic is set. A metal has no diffuse component, so nearly everything
-// the eye gets off a lock or chain is a REFLECTION of the room -- which the
-// diffuse ambient can't produce, and which left the chains near-black and the
-// padlock reading as orange plastic. With no environment map, the hemisphere
-// IS the environment: the two authored colors read along the mirror direction,
-// the cheapest honest form of split-sum ambient specular.
-vec3 metalAmbient(vec3 N, vec3 V, vec3 mS, float roughness, float F0) {
-    vec3 R = reflect(-V, N);
-
-    // A rough metal reflects a BLURRED room, and there's nothing to blur here,
-    // so slide the sample direction from R (mirror) towards N (diffuse) as
-    // roughness grows -- the same two ends the real thing interpolates between.
-    vec3 D = normalize(mix(R, N, roughness));
-
-    // Schlick on N.V (no half vector: the "light" is the whole hemisphere).
-    // Ceiling is max(1 - roughness, F0), not 1.0: a rough metal shouldn't turn
-    // mirror at the horizon and put a hard bright rim around a tube.
+// The indirect term for a METAL. A metal has no diffuse component, so nearly
+// everything the eye gets off a lock or chain is a REFLECTION of the room --
+// which left the chains near-black and the padlock reading as orange plastic
+// before this existed. There is no environment to sample (no sun, no sky, no
+// probe): a metal reflects the SAME torchlight bouncing off the walls around
+// it, tinted through Fresnel instead of a diffuse wrap. `indirect` is that
+// shared bounce value -- already summed over every point/spot light and
+// shadow-tested in main() -- not an independently authored color, so a metal
+// can never show ambient light the actual torches/candles didn't put there.
+vec3 metalAmbient(vec3 N, vec3 V, vec3 mS, float roughness, float F0, vec3 indirect) {
+    // Schlick on N.V. Ceiling is max(1 - roughness, F0), not 1.0: a rough
+    // metal shouldn't turn mirror at the horizon and put a hard bright rim
+    // around a tube.
     float NdotV = clamp(dot(N, V), 0.0, 1.0);
     float F = F0 + (max(1.0 - roughness, F0) - F0) * pow(1.0 - NdotV, 5.0);
 
     // mS, not mD: for a metal the specular color IS the material's color.
-    return hemisphereColor(D) * mS * F;
+    return indirect * mS * F;
 }
 
 // How much of this fragment's light is indirect, 0..1. Per-model if the
@@ -656,17 +627,18 @@ void main() {
         // Wrap-around diffuse, NOT the BRDF's clamped cosine: (dot + 1) / 2.
         // Bounced light arrives from most of the hemisphere, so it has no
         // terminator -- a face turned away from a torch is dimmer, not black.
-        // The same remap hemisphereColor() does, on the light direction.
         //
-        // Direct lights are excluded: the sun's indirect contribution is what
-        // the hemispheric term already IS, so feeding it here would double it.
-        // This term is for the positioned sources the hemisphere can't model.
+        // Direct lights are excluded on principle (a directional light has no
+        // position for this wrap term to be relative to) even though none are
+        // authored in this scene today -- see lights.json, the sun is gone.
         //
         // `vis` applies here too. It didn't originally, and a shadow near a
         // torch filled brightest at the torch end and faded -- the glow at the
-        // start of a barrel's shadow, because the term never read the map.
-        // Shadowing it doesn't bring back a black shadow: hemisphericAmbient()
-        // is still the unshadowed floor under every fragment.
+        // start of a barrel's shadow, because the term never read the map. A
+        // fragment the flame can't see now collects no indirect light at all
+        // on a diffuse surface: there is no hemispheric floor left to fall
+        // back on (CookTorrance.frag's ambient blend), which is the honest
+        // look for a dungeon corridor with no torch in it.
         if(gubo.lights[i].type != LIGHT_DIRECT) {
             bounce += radiance * (dot(N, L) * 0.5 + 0.5) * vis;
         }
@@ -682,16 +654,18 @@ void main() {
     // surface is, until there's an AO map to bake (the MGCG pack ships albedo
     // only).
     //
-    // Indirect light has two sources: hemisphericAmbient() (sky and ground,
-    // right outdoors, vacuous in a corridor) and the bounce (torchlight off a
-    // wall, the only indirect light down there). Summed INSIDE the ambient
-    // bucket, so the pair still can't exceed `aw`. mD because this is indirect
-    // light on a diffuse surface. Metals take the hemisphere alone, as a
-    // REFLECTION (metalAmbient()) -- a wrap diffuse term has nothing to
-    // reflect.
+    // The ONLY indirect light in this scene is torch/candle bounce -- no
+    // sun, no sky, no separately authored "ambient" standing in for one.
+    // `indirect` reuses each point/spot light's own radiance and shadow
+    // visibility from the loop above, so a corridor with no torch in it
+    // collects nothing, the way an unlit dungeon corridor actually looks.
+    // Diffuse surfaces take it times albedo (mD); metals take the same value
+    // through metalAmbient()'s Fresnel instead, so a metal can never show a
+    // reflection color the actual torches/candles didn't put there.
     float aw = ambientShare();
-    vec3 ambient = metal ? metalAmbient(N, V, mSG, roughG, ubo.F0)
-                         : hemisphericAmbient(N, mD) + bounce * gubo.ambientBounce * mD;
+    vec3 indirect = debugOn(LIGHT_DEBUG_NO_BOUNCE) ? vec3(0.0) : bounce * gubo.ambientBounce;
+    vec3 ambient = metal ? metalAmbient(N, V, mSG, roughG, ubo.F0, indirect)
+                         : indirect * mD;
     vec3 color = Lo * (1.0 - aw) + ambient * aw;
 
     if(heatmap) {

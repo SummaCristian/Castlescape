@@ -91,4 +91,10 @@
 // turns it off has to sit downstream of both, and that is here.
 #define LIGHT_DEBUG_NO_AMBIENT  128
 
+// Torch/candle bounce is the only indirect light in the scene (no sun, no
+// sky -- see CookTorrance.frag's ambient composition), for both diffuse
+// surfaces and metals, so one flag now covers all of it. Independent of
+// LIGHT_DEBUG_NO_AMBIENT (which drops the whole share via ambientShare()).
+#define LIGHT_DEBUG_NO_BOUNCE     512	// torch/candle indirect bounce forced to 0
+
 #endif

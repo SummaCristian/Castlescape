@@ -58,15 +58,13 @@ struct Material {
 	// The cost is that the bracket casts no small shadow of its own.
 	bool castsShadow = true;
 
-	// Hemispheric ambient blends "faces the sky" and "faces the ground" by the
-	// surface normal (hemisphericAmbient() in CookTorrance.frag). That is right
-	// outdoors and wrong in a closed room: a ceiling points straight down, so it
-	// would collect only the ground color, which lights.json authored as bounce
-	// off a dirt courtyard - dark and brown.
-	//
-	// With this on the shader uses the weight of a vertical surface instead, so
-	// a ceiling gets the same ambient as the walls it sits on. Opt-in, because
-	// the castle exterior wants the real thing.
+	// Used to mean "pin the hemispheric ambient blend" -- that hemisphere is
+	// gone (the scene has no sun to be the indirect half of, see
+	// CookTorrance.frag's ambient composition), so the name is now a
+	// misnomer for its one remaining job: gates the procedural grime on
+	// interior metal props (chains, padlock, key), so the outdoor lanterns
+	// don't tarnish underground for no reason. Metal-only; see the grime
+	// block in CookTorrance.frag.
 	int interiorAmbient = 0;
 
 	// Per-model override of AmbientLight::weight. Negative means "inherit the
