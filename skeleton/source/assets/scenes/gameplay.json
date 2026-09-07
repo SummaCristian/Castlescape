@@ -58,13 +58,12 @@
 	// frame. The z range stays inside the arch, clear of where the open leaf
 	// comes to rest (z 31.19..32.07).
 	//
-	// requiresKey is now false, and that is not the exit getting easier: the
-	// lock moved from here onto the door itself, which is padlocked with
-	// "iron" (see addDoor("dvDoorPanel") in main.cpp). A visible chained door
-	// says "you need a key" where an invisible box could only say it after
-	// the fact, and it also fixes a rule collision -- a door lock CONSUMES the
-	// key it is paid with, so a door-locked exit that then re-checked the ring
-	// here could never be passed.
+	// No separate key check here: the lock lives on the door itself, which is
+	// padlocked with "iron" (see addDoor("dvDoorPanel") in main.cpp). A
+	// visible chained door says "you need a key" where an invisible box could
+	// only say it after the fact, and it also avoids a rule collision -- a
+	// door lock CONSUMES the key it is paid with, so a door-locked exit that
+	// then re-checked the ring here could never be passed.
 	//
 	// The key budget still works out, and still only just: three padlocks
 	// (behind the spawn, east of the antechamber, and this one) against three
@@ -72,9 +71,7 @@
 	// outer wall, the other has an unchained twin beside it. So a player can
 	// waste two keys and still leave, but cannot waste all three.
 	"exit": {
-		"box": [21.4, -1.0, 9.7, 26.8, 5.0, 11.9],
-		"requiresKey": false,
-		"keyId": "gold"
+		"box": [21.4, -1.0, 9.7, 26.8, 5.0, 11.9]
 	},
 
 	// The ghosts. One entry per "ghost*" instance in scene.json.

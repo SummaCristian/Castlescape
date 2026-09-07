@@ -1509,20 +1509,13 @@ class Castlescape : public BaseProject {
 		return hud.isOpen() || pauseMenu.isOpen() || startScreen.isOpen() || settingsMenu.isOpen();
 	}
 
-	// Where the exit is and whether it's locked, both from gameplay.json's
-	// "exit" block. The box is world-space and axis-aligned: the player wins by
-	// standing inside it.
+	// Where the exit is, from gameplay.json's "exit.box". World-space and
+	// axis-aligned: the player wins by standing inside it. The exit door
+	// itself gates access with its own padlock (see exitDoorIndex below),
+	// so this box has no separate key check.
 	glm::vec3 exitBoxMin{0.0f};
 	glm::vec3 exitBoxMax{0.0f};
 	bool exitHasBox = false;
-	bool exitRequiresKey = true;
-	// Which key opens the way out (gameplay.json's exit.keyId). Empty = any
-	// key on the ring, matching pre-lock behaviour. The exit does not consume
-	// the key: the run ends the moment it passes.
-	std::string exitKeyId;
-	// Set every frame when the player stands in a locked exit without the
-	// key; read by updateUniformBuffer() for the prompt.
-	bool atLockedExit = false;
 
 	// --- The way out, as a door ------------------------------------------
 	// Index into `doors` of the exit leaf (hbDoorE), or -1. Daylight is tied
@@ -2358,8 +2351,6 @@ class Castlescape : public BaseProject {
 					} else {
 						std::cout << "gameplay.json: \"exit\" needs a 6-number \"box\", the run can't be won\n";
 					}
-					exitRequiresKey = e.value("requiresKey", true);
-					exitKeyId = e.value("keyId", std::string(""));
 				}
 
 				for(const auto &g : js.value("ghosts", nlohmann::json::array())) {
@@ -4461,13 +4452,11 @@ class Castlescape : public BaseProject {
 			bool showInteractPrompt = runState == RunState::Running &&
 									  (nearbyDoor >= 0 || nearbyPickup >= 0 ||
 									   nearbyCandle >= 0 || nearbyWallTorch >= 0 ||
-									   nearbyHandTorch || atLockedExit);
+									   nearbyHandTorch);
 			// Door prompts split four ways: openable padlock, unopenable
 			// (names the key by lockLabel), wrong side (no key visible), plain door.
 			std::string wantedPromptText;
-			if(atLockedExit) {
-				wantedPromptText = "The way out is locked - find the key";
-			} else if(nearbyHandTorch) {
+			if(nearbyHandTorch) {
 				wantedPromptText = "[E] Pick up torch";
 			} else if(nearbyPickup >= 0) {
 				wantedPromptText = "[E] Pick up";
@@ -4785,7 +4774,6 @@ class Castlescape : public BaseProject {
 		nearbyWallTorch = -1;
 		nearbyHandTorch = false;
 		gazedInstance = nullptr;
-		atLockedExit = false;
 		exitOpenFrac = 0.0f;	// the way out closes with the rest of the doors, taking its daylight/whiteout
 		escapeFlash = 0.0f;
 
@@ -5492,20 +5480,15 @@ class Castlescape : public BaseProject {
 				}
 			}
 
-			// Standing in the exit box wins unless locked without the key.
-			// Checked after the ghosts, so a catch on the threshold beats reaching it.
-			atLockedExit = false;
+			// Standing in the exit box wins. Checked after the ghosts, so a
+			// catch on the threshold beats reaching it.
 			if(exitHasBox && runState == RunState::Running) {
 				bool inside = camPos.x >= exitBoxMin.x && camPos.x <= exitBoxMax.x &&
 							  camPos.y >= exitBoxMin.y && camPos.y <= exitBoxMax.y &&
 							  camPos.z >= exitBoxMin.z && camPos.z <= exitBoxMax.z;
 				if(inside) {
-					if(exitRequiresKey && findKeyInRing(exitKeyId) < 0) {
-						atLockedExit = true;
-					} else {
-						runState = RunState::Escaped;
-						std::cout << "[run] escaped\n";
-					}
+					runState = RunState::Escaped;
+					std::cout << "[run] escaped\n";
 				}
 			}
 
