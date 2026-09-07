@@ -11,9 +11,6 @@
 layout(binding = 0, set = 0) uniform GlobalUniformBufferObject {
 	vec3 eyePos;
 	int lightCount;
-	vec3 ambientUpper;
-	vec3 ambientLower;
-	vec3 ambientDir;
 	int debugFlags;
 	float time;
 } gubo;

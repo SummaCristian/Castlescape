@@ -59,16 +59,16 @@ struct UniformBufferObject {
 struct GlobalUniformBufferObject {
 	alignas(16) glm::vec3 eyePos;
 	int lightCount;
-	alignas(16) glm::vec3 ambientUpper;	// hemispheric ambient, see AmbientLight in SceneLights.hpp
-	alignas(16) glm::vec3 ambientLower;
-	alignas(16) glm::vec3 ambientDir;
 	int debugFlags;			// LIGHT_DEBUG_* bits from LightConstants.glsl
 	float time;					// seconds since startup, animates the held torch's flame on the GPU
 	float ambientWeight;		// default indirect-light share, 0..1, from lights.json
 	float ambientBounce;		// point/spot radiance returned as indirect light; see AmbientLight::bounce
 	// IMPORTANT: debugFlags/time/ambientWeight/ambientBounce/fogDensity fill std140's
-	// padding before lights[] (offsets 60/64/68/72/76); lights[] itself is alignas(16)-
-	// pinned to 80. Adding another scalar here shifts lights[] and every shader offset.
+	// padding before lights[] (offsets 20/24/28/32/36); lights[] itself is alignas(16)-
+	// pinned to 48. Adding another scalar here shifts lights[] and every shader offset --
+	// and every shader below declares this struct too and MUST be edited to match, since
+	// glslc reports no cross-shader layout mismatch of its own (see LightConstants.glsl's
+	// header-sharing comment for the same problem one level up).
 	float fogDensity;			// exp(-(fogDensity*dist)^2) distance fog, see CookTorrance.frag
 	LightData lights[MAX_LIGHTS];
 };
@@ -3888,14 +3888,13 @@ class Castlescape : public BaseProject {
 		}
 
 		// Always as authored -- the Torch Bounce cheat zeroes the term in the
-		// shader instead (LIGHT_DEBUG_NO_BOUNCE below), not the colours here:
-		// under the blend the direct half is scaled by (1 - weight), so
-		// blacking the colours would darken the scene instead of removing
-		// indirect light.
+		// shader instead (LIGHT_DEBUG_NO_BOUNCE below). amb.upper/lower/dir
+		// are no longer uploaded: nothing in CookTorrance.frag reads them
+		// since metalAmbient() was rewired to reflect bounce instead of an
+		// authored environment (see notes.md). Left in AmbientLight/
+		// lights.json rather than deleted outright -- SceneLights.hpp's
+		// comment on the struct explains why (a future exterior level).
 		const AmbientLight amb = sceneLights.ambient();
-		gubo.ambientUpper = amb.upper;
-		gubo.ambientLower = amb.lower;
-		gubo.ambientDir = amb.dir;
 		gubo.ambientWeight = amb.weight;
 		gubo.ambientBounce = amb.bounce;
 
