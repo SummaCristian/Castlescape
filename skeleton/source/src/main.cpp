@@ -149,10 +149,59 @@ static float fireFbm(float x) {
 /////////////////////////////////////////////////////////////////////////////////////////////////////////
 // MAIN
 /////////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// The whole game lives in one class because BaseProject (modules/Starter.hpp)
+// drives it through virtual overrides: localInit / pipelinesAndDescriptorSets*
+// / populateCommandBuffer / updateUniformBuffer / GameLogic / localCleanup.
+// Anything that could stand on its own was already pulled out into
+// include/custom/ (Flame, CubeShadowMap, HuntCycle, SceneLights, ...); what is
+// left here is the glue between those, so it cannot be split across files.
+//
+// To keep it navigable, the body is cut into the sections below, in this
+// order, each opened by a ==== banner. State, its tuning constants and its
+// helpers stay together inside a section, so one theme reads top to bottom.
+//
+//   DECLARATIONS AND STATE
+//     Vulkan objects: layouts, pipelines, render passes
+//     Cube shadow maps: Vulkan objects
+//     Cube shadow maps: per-frame submission
+//     HDR post-processing chain
+//     Scene, text and UI overlays
+//     Camera and view state
+//     Colliders, materials and lights
+//     Cheats and movement tuning
+//     Doors
+//     Pickups, gaze targeting and the key ring
+//     Held items: grip, wall tuck and raise animations
+//     Flames, candles and wall torches
+//     Visibility culling and candidate priority
+//     Fire envelope: flicker, glare and lean
+//     Animation time and walk bob
+//     Ghosts
+//     Hunt cycle and run state
+//     The way out: exit box, door, daylight and whiteout
+//     Spawn pose, stepping and movement state
+//
+//   ENGINE OVERRIDES AND LOGIC
+//     Window, fullscreen and render-pass rebuild
+//     localInit(): scene load and world setup
+//     Cube shadow maps: slot assignment and capture
+//     Pipelines, descriptor sets and cleanup
+//     populateCommandBuffer(): draw order
+//     updateUniformBuffer(): per-frame uniforms and HUD
+//     Ghost navigation
+//     Run lifecycle: restart and hunt phase
+//     GameLogic(): input, physics and interaction
+//
+/////////////////////////////////////////////////////////////////////////////////////////////////////////
 class Castlescape : public BaseProject {
 	protected:
+
+	// =====================================================================
+	// Vulkan objects: layouts, pipelines, render passes
+	// =====================================================================
 	// Here you list all the Vulkan objects you need:
-	
+
 	// Descriptor Layouts [what will be passed to the shaders]
 	DescriptorSetLayout DSLlocal, DSLglobal;
 
@@ -173,6 +222,9 @@ class Castlescape : public BaseProject {
 	// the ghost's own interior instead of blending it under the body.
 	Pipeline PspectralDepth;
 
+	// =====================================================================
+	// Cube shadow maps: Vulkan objects
+	// =====================================================================
 	// Shadow mapping, cube branch (the torches): a real 6-face cube map per
 	// point light (CubeShadowMap.hpp: linear-distance storage, one flat bias).
 	//
@@ -237,7 +289,9 @@ class Castlescape : public BaseProject {
 	std::array<uint8_t, NUM_SHADOW_CUBES> pendingFaceMask{};
 	static constexpr uint8_t ALL_CUBE_FACES = 0x3F;
 
-	// ---- The per-frame cube-shadow submission ----
+	// =====================================================================
+	// Cube shadow maps: per-frame submission
+	// =====================================================================
 	// IMPORTANT: its own pool -- the framework's commandPool has flags = 0, and
 	// a buffer from a pool without RESET_COMMAND_BUFFER_BIT may not be re-recorded.
 	VkCommandPool shadowCommandPool = VK_NULL_HANDLE;
@@ -296,7 +350,9 @@ class Castlescape : public BaseProject {
 	// Models, textures and Descriptors (values assigned to the uniforms)
 	DescriptorSet DSglobal;
 
-	// ---- HDR post-processing chain ----
+	// =====================================================================
+	// HDR post-processing chain
+	// =====================================================================
 	// scene (RGBA16F, MSAA + resolve) -> bright pass -> blur H -> blur V (all
 	// quarter res) -> composite (swapchain: scene + bloom, then tone map).
 	RenderPass RPbright, RPblurH, RPblurV, RPcomposite;
@@ -335,40 +391,8 @@ class Castlescape : public BaseProject {
 	float msaaLevel = 2.0f;
 	// Upper bound from getMaxUsableSampleCount(): never offer a level the GPU can't do.
 	float maxMsaaLevel = 2.0f;
-
-	// Replays the resize rebuild path at the current window size. Skipped while
-	// a rebuild is already pending, to avoid a render pass targeting a size
-	// newer than its framebuffer.
-	void applyRenderScaleChange() {
-		if(!framebufferResized) {
-			onWindowResize((int)windowWidth, (int)windowHeight);
-			RebuildPipeline();
-		}
-	}
-
-	// v is unused; always formats the current renderScale/renderWidth/renderHeight.
-	std::string formatRenderScale(float /*v*/) {
-		char buf[32];
-		snprintf(buf, sizeof(buf), "< %d%% (%dx%d) >",
-				 (int)std::lround(renderScale * 100.0f),
-				 renderWidth((int)windowWidth), renderHeight((int)windowHeight));
-		return std::string(buf);
-	}
-
-	// Unlike renderScale, a sample-count change has to rebuild hdrAtt itself.
-	void applyMsaaChange() {
-		if(!framebufferResized) {
-			msaaSamples = static_cast<VkSampleCountFlagBits>(1 << (int)std::lround(msaaLevel));
-			initRenderPasses();
-			RebuildPipeline();
-		}
-	}
-
-	std::string formatMsaaLevel(float level) {
-		char buf[16];
-		snprintf(buf, sizeof(buf), "< %dx >", 1 << (int)std::lround(level));
-		return std::string(buf);
-	}
+	// The two above are driven by SettingsMenu; its callbacks live with the
+	// rest of the UI, in "Scene, text and UI overlays" below.
 
 	// IMPORTANT: threshold set above 1.0 -- at 1.0 a sunlit pale wall haloes
 	// too, since it lands right at that luminance once sun+ambient are added.
@@ -377,6 +401,9 @@ class Castlescape : public BaseProject {
 	static constexpr float BLOOM_INTENSITY = 0.65f;
 	static constexpr float SCENE_EXPOSURE = 1.0f;
 
+	// =====================================================================
+	// Scene, text and UI overlays
+	// =====================================================================
 	// To support loading assets from a scene.json file
 	Scene SC;
 	std::vector<VertexDescriptorRef>  VDRs;
@@ -420,6 +447,46 @@ class Castlescape : public BaseProject {
 	SettingsMenu settingsMenu;
 	bool settingsFromPause = false;
 
+	// The settings sliders' callbacks. The values they drive (renderScale,
+	// msaaLevel) belong to the HDR chain and are declared up there.
+
+	// Replays the resize rebuild path at the current window size. Skipped while
+	// a rebuild is already pending, to avoid a render pass targeting a size
+	// newer than its framebuffer.
+	void applyRenderScaleChange() {
+		if(!framebufferResized) {
+			onWindowResize((int)windowWidth, (int)windowHeight);
+			RebuildPipeline();
+		}
+	}
+
+	// v is unused; always formats the current renderScale/renderWidth/renderHeight.
+	std::string formatRenderScale(float /*v*/) {
+		char buf[32];
+		snprintf(buf, sizeof(buf), "< %d%% (%dx%d) >",
+				 (int)std::lround(renderScale * 100.0f),
+				 renderWidth((int)windowWidth), renderHeight((int)windowHeight));
+		return std::string(buf);
+	}
+
+	// Unlike renderScale, a sample-count change has to rebuild hdrAtt itself.
+	void applyMsaaChange() {
+		if(!framebufferResized) {
+			msaaSamples = static_cast<VkSampleCountFlagBits>(1 << (int)std::lround(msaaLevel));
+			initRenderPasses();
+			RebuildPipeline();
+		}
+	}
+
+	std::string formatMsaaLevel(float level) {
+		char buf[16];
+		snprintf(buf, sizeof(buf), "< %dx >", 1 << (int)std::lround(level));
+		return std::string(buf);
+	}
+
+	// =====================================================================
+	// Camera and view state
+	// =====================================================================
 	// Other application parameters
 	float Ar;	// Aspect ratio
 
@@ -443,6 +510,9 @@ class Castlescape : public BaseProject {
 	// Top of the "floor" instance; last-resort clamp so no-clip can't fall through the map.
 	float worldFloorY = 0.0f;
 
+	// =====================================================================
+	// Colliders, materials and lights
+	// =====================================================================
 	// Hand-authored collision geometry from colliders.json, merged with what
 	// scene.json built.
 	SceneColliders colliderSet;
@@ -525,6 +595,9 @@ class Castlescape : public BaseProject {
 		}
 	}
 
+	// =====================================================================
+	// Cheats and movement tuning
+	// =====================================================================
 	// Debug/cheat toggles, isolated in a utility struct.
 	// Not persisted across runs, reset to default values on launch.
 	struct CheatFlags {
@@ -580,6 +653,9 @@ class Castlescape : public BaseProject {
 		float gravity = -9.81f;				// world units/second^2
 	} movement;
 
+	// =====================================================================
+	// Doors
+	// =====================================================================
 	// A door leaf (its own instance) that swings around a vertical hinge on E.
 	// IMPORTANT: SM_Door_01's local origin is at the hinge edge, so the
 	// instance's authored transform already is the closed-door hinge frame;
@@ -680,6 +756,9 @@ class Castlescape : public BaseProject {
 	// for the "[E] Interact" prompt.
 	int nearbyDoor = -1;
 
+	// =====================================================================
+	// Pickups, gaze targeting and the key ring
+	// =====================================================================
 	// A world object collected with [E]. Not strictly one-way: can be dropped again (G).
 	struct Pickup {
 		std::string instanceId;
@@ -863,6 +942,9 @@ class Castlescape : public BaseProject {
 					* glm::rotate(glm::mat4(1.0f), yaw, glm::vec3(0.0f, 1.0f, 0.0f))
 					* glm::scale(glm::mat4(1.0f), glm::vec3(p.worldScale));
 	}
+	// =====================================================================
+	// Held items: grip, wall tuck and raise animations
+	// =====================================================================
 	// Default held pose; negative X = left hand (torch owns the right). Each
 	// pickup can override via Pickup::handOffset/handTiltDeg.
 	static constexpr glm::vec3 HAND_KEY_OFFSET = glm::vec3(-0.40f, -0.4f, -0.9f);
@@ -875,7 +957,7 @@ class Castlescape : public BaseProject {
 			 * glm::rotate(glm::mat4(1.0f), glm::radians(tiltDeg.z + bobRollDeg), glm::vec3(0.0f, 0.0f, 1.0f));
 	}
 
-	// ---- Held-item wall tuck -------------------------------------------------
+	// ---- Held-item wall tuck ----
 	// IMPORTANT: held items sit ~1 unit out from the camera, past the 0.3
 	// PLAYER_RADIUS clearance, so at a wall the item pokes through it. For the
 	// torch this is a lighting bug, not just a clipping one: its point light
@@ -979,6 +1061,7 @@ class Castlescape : public BaseProject {
 		tiltDeg.x += HAND_TUCK_TILT_DEG.x * tuck;
 		tiltDeg.y += inward * HAND_TUCK_TILT_DEG.y * tuck;
 	}
+	// ---- Key raise/sink animation ----
 	// Pick-up animation: the key rises into frame from below over
 	// KEY_RAISE_DURATION. A translation on camera-local Y added to
 	// HAND_KEY_OFFSET, so it composes with the walk bob.
@@ -995,6 +1078,7 @@ class Castlescape : public BaseProject {
 	int keyLowerIdx = -1;
 	float keyLowerElapsed = 0.0f;
 
+	// ---- The held torch ----
 	// The torch held in the right hand. A scene instance whose Wm is rebuilt
 	// every frame from the camera basis, so it follows the view like a
 	// viewmodel. Null if the instance isn't found.
@@ -1027,6 +1111,9 @@ class Castlescape : public BaseProject {
 	// saturated so an already-collected torch doesn't replay it.
 	float torchRaiseElapsed = TORCH_RAISE_DURATION;
 
+	// =====================================================================
+	// Flames, candles and wall torches
+	// =====================================================================
 	// The flame at a torch's head (Flame.hpp); one instance drives every torch, held one included.
 	Flame flame;
 
@@ -1238,6 +1325,9 @@ class Castlescape : public BaseProject {
 	static constexpr float TORCH_LIGHT_CULL_DIST = 55.0f;
 	static constexpr int TORCH_LIGHT_MAX_LIVE = 32;
 
+	// =====================================================================
+	// Visibility culling and candidate priority
+	// =====================================================================
 	// Geometry visibility cull: radius around the player plus a longer view
 	// cone. Geometry only, never the light list.
 	static constexpr float GEOM_CULL_RADIUS = 12.0f;  // always drawn this close, any facing
@@ -1255,6 +1345,7 @@ class Castlescape : public BaseProject {
 	// available, else this flat fallback radius.
 	static constexpr float GEOM_CULL_FALLBACK_RADIUS = 4.0f;
 
+	// ---- Third-person debug camera ----
 	// Third-person debug camera (cheats.debugCam) starting spherical coords
 	// (I/K pitch, J/; yaw, U/O dolly at runtime). Only ViewPrj changes; every
 	// cull still runs from the real first-person eye, so culled instances
@@ -1346,6 +1437,9 @@ class Castlescape : public BaseProject {
 		return distSq * (1.0f + SHADOW_FACING_BIAS_WEIGHT * (1.0f - alignment));
 	}
 
+	// =====================================================================
+	// Fire envelope: flicker, glare and lean
+	// =====================================================================
 	// Fire envelope. The fast flicker band lives in Flame.frag as a per-pixel
 	// shimmer; the CPU keeps a slower 7 Hz term at reduced weight so the cast light dances too.
 	static constexpr float FLAME_FLICKER_HZ = 7.0f;
@@ -1384,6 +1478,9 @@ class Castlescape : public BaseProject {
 	static constexpr float TORCH_LEAN_PER_SPEED = 0.055f;
 	static constexpr float TORCH_LEAN_MAX = 0.30f;
 
+	// =====================================================================
+	// Animation time and walk bob
+	// =====================================================================
 	// Seconds since startup, uploaded as gubo.time; free-running so sway/flicker never visibly repeats.
 	float animTime = 0.0f;
 
@@ -1399,6 +1496,9 @@ class Castlescape : public BaseProject {
 	// bob so the world only just nods.
 	static constexpr float CAM_BOB_VERTICAL = 0.012f;
 
+	// =====================================================================
+	// Ghosts
+	// =====================================================================
 	// Three-state machine driven by huntCycle.hunting(). Return walks the chase's
 	// breadcrumb trail backwards, which is why there is no pathfinding here.
 	enum class GhostMode {
@@ -1483,6 +1583,9 @@ class Castlescape : public BaseProject {
 	static constexpr float GHOST_STUCK_EPS = 0.08f;
 	static constexpr float GHOST_GIVEUP_TIME = 3.0f;
 
+	// =====================================================================
+	// Hunt cycle and run state
+	// =====================================================================
 	// The hunt cycle: the clock that decides when the torches change colour and
 	// the ghosts come for the player. Owns no scene state of its own, see
 	// custom/HuntCycle.hpp.
@@ -1508,6 +1611,9 @@ class Castlescape : public BaseProject {
 		return hud.isOpen() || pauseMenu.isOpen() || startScreen.isOpen() || settingsMenu.isOpen();
 	}
 
+	// =====================================================================
+	// The way out: exit box, door, daylight and whiteout
+	// =====================================================================
 	// Where the exit is, from gameplay.json's "exit.box". World-space and
 	// axis-aligned: the player wins by standing inside it. The exit door
 	// itself gates access with its own padlock (see exitDoorIndex below),
@@ -1516,7 +1622,7 @@ class Castlescape : public BaseProject {
 	glm::vec3 exitBoxMax{0.0f};
 	bool exitHasBox = false;
 
-	// --- The way out, as a door ------------------------------------------
+	// ---- The way out, as a door ----
 	// Index into `doors` of the exit leaf (hbDoorE), or -1. Daylight is tied
 	// to how far this door has swung, not the exit box, since the light
 	// outside has to arrive while the leaf is still moving.
@@ -1603,6 +1709,9 @@ class Castlescape : public BaseProject {
 	static constexpr float ESCAPE_EXPOSURE_GAIN = 7.0f;
 	static constexpr float ESCAPE_BLOOM_GAIN = 3.0f;
 
+	// =====================================================================
+	// Spawn pose, stepping and movement state
+	// =====================================================================
 	// The authored starting pose, captured in localInit() before anything
 	// moves it, so restartRun() has one source of truth.
 	glm::vec3 spawnPos{0.0f};
@@ -1634,18 +1743,23 @@ class Castlescape : public BaseProject {
 	// grounded, but can be stopped mid-air.
 	bool sprinting = false;
 
+	// =====================================================================
+	// Window, fullscreen and render-pass rebuild
+	// =====================================================================
+
 	// Here you set the main application parameters
 	void setWindowParameters() {
 		// window size, title and initial background
 		windowWidth = 800;
 		windowHeight = 600;
 		windowTitle = "Castlescape";
-    	windowResizable = GLFW_TRUE;
-		
+		windowResizable = GLFW_TRUE;
+
 		// Initial aspect ratio
 		Ar = 4.0f / 3.0f;
 	}
-	
+
+
 	// What to do when the window changes size
 	void onWindowResize(int w, int h) {
 		std::cout << "Window resized to: " << w << " x " << h << "\n";
@@ -1674,6 +1788,38 @@ class Castlescape : public BaseProject {
 		// pass too; without this it rebuilds its framebuffers at the old size
 		// on resize (VUID-...-04533).
 		SC.ColShow.resizeScreen(w, h);
+	}
+
+	// ---- F11 fullscreen toggle ----
+	// Starter.hpp forces GLFW_RESIZABLE=FALSE, but glfwSetWindowMonitor() still
+	// works: switching monitors fires GLFW's framebuffer-resize callback, which
+	// makes BaseProject recreate the swapchain and call onWindowResize() for us.
+	// Polled from GameLogic() once per frame.
+	bool fullscreen = false;
+	bool f11WasDown = false;
+	int savedWinX = 0, savedWinY = 0, savedWinW = 0, savedWinH = 0;
+
+	void toggleFullscreen() {
+		if(!fullscreen) {
+			glfwGetWindowPos(window, &savedWinX, &savedWinY);
+			glfwGetWindowSize(window, &savedWinW, &savedWinH);
+			GLFWmonitor* mon = glfwGetPrimaryMonitor();
+			const GLFWvidmode* mode = glfwGetVideoMode(mon);
+			glfwSetWindowMonitor(window, mon, 0, 0,
+			                     mode->width, mode->height, mode->refreshRate);
+			fullscreen = true;
+		} else {
+			glfwSetWindowMonitor(window, nullptr,
+			                     savedWinX, savedWinY, savedWinW, savedWinH, 0);
+			fullscreen = false;
+		}
+	}
+
+	// Edge-triggered: fires once per F11 press.
+	void pollFullscreenToggle() {
+		bool f11Down = glfwGetKey(window, GLFW_KEY_F11) == GLFW_PRESS;
+		if(f11Down && !f11WasDown) toggleFullscreen();
+		f11WasDown = f11Down;
 	}
 
 	// Fills the HDR chain's attachment descriptions at the current swapchain
@@ -1806,9 +1952,17 @@ class Castlescape : public BaseProject {
 		return std::max(1, RP.height / BLOOM_DIV);
 	}
 
+	// =====================================================================
+	// localInit(): scene load and world setup
+	// =====================================================================
 	// Here you load and setup all your Vulkan Models and Textures.
 	// Here you also create your Descriptor set layouts and load the shaders for the pipelines
+	// Runs once, in eight stages: Vulkan objects first, then the scene file,
+	// then everything the game reads out of it. The numbered sub-banners below
+	// mark the boundaries; the order between them is load-bearing (each stage
+	// reads what the previous one resolved).
 	void localInit() {
+		// ---- 1. Render passes, layouts and vertex descriptors ----
 		// IMPORTANT: windowWidth/windowHeight still hold setWindowParameters()'s
 		// requested size in window points, not the real HiDPI framebuffer size
 		// in pixels (the swapchain itself is sized correctly independently, via
@@ -1932,6 +2086,7 @@ class Castlescape : public BaseProject {
 
 		createCubeShadowMaps();
 
+		// ---- 2. Pipelines ----
 		// Pipelines [Shader couples]
 		// The last array, is a vector of pointer to the layouts of the sets that will
 		// be used in this pipeline. The first element will be set 0, and so on..
@@ -2035,6 +2190,7 @@ class Castlescape : public BaseProject {
 		PShadowCube.setCullMode(VK_CULL_MODE_FRONT_BIT);
 		PShadowCube.create(&RPShadowCubeCompat);
 
+		// ---- 3. Descriptor pool and Scene load ----
 		// Descriptor pool size: 4 post sets (one block each, 5 textures
 		// between them) + NUM_SHADOW_CUBES for DSshadowCube[].
 		DPSZs.uniformBlocksInPool = 2 + 4 + NUM_SHADOW_CUBES;
@@ -2095,6 +2251,7 @@ class Castlescape : public BaseProject {
 		// would erase a flame poking into its body. Descriptor sets stay valid.
 		SC.TI[1].T->PT[0].P = nullptr;
 
+		// ---- 4. World: floor, colliders, doors, pickups ----
 		// Cache the floor's top Y for the no-clip under-the-map clamp.
 		auto floorIt = SC.InstanceIds.find("floor");
 		if(floorIt != SC.InstanceIds.end() && SC.I[floorIt->second]->C != nullptr) {
@@ -2322,6 +2479,7 @@ class Castlescape : public BaseProject {
 		}
 		ghostColliderGrid.build(staticColliders);
 
+		// ---- 5. Spawn pose and the rules of the run ----
 		// Player's spawn pose, captured before anything can move it; restartRun() uses this.
 		spawnPos = camPos;
 		spawnYaw = camYaw;
@@ -2428,6 +2586,7 @@ class Castlescape : public BaseProject {
 			}
 		}
 
+		// ---- 6. Torches, candles and flames ----
 		// Held torch. Starts on the floor at its authored pose; picked up with
 		// [E], after which GameLogic rebuilds its Wm from the camera.
 		{
@@ -2576,6 +2735,7 @@ class Castlescape : public BaseProject {
 			}
 		}
 
+		// ---- 7. Materials, lights and cube-shadow slots ----
 		// Surface parameters for the BRDF, one per model.
 		materials.init(&SC, "assets/scenes/materials.json");
 
@@ -2602,6 +2762,7 @@ class Castlescape : public BaseProject {
 			activeCubeShadows = std::max(activeCubeShadows, HAND_TORCH_SHADOW_INDEX + 1);
 		}
 
+		// ---- 8. Text, overlays and the cheat menu ----
 		// initializes the textual output
 		txt.init(this, windowWidth, windowHeight);
 		// initializes the flat-quad background/highlight layer for the cheat HUD
@@ -2672,6 +2833,9 @@ class Castlescape : public BaseProject {
 					  [this](float v) { return formatMsaaLevel(v); });
 	}
 
+	// =====================================================================
+	// Cube shadow maps: slot assignment and capture
+	// =====================================================================
 	// Does slot t currently have a light in it? A lights.json slot is occupied
 	// by construction; a dynamic-pool slot only once given a flame; the held
 	// torch's only while the torch exists.
@@ -3384,6 +3548,9 @@ class Castlescape : public BaseProject {
 		cubeShadowSampler.cleanup();
 	}
 
+	// =====================================================================
+	// Pipelines, descriptor sets and cleanup
+	// =====================================================================
 	// Here you create your pipelines and Descriptor Sets!
 	void pipelinesAndDescriptorSetsInit() {
 		// All render passes first: RenderPass::create() allocates each
@@ -3536,7 +3703,10 @@ class Castlescape : public BaseProject {
 		exitGlow.localCleanup();
 		debugLines.localCleanup();
 	}
-	
+
+	// =====================================================================
+	// populateCommandBuffer(): draw order
+	// =====================================================================
 	static void populateCommandBufferAccess(VkCommandBuffer commandBuffer, int currentImage, void *Params) {
 		Castlescape *T = (Castlescape *)Params;
 		T->populateCommandBuffer(commandBuffer, currentImage);
@@ -3613,9 +3783,17 @@ class Castlescape : public BaseProject {
 		fullScreenPass(RPcomposite, Pcomposite, DScomposite);
 	}
 
+	// =====================================================================
+	// updateUniformBuffer(): per-frame uniforms and HUD
+	// =====================================================================
 	// Here is where you update the uniforms.
 	// Very likely this will be where you will be writing the logic of your application.
+	// Everything the GPU reads this frame, in dependency order: clock, then the
+	// global UBO (lights), then the shadow slots and billboard bases that the
+	// fire simulation needs, then the post chain, then one local UBO per
+	// instance, and finally the shadow capture submission and the HUD text.
 	void updateUniformBuffer(uint32_t currentImage) {
+		// ---- Overlays and the frame clock ----
 		static bool debounce = false;
 		static int curDebounce = 0;
 
@@ -3643,6 +3821,7 @@ class Castlescape : public BaseProject {
 		static float simTime = 0.0f;
 		simTime += deltaT;
 
+		// ---- Global UBO: the lights from lights.json ----
 		// defines the global parameters for the uniform
 		GlobalUniformBufferObject gubo{};
 
@@ -3660,6 +3839,7 @@ class Castlescape : public BaseProject {
 		const glm::vec3 eyePos = glm::vec3(camToWorld[3]);
 		const glm::vec3 forward = -glm::vec3(camToWorld[2]);
 
+		// ---- Cube-shadow slot bookkeeping ----
 		// Re-decides the dynamic cube-shadow pool's slots, at most every
 		// SHADOW_REASSIGN_INTERVAL, before the light-append loop and
 		// DSshadowCube mapping loop read the (possibly changed) slots.
@@ -3690,6 +3870,7 @@ class Castlescape : public BaseProject {
 		// whose light stayed put while a ghost/door moved inside it.
 		queueMoverCubeSlotRenders();
 
+		// ---- Billboard bases for the flames ----
 		// IMPORTANT: cylindrical billboard basis from the camera's right axis,
 		// not each flame's eye->anchor direction. The per-flame version breaks
 		// for the held torch: its anchor is barely a unit away in camera
@@ -3717,6 +3898,7 @@ class Castlescape : public BaseProject {
 
 		animTime += deltaT;
 
+		// ---- Fire simulation and the torch/candle lights ----
 		// Advance every torch's fire state before anything reads it, so flame,
 		// sparks and light are all driven by the same envelope this frame.
 		for(TorchFlame &tf : torchFlames) {
@@ -3903,6 +4085,7 @@ class Castlescape : public BaseProject {
 			}
 		}
 
+		// ---- Exit spill, fog and the debug flags ----
 		// Light the open exit throws back into the room, tracking the leaf's
 		// swing: the counterpart to the ExitGlow quad (which is the daylight
 		// you look at; this is the daylight on the stone). No shadow map: the
@@ -3960,6 +4143,7 @@ class Castlescape : public BaseProject {
 
 		DSglobal.map(currentImage, &gubo, 0);
 
+		// ---- Glare, exposure and the post-processing passes ----
 		// Stare-at glare (GLARE_*): how squarely and closely the camera looks
 		// at each WALL torch. The held torch is excluded -- it's near screen
 		// centre by construction, so its glare would be a permanent bias.
@@ -4087,6 +4271,7 @@ class Castlescape : public BaseProject {
 			DScomposite.map(currentImage, &post, 0);
 		}
 
+		// ---- Flame and daylight quad matrices ----
 		// Each flame's render matrix is one of two billboard bases translated
 		// and scaled to its anchor: cylindrical for wall torches (upright at
 		// any pitch), camera-locked for the held one. Shader local space: x
@@ -4157,6 +4342,7 @@ class Castlescape : public BaseProject {
 							EXIT_GLOW_COLOR, glow, animTime, currentImage);
 		}
 
+		// ---- Per-instance local UBOs ----
 		// defines the local parameters for the uniforms
 		UniformBufferObject ubo{};
 
@@ -4389,6 +4575,7 @@ class Castlescape : public BaseProject {
 			}
 		}
 
+		// ---- Shadow capture submission and HUD text ----
 		// Records and submits this frame's cube shadow captures, now that both
 		// DSshadowCube[t] and every instance's DS[0][1] are current --
 		// recording earlier would bake a stale Wm into the map.
@@ -4562,7 +4749,9 @@ class Castlescape : public BaseProject {
 		settingsQuad.updateCommandBuffer();
 	}
 	
-	// --- Ghost navigation ---------------------------------------------------
+	// =====================================================================
+	// Ghost navigation
+	// =====================================================================
 	// Ghosts obey the same walls the player does. Not pathfinding: a wall
 	// test, a push-out like the player's, and a fan of candidate headings,
 	// enough for rooms and corridors given the return trail.
@@ -4708,6 +4897,9 @@ class Castlescape : public BaseProject {
 		return glm::vec2(0.0f);
 	}
 
+	// =====================================================================
+	// Run lifecycle: restart and hunt phase
+	// =====================================================================
 	// Puts everything a run touches back to its authored state. No file
 	// reload -- every "authored" value was captured in localInit(), so a
 	// restart can't disagree with the scene the game started from.
@@ -4795,37 +4987,9 @@ class Castlescape : public BaseProject {
 		}
 	}
 
-	// --- F11 fullscreen toggle ---------------------------------------------
-	// Starter.hpp forces GLFW_RESIZABLE=FALSE, but glfwSetWindowMonitor() still
-	// works: switching monitors fires GLFW's framebuffer-resize callback, which
-	// makes BaseProject recreate the swapchain and call onWindowResize() for us.
-	bool fullscreen = false;
-	bool f11WasDown = false;
-	int savedWinX = 0, savedWinY = 0, savedWinW = 0, savedWinH = 0;
-
-	void toggleFullscreen() {
-		if(!fullscreen) {
-			glfwGetWindowPos(window, &savedWinX, &savedWinY);
-			glfwGetWindowSize(window, &savedWinW, &savedWinH);
-			GLFWmonitor* mon = glfwGetPrimaryMonitor();
-			const GLFWvidmode* mode = glfwGetVideoMode(mon);
-			glfwSetWindowMonitor(window, mon, 0, 0,
-			                     mode->width, mode->height, mode->refreshRate);
-			fullscreen = true;
-		} else {
-			glfwSetWindowMonitor(window, nullptr,
-			                     savedWinX, savedWinY, savedWinW, savedWinH, 0);
-			fullscreen = false;
-		}
-	}
-
-	// Edge-triggered: fires once per F11 press.
-	void pollFullscreenToggle() {
-		bool f11Down = glfwGetKey(window, GLFW_KEY_F11) == GLFW_PRESS;
-		if(f11Down && !f11WasDown) toggleFullscreen();
-		f11WasDown = f11Down;
-	}
-
+	// =====================================================================
+	// GameLogic(): input, physics and interaction
+	// =====================================================================
 	float GameLogic() {
 		// Camera FOV-y, Near Plane and Far Plane
 		const float FOVy = glm::radians(45.0f);
@@ -4836,6 +5000,7 @@ class Castlescape : public BaseProject {
 		// FOV degrees rotated per second
 		const float ROT_SPEED = 90.0f;
 
+		// ---- Frame timing and input ----
 		// Integration with the timers and the controllers
 		float deltaT;
 		glm::vec3 m = glm::vec3(0.0f), r = glm::vec3(0.0f);
@@ -4912,6 +5077,7 @@ class Castlescape : public BaseProject {
 			fire = false;
 		}
 
+		// ---- Projection and camera orientation ----
 		// Projection
 		glm::mat4 Prj = glm::perspective(FOVy, Ar, nearPlane, farPlane);
 		Prj[1][1] *= -1;
@@ -4939,6 +5105,7 @@ class Castlescape : public BaseProject {
 		glm::vec3 right = glm::normalize(glm::cross(front, worldUp));
 		glm::vec3 up = glm::normalize(glm::cross(right, front));
 
+		// ---- Restart, whiteout and the hunt clock ----
 		// Restart: only offered once a run has ended, edge-triggered so holding it doesn't restart every frame.
 		bool restartKey = glfwGetKey(window, GLFW_KEY_R);
 		if(runState != RunState::Running && restartKey && !restartKeyWasPressed && !overlayOpen()) {
@@ -4967,6 +5134,7 @@ class Castlescape : public BaseProject {
 			}
 		}
 
+		// ---- Movement, collision, interaction and ghosts ----
 		// Freeze all movement/physics while an overlay is open or a run has ended
 		if(!overlayOpen() && runState == RunState::Running) {
 			// Sprint -> Ctrl
@@ -4981,6 +5149,7 @@ class Castlescape : public BaseProject {
 				moveSpeed *= movement.sprintMultiplier;
 			}
 
+			// -- Walking, wall collision and jumping --
 			// WASD: m.y (fly) dropped, vertical movement only from jump/gravity.
 			// Flattened to yaw only (not pitched `front`), so looking up while pressing W doesn't push through the floor.
 			glm::vec3 frontFlat = glm::normalize(glm::vec3(front.x, 0.0f, front.z));
@@ -5042,6 +5211,7 @@ class Castlescape : public BaseProject {
 			}
 			jumpKeyWasPressed = fire;
 
+			// -- [E] interaction: doors, pickups, candles, torches --
 			// findGazedDoor picks the target; DOOR_INTERACT_RADIUS gates reachability.
 			nearbyDoor = -1;
 			{
@@ -5273,6 +5443,7 @@ class Castlescape : public BaseProject {
 				}
 			}
 
+			// -- Exit door, ghosts and the win/lose checks --
 			// How open the exit door is, 0 to 1, used to fade in its light as it swings.
 			// Stops updating once you win.
 			if(exitDoorIndex >= 0) {
@@ -5494,6 +5665,7 @@ class Castlescape : public BaseProject {
 			camVerticalVelocity += movement.gravity * deltaT;
 			camPos.y += camVerticalVelocity * deltaT;
 
+			// -- Ground collision --
 			// Floor collision: the tallest surface under the player's XZ
 			// within MAX_STEP_HEIGHT of the feet is the standing height (lets hole-shaped models be walked through).
 			if(cheats.collisionEnabled) {
@@ -5550,6 +5722,7 @@ class Castlescape : public BaseProject {
 			}
 		}
 
+		// ---- Eye smoothing, walk bob and the view matrix ----
 		// Exponential decay: never overshoots, no "still stepping" state.
 		eyeStepOffset *= std::exp(-deltaT / EYE_SMOOTH_TAU);
 
@@ -5614,6 +5787,7 @@ class Castlescape : public BaseProject {
 		}
 		dbgCamWasOn = cheats.debugCam;
 
+		// ---- Held items: wall tuck, torch and key placement ----
 		// Camera-space basis for anything rigidly attached to the view (held
 		// torch, held key): right/up/-front columns, eyePos translation.
 		glm::mat4 camWm = glm::mat4(
