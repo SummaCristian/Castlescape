@@ -1709,6 +1709,9 @@ class Castlescape : public BaseProject {
 	static constexpr float ESCAPE_FLASH_SECONDS = 1.6f;
 	static constexpr float ESCAPE_EXPOSURE_GAIN = 7.0f;
 	static constexpr float ESCAPE_BLOOM_GAIN = 3.0f;
+	// Whiteout ramp once the exit door opens (see below); slower than
+	// ESCAPE_FLASH_SECONDS since the door swing itself is under a second.
+	static constexpr float EXIT_DOOR_FLASH_SECONDS = 2.5f;
 
 	// =====================================================================
 	// Spawn pose, stepping and movement state
@@ -5114,14 +5117,22 @@ class Castlescape : public BaseProject {
 		}
 		restartKeyWasPressed = restartKey;
 
-		// Whiteout ramped here, not in the frozen-movement block, since it
-		// must keep running after the run ends. Held while an overlay is open.
+		// Whiteout ramp. Kept running after the run ends, and also while still
+		// Running if the exit door is open. Held while an overlay is open.
 		if(!overlayOpen()) {
-			float flashTarget = (runState == RunState::Escaped) ? 1.0f : 0.0f;
-			if(flashTarget > escapeFlash) {
+			bool exitDoorOpen = exitDoorIndex >= 0 && doors[exitDoorIndex].open;
+			if(runState == RunState::Escaped) {
 				escapeFlash = std::min(escapeFlash + deltaT / ESCAPE_FLASH_SECONDS, 1.0f);
+			} else if(runState == RunState::Running && exitDoorOpen) {
+				escapeFlash = std::min(escapeFlash + deltaT / EXIT_DOOR_FLASH_SECONDS, 1.0f);
 			} else {
-				escapeFlash = flashTarget;
+				escapeFlash = 0.0f;
+			}
+
+			// Ramp finished with the door open: end the run, same as reaching the exit box.
+			if(runState == RunState::Running && exitDoorOpen && escapeFlash >= 1.0f) {
+				runState = RunState::Escaped;
+				std::cout << "[run] escaped (door opened)\n";
 			}
 		}
 
