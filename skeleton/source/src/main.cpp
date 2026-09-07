@@ -697,7 +697,7 @@ class Castlescape : public BaseProject {
 	static constexpr float PICKUP_AIM_RADIUS = 0.35f;		// tight, they're small props
 
 	// Base half-angle of the aiming cone, before an object's aim radius widens it. Shared by doors/pickups.
-	static constexpr float GAZE_CONE_DEG = 7.0f;
+	static constexpr float GAZE_CONE_DEG = 9.0f;
 
 	// Instance the crosshair rests on within interact range, or nullptr.
 	// Resolved once per frame in GameLogic(), read by updateUniformBuffer() for ubo.glow.
@@ -1099,9 +1099,9 @@ class Castlescape : public BaseProject {
 	// A candle needs no list of its own: it IS a TorchFlame authored unlit, so
 	// `nearbyCandle` indexes torchFlames. 3D radii like a pickup's, tighter
 	// since lighting one means holding a torch close.
-	static constexpr float CANDLE_INTERACT_RADIUS = 2.5f;
-	static constexpr float CANDLE_LOOK_DISTANCE = 5.0f;
-	static constexpr float CANDLE_AIM_RADIUS = 0.35f;	// tight, the wick is small
+	static constexpr float CANDLE_INTERACT_RADIUS = 3.5f;
+	static constexpr float CANDLE_LOOK_DISTANCE = 6.5f;
+	static constexpr float CANDLE_AIM_RADIUS = 0.55f;	// the wick is small, but don't demand pixel-perfect aim
 	int nearbyCandle = -1;		// index into `torchFlames` of the unlit candle in range, or -1
 
 	// Index into `torchFlames` of the unlit candle aimed at within look range,
@@ -1126,9 +1126,12 @@ class Castlescape : public BaseProject {
 
 	// Wall-torch lighting mirrors the candle interaction: aim at a burning wall
 	// torch with the (unlit) held torch and press [E] to light it.
-	static constexpr float WALL_TORCH_INTERACT_RADIUS = 3.0f;
-	static constexpr float WALL_TORCH_LOOK_DISTANCE = 6.0f;
-	static constexpr float WALL_TORCH_AIM_RADIUS = 0.6f;
+	// INTERACT_RADIUS is measured horizontally (XZ) in GameLogic(), since wall
+	// torches mount well above eye level and a 3D check would spend most of the
+	// budget on the vertical gap, forcing the player to stand unnaturally close.
+	static constexpr float WALL_TORCH_INTERACT_RADIUS = 4.0f;
+	static constexpr float WALL_TORCH_LOOK_DISTANCE = 8.0f;
+	static constexpr float WALL_TORCH_AIM_RADIUS = 1.0f;
 	int nearbyWallTorch = -1;	// index into `torchFlames` of the burning wall torch in range, or -1
 
 	// Non-negative only while the held torch is unlit and in hand.
@@ -5063,9 +5066,8 @@ class Castlescape : public BaseProject {
 				if(gazed >= 0) {
 					const TorchFlame &tf = torchFlames[gazed];
 					float dx = camPos.x - tf.anchorWorld.x;
-					float dy = camPos.y - tf.anchorWorld.y;
 					float dz = camPos.z - tf.anchorWorld.z;
-					float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+					float dist = std::sqrt(dx * dx + dz * dz);	// XZ only, see WALL_TORCH_INTERACT_RADIUS
 					if(dist < WALL_TORCH_INTERACT_RADIUS) {
 						nearbyWallTorch = gazed;
 					}

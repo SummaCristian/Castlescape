@@ -231,7 +231,7 @@ TORCHES = [
 # raccoglibili
 PICKUPS = [
     ("hbKeyIron",   "Key", (9.6,   1.28, 10.7),  0.0032),   # hub, posata dentro un piatto sul tavolo
-    ("raBook",      "Book", (14.4,  1.22, -25.2), 1.0),     # room A, sullo scrittoio
+    ("raBook",      "Book", (14.4,  1.22, -25.55), 1.0),    # room A, sullo scrittoio (dietro il piatto)
     ("rbKeyBronze", "Key", (-33.0, 0.05, -11.0), 0.0032),   # room B, a terra nell'angolo NO buio
     ("rcKeyGold",   "Key", (18.0,  1.12, 43.2),  0.0032),   # room C, sopra il barile rcStep3
 ]
@@ -254,10 +254,10 @@ PROPS = [
     # ============================ HUB: sala del banchetto (3x3, rimpicciolita) =
     ("hbCarpet",  "Carpet", 10.8, 0.03, 10.8, 0, 1.0),
     ("hbTable",   "Table",  10.8, 0.26, 10.8, 0, None),
-    ("hbChairW",  "Chair",  8.9,  0.02, 10.8, 90, None),
-    ("hbChairE",  "Chair",  12.7, 0.02, 10.8, -90, None),
-    ("hbChairN",  "Chair",  10.8, 0.02, 9.1,  0, None),
-    ("hbChairS",  "Chair",  10.8, 0.02, 12.5, 180, None),
+    ("hbChairW",  "Chair",  8.9,  0.02, 10.8, 180, None),
+    ("hbChairE",  "Chair",  12.7, 0.02, 10.8, 0, None),
+    ("hbChairN",  "Chair",  10.8, 0.02, 9.1,  90, None),
+    ("hbChairS",  "Chair",  10.8, 0.02, 12.5, 270, None),
     ("hbPlate1",  "Plate",  10.8, TTOP, 10.4, 90, None),
     ("hbCandleC", "Candle", 10.8, TTOP, 10.8, 0, None),
     ("hbBarNW",   "Barrel", 4.0,  0.02, 4.5, 15, None),
@@ -267,8 +267,8 @@ PROPS = [
     # ============================ ROOM A: lo studio (invariata) ============
     ("raCarpet",  "Carpet", 14.4, 0.03, -25.2, 0, 1.0),
     ("raTable",   "Table",  14.4, 0.26, -25.2, 0, None),
-    ("raChair",   "Chair",  14.4, 0.02, -22.7, 180, None),
-    ("raChair2",  "Chair",  16.6, 0.02, -25.2, -90, None),
+    ("raChair",   "Chair",  14.4, 0.02, -22.7, 270, None),
+    ("raChair2",  "Chair",  16.6, 0.02, -25.2, 0, None),
     ("raCandleL", "Candle", 13.5, TTOP, -25.4, 0, None),
     ("raCandleR", "Candle", 15.3, TTOP, -25.0, 0, None),
     ("raPlate",   "Plate",  14.4, TTOP, -24.75, 0, None),
@@ -291,7 +291,7 @@ PROPS = [
     ("rcSkull1",  "Skull",  5.6,  0.02, 40.4, 25, None),
     # ============================ corridoi ================================
     ("iaBar",     "Barrel", -18.2, 0.02, 15.4, 10, None),
-    ("iaSkull",   "Skull",  -14.6, 0.02, 20.6, -25, None),
+    ("iaSkull",   "Skull",  -14.6, 0.02, 19.9, -25, None),
     ("b1Bar",     "Barrel", 8.6,  0.02, -12.2, 0, None),
     ("b2Bar",     "Barrel", -11.0, 0.02, 4.8, -15, None),
     ("b3Bar",     "Barrel", 8.6,  0.02, 26.8, 0, None),
@@ -314,7 +314,8 @@ BANNERS = [
 
 # camera di spawn: estremita' ovest dell'alley, guarda +X lungo il corridoio
 SPAWN = (TS * -3 + 1.4, 1.8, TS * 2 + 3.6)      # (-20.2, 1.8, 18.0)
-HAND_TORCH = ("handTorch", (-28.8, -0.12, 0.0), [0.0, 35.0, -90.0])
+# nell'alley di spawn (ia), poco davanti alla camera di partenza, prima del barile iaJump
+HAND_TORCH = ("handTorch", (-18.5, -0.12, 18.0), [0.0, 35.0, -90.0])
 
 
 def wall_mount(id, key, i, j, side, along, y, embed, rot_add=0, scale=None):
