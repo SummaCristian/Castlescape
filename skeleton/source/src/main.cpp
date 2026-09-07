@@ -27,18 +27,8 @@
 #include "custom/DebugLines.hpp"
 #include "custom/HuntCycle.hpp"
 
-// The scene is data-driven: these files in assets/scenes/ are read at startup,
-// so it can be changed without touching C++.
-//
-//   scene.json      which models exist and where they are placed
-//   colliders.json  collision shapes for models an auto-fitted box gets wrong
-//   materials.json  surface parameters, one entry per model
-//   lights.json     the light sources and the ambient light
-//   flames.json     which models get a flame, and its shape
-//   gameplay.json   hunt timings, ghost patrols, and where the run is won
-//
-// Shaders live in source/shaders/, one folder per job. OVERVIEW.md and notes.md
-// at the repo root explain the reasoning behind all of it.
+// Scene is data-driven: assets/scenes/*.json (scene, colliders, materials,
+// lights, flames, gameplay). Shaders in source/shaders/. See OVERVIEW.md.
 
 // The uniform buffer object used in this example
 struct UniformBufferObject {
@@ -55,69 +45,38 @@ struct UniformBufferObject {
 	float F0;					// reflectance seen head-on
 	float k;					// diffuse share of the BRDF
 	int flatNormals;			// 1: derive the face normal in the shader
-	// 1: use a vertical surface's hemispheric ambient instead of this normal's.
-	// For interiors, where the sky/ground blend has no meaning.
-	int interiorAmbient;
-	// Seconds since startup. Rides the per-object UBO rather than the global one,
-	// which would shift LightData[]. Only the Flame shaders read it.
+	int interiorAmbient;		// 1: use hemispheric ambient for a vertical (interior) surface
+	// Seconds since startup; only Flame shaders read it. Per-object, not global,
+	// to avoid shifting LightData[]'s offset.
 	float time;
-	// This model's share of indirect light. Negative means inherit
-	// gubo.ambientWeight, which is the common case.
-	float ambientWeight;
-	// 0..1 focus highlight for the instance being looked at. Per-INSTANCE, unlike
-	// the fields above, set against gazedInstance in updateUniformBuffer().
-	float glow;
-	// 1: shade as a metal -- no diffuse lobe, and an indirect term that reflects
-	// the room instead of scattering it.
-	int metallic;
+	float ambientWeight;		// this model's indirect-light share; negative = inherit gubo.ambientWeight
+	float glow;					// 0..1 focus highlight, per-instance, set from gazedInstance
+	int metallic;				// 1: no diffuse lobe, indirect term reflects the room instead
 };
 
-// Everything that's the same for every object drawn this frame. Split from the
-// per-instance UBO by change frequency: this is written once, that one 23 times.
-// Fixed-size light array plus a live count, since a uniform block needs a
-// compile-time size.
+// Per-frame data shared by every draw (vs. the per-instance UBO above).
+// Fixed-size light array + live count, since uniform blocks need a compile-time size.
 struct GlobalUniformBufferObject {
 	alignas(16) glm::vec3 eyePos;
 	int lightCount;
-	// Hemispheric ambient. See AmbientLight in SceneLights.hpp.
-	alignas(16) glm::vec3 ambientUpper;
+	alignas(16) glm::vec3 ambientUpper;	// hemispheric ambient, see AmbientLight in SceneLights.hpp
 	alignas(16) glm::vec3 ambientLower;
 	alignas(16) glm::vec3 ambientDir;
-	// LIGHT_DEBUG_* bits from LightConstants.glsl, built from the lighting
-	// cheats below. Sits in the 4 bytes std140 pads ambientDir with, exactly
-	// like lightCount after eyePos, so the light array still starts at 64.
-	int debugFlags;
-	// Seconds since startup, for the held torch's flame (Flame.hpp): the one
-	// thing in the frame that animates on the GPU rather than being computed
-	// here and uploaded.
-	float time;
-	// The scene's default share of indirect light, 0..1, from lights.json.
-	// Rides in the same padding before lights[] that time and debugFlags do,
-	// so the array's offset is unchanged.
-	float ambientWeight;
-	// How much of a point/spot light's radiance comes back as indirect light.
-	// See AmbientLight::bounce in SceneLights.hpp.
-	//
-	// ambientDir ends at 60, debugFlags fills that slot, and
-	// time/ambientWeight/this take 64, 68 and 72.
-	float ambientBounce;
-	// Exponential-squared distance fog (fogFactor = exp(-(fogDensity*dist)^2)
-	// in CookTorrance.frag), meant to fade geometry toward black before the
-	// GEOM_CULL_* visibility cull above stops drawing it, rather than let it
-	// pop out of view -- see updateUniformBuffer() for how this is derived
-	// from GEOM_CULL_CONE_DIST. The one scalar that still fits here for
-	// free: ambientBounce ends at 76, and the array's own alignas(16) starts
-	// it at 80 either way. A second one here would move lights[] and every
-	// offset in four shaders with it.
-	float fogDensity;
+	int debugFlags;			// LIGHT_DEBUG_* bits from LightConstants.glsl
+	float time;					// seconds since startup, animates the held torch's flame on the GPU
+	float ambientWeight;		// default indirect-light share, 0..1, from lights.json
+	float ambientBounce;		// point/spot radiance returned as indirect light; see AmbientLight::bounce
+	// IMPORTANT: debugFlags/time/ambientWeight/ambientBounce/fogDensity fill std140's
+	// padding before lights[] (offsets 60/64/68/72/76); lights[] itself is alignas(16)-
+	// pinned to 80. Adding another scalar here shifts lights[] and every shader offset.
+	float fogDensity;			// exp(-(fogDensity*dist)^2) distance fog, see CookTorrance.frag
 	LightData lights[MAX_LIGHTS];
 };
 
-// One torch's cube shadow CAPTURE data (ShadowCube.vert/frag, PShadowCube),
-// set 1 there. A uniform buffer and not a push constant, re-mapped every frame
-// for every torch including the static ones: the main command buffer is
-// recorded once per swapchain image and reused, so a push constant would stay
-// frozen at recording time -- fatal for the held torch, which moves each frame.
+// One torch's cube shadow capture data (ShadowCube.vert/frag, PShadowCube, set 1).
+// IMPORTANT: a UBO, not a push constant -- the command buffer is recorded once
+// per swapchain image and reused, so a push constant would freeze at record time,
+// which breaks the held torch since it moves every frame.
 struct ShadowCubeUniformBufferObject {
 	alignas(16) glm::mat4 lightViewProj[6];
 	alignas(16) glm::vec4 lightPos;	// xyz used, w is padding
@@ -137,9 +96,7 @@ struct Vertex {
 	glm::vec2 UV;
 };
 
-// Shared by all four post passes (bright pass, both blur directions,
-// composite). Each fills the fields it cares about and leaves the rest unread.
-// No alignas(): two vec2s then scalars is already what std140 lays out.
+// Shared by all four post passes; each fills only the fields it needs.
 struct PostUniformBufferObject {
 	glm::vec2 texelSize;	// 1/width, 1/height of the SOURCE texture
 	glm::vec2 blurDir;		// (1,0) or (0,1); read by BloomBlur.frag only
@@ -149,26 +106,20 @@ struct PostUniformBufferObject {
 	float exposure;			// composite
 	int debugFlags;			// composite: LIGHT_DEBUG_NO_TONEMAP
 	float time;
-	// composite: 0 normally, ramping to 1 as the player escapes, blending the
-	// frame towards white. A term of its own, not more `exposure`: the tone
-	// map approaches 1 asymptotically, so exposure alone only greys the frame
-	// out. The exposure ramp blows the scene out; this finishes it.
+	// composite: ramps 0->1 as the player escapes, blends frame to white.
+	// Separate from exposure because the tonemap only approaches 1 asymptotically.
 	float escapeFlash;
-	// composite: 0 normally, ramping to 1 as the camera sinks into a ghost.
-	// See SPECTRAL_VEIL_OUTER.
-	float spectralVeil;
+	float spectralVeil;		// composite: ramps 0->1 as camera sinks into a ghost, see SPECTRAL_VEIL_OUTER
 };
 
-// A full-screen quad vertex for those passes. Only a position: Post.vert
-// derives its UV from it.
+// A full-screen quad vertex; Post.vert derives UV from position alone.
 struct PostVertex {
 	glm::vec2 pos;
 };
 
-// Cheap 1D value noise for the torch fire envelope in updateUniformBuffer().
-// On the CPU because the flicker is shared by the flame, its sparks and the
-// cast point light (TorchFlame), and only the CPU sees all three. Integer
-// hash, not fract(sin(x)*...): that one decorrelates badly at small inputs.
+// Cheap 1D value noise for the torch fire envelope, computed on the CPU since
+// flame, sparks and point light all need the same flicker. Integer hash, not
+// fract(sin(x)*...): that one decorrelates badly at small inputs.
 static float fireHash(int32_t n) {
 	uint32_t h = (uint32_t)n;
 	h = (h ^ 61u) ^ (h >> 16);
@@ -208,170 +159,125 @@ class Castlescape : public BaseProject {
 
 	// Vertex formants, Pipelines [Shader couples] and Render passes
 	VertexDescriptor VD;
-	// The scene pass. Renders into an offscreen FLOATING-POINT colour
-	// attachment, not the swapchain, which is what makes bloom possible. See
-	// buildHdrAttachments().
+	// The scene pass. Renders into an offscreen floating-point colour
+	// attachment (not the swapchain), which is what makes bloom possible.
 	RenderPass RP;
 	Pipeline P;
 
-	// The ghosts' pipeline, drawn into the SAME pass as P right after it.
-	// Separate because a ghost is not a surface: Spectral.frag computes no BRDF
-	// and reads no shadow map, and it needs alpha blending, a
-	// pipeline-creation flag. Shares P's vertex shader and DSLlocal, so the
-	// ghosts ride the same per-instance UBO as every other prop.
+	// The ghosts' pipeline, same pass as P right after it. Separate because a
+	// ghost needs alpha blending and no BRDF/shadow sampling (Spectral.frag).
 	Pipeline Pspectral;
 
-	// The ghosts' DEPTH PREPASS (SpectralDepth.frag), drawn over the same
-	// instances immediately before Pspectral. It writes the depth of the nearest
-	// ghost surface and leaves the colour attachment untouched, so the colour
-	// pass can reject the ghost's own interior -- the feet inside the robe --
-	// instead of blending it under the body.
-	//w
-	// Same DSLs as Pspectral, and the default VK_COMPARE_OP_LESS rather than
-	// Pspectral's LESS_OR_EQUAL, which is the whole point: LESS is what leaves
-	// the minimum in the depth buffer.
+	// Ghosts' depth prepass (SpectralDepth.frag), run right before Pspectral.
+	// IMPORTANT: uses VK_COMPARE_OP_LESS (not Pspectral's LESS_OR_EQUAL) so it
+	// writes the nearest ghost surface's depth, letting the colour pass reject
+	// the ghost's own interior instead of blending it under the body.
 	Pipeline PspectralDepth;
 
-	// Shadow mapping, CUBE branch (the torches): a real 6-face cube map per
+	// Shadow mapping, cube branch (the torches): a real 6-face cube map per
 	// point light (CubeShadowMap.hpp: linear-distance storage, one flat bias).
 	//
-	// RPShadowCubeCompat exists ONLY to mint a VkRenderPass compatible with the
-	// per-face framebuffers -- createRenderPass() is private, so a full
-	// RenderPass builds one and we read .renderPass back out. Its own
-	// attachment is never used. The per-face framebuffers are built by hand in
-	// createCubeShadowMaps(): they attach single-layer views into a 6-layer
-	// cube image, which FrameBufferAttachment can't do.
+	// IMPORTANT: RPShadowCubeCompat exists only to mint a VkRenderPass compatible
+	// with the per-face framebuffers -- createRenderPass() is private, so a full
+	// RenderPass builds one and we read .renderPass back out; its own attachment
+	// is never used. The per-face framebuffers are built by hand in
+	// createCubeShadowMaps() since FrameBufferAttachment can't attach a
+	// single-layer view into a 6-layer cube image.
 	RenderPass RPShadowCubeCompat;
 	Pipeline PShadowCube;
 	CubeShadowMap torchCube[NUM_SHADOW_CUBES];
-	// Shared by every torch's cube view: all R32_SFLOAT at one resolution, so
-	// one CLAMP_TO_EDGE/linear sampler suffices. Starter.hpp's TextureSampler
-	// rather than a raw VkSampler.
+	// Shared by every torch's cube view: all R32_SFLOAT at one resolution.
 	TextureSampler cubeShadowSampler;
 
-	// set 1 for the cube capture pass -- one UBO per cube slot, holding that
-	// torch's 6 face view-projections plus its world position. Its own
-	// DescriptorSet member: per slot, not per scene instance.
+	// set 1 for the cube capture pass: one UBO per cube slot (6 face
+	// view-projections + world position).
 	DescriptorSetLayout DSLshadowCubeCapture;
 	DescriptorSet DSshadowCube[NUM_SHADOW_CUBES];
 
-	// set 2 for the main pass's shadow sampling: one sampler binding per
-	// torch cube map, read by CookTorrance.frag's shadowFactor().
-	// DSLlocal/DSLglobal stay set 1/0.
-	//
-	// No DescriptorSet member of its own: this one rides Scene's ordinary
-	// per-instance machinery, so every CookTorrance instance gets an identical,
-	// redundant copy. Wasteful but cheap at this instance count, and it avoids
-	// hand-rolling a THIRD way to bind a descriptor set.
+	// set 2 for the main pass's shadow sampling, read by CookTorrance.frag's
+	// shadowFactor(). No DescriptorSet member: rides Scene's per-instance
+	// machinery, so every instance gets a redundant but cheap copy rather than
+	// a third hand-rolled binding path.
 	DescriptorSetLayout DSLshadowSample;
-	// The six face view-projection matrices for each torch's cube map,
-	// index-matched [LightData::shadowIndex][face] (face order: see
-	// CUBE_FACE_DIR in CubeShadowMap.hpp). Computed once, same reasoning.
+	// Six face view-projections per torch cube, index-matched
+	// [LightData::shadowIndex][face] (see CUBE_FACE_DIR in CubeShadowMap.hpp).
 	glm::mat4 torchFaceMatrices[NUM_SHADOW_CUBES][6];
 	// World position of each cube-mapped torch, index-matched to shadowIndex.
-	// Handed to the push constant by populateCommandBuffer().
 	glm::vec3 torchLightPos[NUM_SHADOW_CUBES];
-	// How many of the above are populated -- fewer than NUM_SHADOW_CUBES if
-	// lights.json authors fewer shadow point lights than slots. Set by
-	// computeShadowMatrices(), bumped in localInit() for the held torch.
+	// How many of the above are populated (lights.json may author fewer shadow
+	// point lights than slots).
 	int activeCubeShadows = 0;
-	// SHADOW_CUBE_RES rather than a literal: CookTorrance.frag derives the cube
-	// path's depth bias from the world size of one texel of this map, so the
-	// shader has to know the same number. See LightConstants.glsl.
+	// Must match SHADOW_CUBE_RES in LightConstants.glsl: CookTorrance.frag
+	// derives the cube path's depth bias from this map's texel size.
 	static constexpr int SHADOW_MAP_RES = SHADOW_CUBE_RES;
-	// Far clip for every torch cube map, and the clear value each face is reset
-	// to, so "nothing drawn" reads as unlit. This must stay past anything
-	// shadowFromCube() can be asked about, or a wall beyond it takes the clear
-	// value as its nearest occluder and reads as falsely shadowed.
+	// IMPORTANT: far clip and clear value for every torch cube face. Must stay
+	// past anything shadowFromCube() can query, or geometry beyond it reads the
+	// clear value as its nearest occluder and renders falsely shadowed.
 	static constexpr float TORCH_SHADOW_FAR_CONST = 60.0f;
-	// Near clip: close enough that only the torch fixture falls inside it. A
-	// member because updateHandTorchShadow() needs the same number every frame.
+	// Near clip: close enough that only the torch fixture falls inside it.
 	static constexpr float TORCH_SHADOW_NEAR_CONST = 0.05f;
-	// The slot reserved for the held torch, which never goes through lights.json:
-	// its Wm means nothing until GameLogic() starts rewriting it every frame, so
-	// it can get neither a fixed shadowIndex nor fixed face matrices.
+	// Slot reserved for the held torch, which never goes through lights.json
+	// (its Wm is rewritten live, so it can't get a fixed shadowIndex).
 	static constexpr int HAND_TORCH_SHADOW_INDEX = NUM_SHADOW_CUBES - 1;
 
-	// Start of the DYNAMIC pool: everything between lights.json's fixed slots and
-	// the held torch's reserved last one. Counted at startup, not a literal, so
-	// it survives a change to lights.json's own torch count.
+	// Start of the dynamic pool (between lights.json's fixed slots and the held
+	// torch's reserved last one), counted at startup.
 	int dynamicShadowSlotBase = 0;
-	// Index into torchFlames for whichever flame holds each dynamic slot, or -1
-	// if empty. Sized NUM_SHADOW_CUBES for simplicity; only the dynamic range
-	// is ever touched.
+	// Index into torchFlames for whichever flame holds each dynamic slot, -1 if empty.
 	std::array<int, NUM_SHADOW_CUBES> dynamicSlotOccupant{};
 
-	// The occupant identity each slot last rendered its six faces for. Diffed
-	// against the current one every frame; a mismatch queues all six faces.
-	// Static point lights therefore render exactly once for the program's life.
-	// SHADOW_SLOT_UNSET means never rendered, which every slot starts as: the
-	// image would otherwise stay in VK_IMAGE_LAYOUT_UNDEFINED, which a
-	// samplerCube descriptor may not be bound against. Hence one render even for
-	// a slot that stays empty forever.
+	// Occupant identity each slot last rendered for; a mismatch queues all six
+	// faces, so static point lights render exactly once for the program's life.
+	// IMPORTANT: SHADOW_SLOT_UNSET forces one render even for a slot that stays
+	// empty forever -- otherwise its image stays VK_IMAGE_LAYOUT_UNDEFINED,
+	// which a samplerCube descriptor may not be bound against.
 	static constexpr int SHADOW_SLOT_UNSET = -2;
 	std::array<int, NUM_SHADOW_CUBES> lastRenderedOccupant;
-	// What the diffs found stale this frame, as a bitmask of FACES per slot.
-	// Per face and not per slot because a cube map is six independent images: at
-	// 1024^2 R32 each, redrawing all six to fix one is mostly clear cost. A slot
-	// whose LIGHT changed still gets all six -- nothing about its old content
-	// survives moving the camera it was shot from.
+	// Bitmask of stale FACES per slot (not per slot) since a cube map is six
+	// independent images and redrawing all six to fix one is mostly clear cost.
 	std::array<uint8_t, NUM_SHADOW_CUBES> pendingFaceMask{};
 	static constexpr uint8_t ALL_CUBE_FACES = 0x3F;
 
 	// ---- The per-frame cube-shadow submission ----
-	// Its own pool: the framework's commandPool has flags = 0, and a buffer from
-	// a pool without RESET_COMMAND_BUFFER_BIT may not be re-recorded.
+	// IMPORTANT: its own pool -- the framework's commandPool has flags = 0, and
+	// a buffer from a pool without RESET_COMMAND_BUFFER_BIT may not be re-recorded.
 	VkCommandPool shadowCommandPool = VK_NULL_HANDLE;
-	// One buffer and fence per swapchain image, since re-recording a buffer the
-	// GPU is still reading is undefined behaviour. Ours rather than
-	// inFlightFences: those are signalled by the MAIN submit, and a later submit
-	// finishing does not prove an earlier one did.
+	// One buffer and fence per swapchain image (re-recording a buffer the GPU
+	// still reads is UB). Own fences, not inFlightFences: those are signalled by
+	// the main submit, which finishing doesn't prove an earlier shadow submit did.
 	std::vector<VkCommandBuffer> shadowCB;
 	std::vector<VkFence> shadowCBFence;
-	// Where the held torch's light was, and whether it was casting at all, when
-	// its cube was last captured. Its faces are only redrawn when one of the
-	// two changed (or a mover marked them), which is what turns a player
-	// standing still into no shadow work at all. The sentinel is a position
-	// nothing can occupy, so the first frame always captures.
+	// Held torch's light position/occupied state at its last capture; faces are
+	// only redrawn on change, so a stationary player costs no shadow work.
+	// Infinity sentinel forces a capture on the first frame.
 	glm::vec3 lastHandTorchCapturePos{std::numeric_limits<float>::infinity()};
 	bool lastHandTorchCaptureOccupied = false;
 
-	// The occupant diff only answers "did this slot's LIGHT change hands", which
-	// is enough while every occluder is nailed down. Ghosts and swinging doors
-	// are not, and with the sun gone the cube maps are the only shadow they cast.
-	//
-	// Candidates are the ghosts and door leaves, NOT every instance whose Wm
-	// changes (a spinning pickup key would re-render every slot near it
-	// forever). Filtered to the ones materials.json marks castsShadow, which
-	// today means the doors -- the ghosts cost more than their shadows are
-	// worth and are switched off in materials.json. Built once on first use.
+	// The occupant diff only catches "did this slot's light change hands" --
+	// not enough for ghosts/doors, which move while keeping the same light.
+	// Candidates are ghosts and door leaves (materials.json castsShadow), not
+	// every moving instance, to avoid re-rendering on every spinning pickup.
 	std::vector<Instance *> movingOccluders;
-	// Wm each of those had when a slot was last re-captured for it, so a mover
-	// standing still costs one mat4 compare and no draws.
+	// Wm each occluder had at its last capture, so a stationary mover is one
+	// mat4 compare and no draws.
 	std::vector<glm::mat4> movingOccluderWm;
 	bool moverListBuilt = false;
-	// Which faces had a mover at their last capture. Needed for the faces a mover
-	// LEAVES: nothing about a ghost's new position tells the face it walked out
-	// of that it still has the ghost painted on it.
+	// Faces that had a mover at last capture -- needed to clear the faces a
+	// mover walked OUT of, since its new position alone doesn't tell us that.
 	std::array<uint8_t, NUM_SHADOW_CUBES> slotFaceHadMover{};
-	// How far each slot's light still matters, derived from its OWN falloff
-	// rather than picked as a radius. Written wherever torchLightPos[] is.
+	// How far each slot's light still matters, from its own falloff.
 	std::array<float, NUM_SHADOW_CUBES> torchShadowReach{};
 
-	// Time between updateDynamicShadowSlots() calls: the candidates are static,
-	// only the player moves. Starts equal to the interval so the first frame
-	// fires it immediately, rather than rendering uninitialised matrices.
+	// Interval between updateDynamicShadowSlots() calls. Starts equal to the
+	// interval so it fires on frame one instead of using uninitialised matrices.
 	float shadowReassignTimer = 0.3f;
 	static constexpr float SHADOW_REASSIGN_INTERVAL = 0.3f;
-	// A waiting candidate must beat the current occupant by this factor to take
-	// its slot. Without a margin a player standing on the boundary between two
-	// candidates would flip it, and force a fresh render, on every re-evaluation.
+	// A waiting candidate must beat the occupant by this factor to take its
+	// slot, so standing on the boundary between two candidates doesn't flip
+	// (and re-render) on every re-evaluation.
 	static constexpr float SHADOW_SWAP_MARGIN = 1.15f;
-	// Reach margin an EXISTING shadow-cube occupant is judged by in the
-	// view-cone cull (lightReachesViewCone), vs. 1.0 for a fresh claimant. Same
-	// job SHADOW_SWAP_MARGIN does for the distance contest: a torch sitting on
-	// the cone boundary while the player turns past it shouldn't surrender and
-	// re-render its cube every re-evaluation.
+	// Same margin, for the view-cone cull: an existing occupant near the cone
+	// edge shouldn't surrender and re-render every re-evaluation.
 	static constexpr float SHADOW_VIEW_KEEP_MARGIN = 1.15f;
 
 	// Models, textures and Descriptors (values assigned to the uniforms)
@@ -380,36 +286,30 @@ class Castlescape : public BaseProject {
 	// ---- HDR post-processing chain ----
 	// scene (RGBA16F, MSAA + resolve) -> bright pass -> blur H -> blur V (all
 	// quarter res) -> composite (swapchain: scene + bloom, then tone map).
-	//
-	// All recorded into the "main" buffer in that order; ordering between them
-	// comes from ATDEP_SIMPLE's subpass dependencies, not manual barriers.
 	RenderPass RPbright, RPblurH, RPblurV, RPcomposite;
 	VertexDescriptor VDpost;
-	// One layout for the passes that read a single texture, one for the
-	// composite, which reads the scene and the bloom result.
+	// One layout for single-texture passes, one for composite (scene + bloom).
 	DescriptorSetLayout DSLpost1, DSLpost2;
 	Pipeline Pbright, PblurH, PblurV, Pcomposite;
 	DescriptorSet DSbright, DSblurH, DSblurV, DScomposite;
 	Model *Mpost = nullptr;
 
-	// The attachment descriptions each pass is built from. Members, not locals:
-	// RenderPass::init copies the vector but the per-attachment code points
-	// back at the copy for the pass's lifetime, and onWindowResize() rebuilds
-	// them at the new size.
+	// Attachment descriptions each pass is built from. Members, not locals:
+	// RenderPass::init keeps pointers into this vector's storage for the pass's
+	// lifetime, and onWindowResize() rebuilds them at the new size.
 	std::vector<AttachmentProperties> hdrAtt, brightAtt, blurHAtt, blurVAtt, compositeAtt;
 
-	// The bloom chain runs at 1/BLOOM_DIV per axis. A fixed-width gaussian on a
-	// quarter-res image covers 4x more of the final picture, so this is how a
-	// cheap 9-tap kernel makes a wide soft halo.
+	// Bloom chain runs at 1/BLOOM_DIV per axis, so a cheap 9-tap gaussian on a
+	// quarter-res image still covers a wide soft halo in the final picture.
 	static constexpr int BLOOM_DIV = 4;
 
-	// The 3D scene renders at this fraction of the window resolution;
-	// Composite.frag upsamples it back. The UI stays at real resolution.
+	// 3D scene renders at this fraction of window resolution; Composite.frag
+	// upsamples it back. UI stays at real resolution.
 	float renderScale = 0.8f;
 
 	// Clamped to >= 1 (a minimised window can't ask for a zero-sized image).
-	// Takes the window size as a parameter -- onWindowResize() computes it from
-	// the NEW size before swapChainExtent catches up.
+	// Takes windowW as a parameter: onWindowResize() needs the NEW size before
+	// swapChainExtent catches up.
 	int renderWidth(int windowW) const {
 		return std::max(1, (int)std::lround(windowW * renderScale));
 	}
@@ -417,16 +317,14 @@ class Castlescape : public BaseProject {
 		return std::max(1, (int)std::lround(windowH * renderScale));
 	}
 
-	// MSAA sample count as a log2 level (0 -> 1x, 2 -> 4x), because the slider's
-	// fixed +/-1 step can't express the doubling Vulkan sample counts need.
+	// MSAA level as log2 (0 -> 1x, 2 -> 4x), since the slider's +/-1 step can't
+	// express the doubling Vulkan sample counts need.
 	float msaaLevel = 2.0f;
-	// Upper bound, from getMaxUsableSampleCount(): never offer 16x to a GPU
-	// that can't do it.
+	// Upper bound from getMaxUsableSampleCount(): never offer a level the GPU can't do.
 	float maxMsaaLevel = 2.0f;
 
-	// Replays a resize's rebuild path at the current window size, so only the
-	// internal render resolution changes. Skipped while a rebuild is pending:
-	// stacking a second target size once began a render pass against a size
+	// Replays the resize rebuild path at the current window size. Skipped while
+	// a rebuild is already pending, to avoid a render pass targeting a size
 	// newer than its framebuffer.
 	void applyRenderScaleChange() {
 		if(!framebufferResized) {
@@ -435,9 +333,7 @@ class Castlescape : public BaseProject {
 		}
 	}
 
-	// Shows the real pixel resolution beside the percentage. Reads
-	// renderWidth()/renderHeight(), so it can't drift from what is rendered.
-	// v is unused: this always formats the current scale.
+	// v is unused; always formats the current renderScale/renderWidth/renderHeight.
 	std::string formatRenderScale(float /*v*/) {
 		char buf[32];
 		snprintf(buf, sizeof(buf), "< %d%% (%dx%d) >",
@@ -446,9 +342,7 @@ class Castlescape : public BaseProject {
 		return std::string(buf);
 	}
 
-	// Converts the level back to a VkSampleCountFlagBits, then regenerates the
-	// attachment properties -- a sample-count change, unlike renderScale's plain
-	// width/height one, has to rebuild hdrAtt itself. Same pending guard.
+	// Unlike renderScale, a sample-count change has to rebuild hdrAtt itself.
 	void applyMsaaChange() {
 		if(!framebufferResized) {
 			msaaSamples = static_cast<VkSampleCountFlagBits>(1 << (int)std::lround(msaaLevel));
@@ -463,10 +357,8 @@ class Castlescape : public BaseProject {
 		return std::string(buf);
 	}
 
-	// Bright-pass threshold/knee in luminance. Above 1.0, not at it: a sunlit
-	// pale wall lands either side of 1.0 once sun and ambient are added, so 1.0
-	// haloed every bright surface. The flame writes ~6 and sparks higher, so
-	// only genuinely emissive things reach the bloom buffer.
+	// IMPORTANT: threshold set above 1.0 -- at 1.0 a sunlit pale wall haloes
+	// too, since it lands right at that luminance once sun+ambient are added.
 	static constexpr float BLOOM_THRESHOLD = 1.55f;
 	static constexpr float BLOOM_KNEE = 0.45f;
 	static constexpr float BLOOM_INTENSITY = 0.65f;
@@ -483,12 +375,10 @@ class Castlescape : public BaseProject {
 	// Flat-colored quads: background/highlight panel behind the cheat HUD's text.
 	UiQuad uiQuad;
 
-	// Flat-colored quad: the center-screen dot for aiming look-based
-	// interactions (GameLogic()'s gaze test). Its own UiQuad instance.
+	// Center-screen dot for aiming look-based interactions (GameLogic()'s gaze test).
 	UiQuad crosshair;
 
-	// (Re)builds the crosshair dot centered on the window. Called at init and
-	// on resize; its pixel position depends on screen size only.
+	// (Re)builds the crosshair dot centered on the window. Called at init and on resize.
 	void setCrosshairQuad() {
 		const float dotSize = 4.0f;
 		float cx = (float)windowWidth / 2.0f;
@@ -502,28 +392,19 @@ class Castlescape : public BaseProject {
 	// Toggle-based pause menu for the cheats below, opened/closed with L.
 	CheatHud hud;
 
-	// Its own UiQuad instance: dim overlay + button backgrounds behind the
-	// pause menu's text.
 	UiQuad pauseQuad;
-	// The pause menu: dims the screen and freezes GameLogic() while open
-	// (overlayOpen() gating). ESC toggles it.
+	// Dims the screen and freezes GameLogic() while open (overlayOpen() gating). ESC toggles it.
 	PauseMenu pauseMenu;
 
-	// Its own UiQuad instance: opaque backdrop + buttons for the launch screen.
 	UiQuad startScreenQuad;
-	// The launch screen: open from the first frame, so the app boots here
-	// instead of into the castle. Also reopened when Quit abandons a run.
-	// Folded into overlayOpen() like the pause menu.
+	// Launch screen: open from the first frame so the app boots here instead
+	// of into the castle. Reopened when Quit abandons a run.
 	StartScreen startScreen;
 
-	// Its own UiQuad instance: opaque backdrop + rows for the settings screen.
 	UiQuad settingsQuad;
-	// The settings screen: Render Scale / MSAA, the same two sliders CheatHud
-	// controls. Reachable from StartScreen's or PauseMenu's "Settings" button;
-	// settingsFromPause remembers which to reopen on Back. In overlayOpen().
+	// Render Scale / MSAA sliders, reachable from StartScreen or PauseMenu.
+	// settingsFromPause remembers which to reopen on Back.
 	SettingsMenu settingsMenu;
-	// True if settingsMenu was opened from PauseMenu (mid-run), false from
-	// StartScreen.
 	bool settingsFromPause = false;
 
 	// Other application parameters
@@ -532,32 +413,21 @@ class Castlescape : public BaseProject {
 	glm::mat4 ViewPrj;
 	glm::mat4 View;
 
-	// Free-look camera state (position + orientation), persisted across frames.
-	// Spawns inside the dungeon hall (dh), clear of the table and both torches,
-	// now that the castle courtyard is gone -- there's no outdoor approach
-	// to walk in from anymore.
+	// Free-look camera state, persisted across frames. Spawns inside the
+	// dungeon hall, facing +X down the hall toward the far door.
 	glm::vec3 camPos = glm::vec3(-20.2f, 1.8f, 18.0f);
-	// Yaw: rotation around world up axis, in degrees.
-	// yaw=0 faces +X; increasing yaw turns right, decreasing turns left.
-	// Faces +X so spawning looks straight down the hall toward the far door.
-	float camYaw = 0.0f;
-	// Pitch, degrees: -90 down, +90 up.
-	float camPitch = -10.0f;
-	// Vertical speed from gravity, units/s. Negative = falling. Reset to 0 by
-	// the ground clamp on landing.
-	float camVerticalVelocity = 0.0f;
+	float camYaw = 0.0f;			// degrees around world up; 0 faces +X
+	float camPitch = -10.0f;		// degrees, -90 down to +90 up
+	float camVerticalVelocity = 0.0f;	// gravity speed, units/s, reset by ground clamp
 
-	// Debug spectator orbit around the player (cheats.debugCam). Snapped
-	// behind the player each time the camera is switched on, then nudged by
-	// IJKL (orbit) and U/O (dolly). Yaw is a world angle in degrees, pitch is
-	// degrees above the player, dist is metres.
+	// Debug spectator orbit (cheats.debugCam): snaps behind the player when
+	// enabled, then nudged by IJKL (orbit) and U/O (dolly).
 	float dbgOrbitYaw = 0.0f;
 	float dbgOrbitPitch = DEBUG_CAM_PITCH0;
 	float dbgOrbitDist = DEBUG_CAM_DIST0;
 	bool dbgCamWasOn = false;
 
-	// Top of the "floor" instance, cached after load. Last-resort clamp while
-	// no-clipping, so falling under the map is never possible.
+	// Top of the "floor" instance; last-resort clamp so no-clip can't fall through the map.
 	float worldFloorY = 0.0f;
 
 	// Hand-authored collision geometry from colliders.json, merged with what
@@ -570,18 +440,14 @@ class Castlescape : public BaseProject {
 	// The scene's light sources from lights.json. See SceneLights.hpp.
 	SceneLights sceneLights;
 
-	// Flat list of every collider gameplay collides against, taken from
-	// colliderSet after load, so the per-frame loops read a plain vector.
+	// Flat list of every collider gameplay collides against, from colliderSet after load.
 	std::vector<Collider *> allColliders;
 
-	// Uniform XZ grid over allColliders, built once (colliders never move).
-	// Lets the ghost queries below test only nearby colliders instead of
-	// scanning the whole castle every frame, per ghost.
+	// Uniform XZ grid over allColliders, built once, so ghost queries test only
+	// nearby colliders instead of scanning the whole castle.
 	struct ColliderGrid {
-		// World units per cell. Bigger than a ghost's radius so the 3x3
-		// neighbourhood queried below always covers a ghost-sized radius test
-		// without needing to grow each collider's footprint by the query
-		// radius.
+		// Bigger than a ghost's radius so the 3x3 neighbourhood query always
+		// covers a ghost-sized radius test.
 		static constexpr float CELL_SIZE = 3.0f;
 
 		struct Entry {
@@ -613,13 +479,9 @@ class Castlescape : public BaseProject {
 			}
 		}
 
-		// Visits the cached extents of every collider registered in the 3x3
-		// cell neighbourhood around `p`. Always the 3x3 block rather than just
-		// p's own cell: the callers ask "is anything within some radius of
-		// p", and a collider registered one cell over can still be that
-		// close. A collider that spans several of those cells is visited once
-		// per cell it's in, which costs a few redundant (and cheap) AABB
-		// tests rather than needing a per-query dedup pass.
+		// Visits cached extents in the 3x3 cell neighbourhood around `p`
+		// (a collider one cell over can still be within query radius). May
+		// visit a wide collider more than once; cheaper than a dedup pass.
 		template<typename F>
 		void forEachNear(const glm::vec3 &p, F &&fn) const {
 			int cx = cellCoord(p.x), cz = cellCoord(p.z);
@@ -636,16 +498,12 @@ class Castlescape : public BaseProject {
 	};
 	ColliderGrid ghostColliderGrid;
 
-	// Colliders left OUT of the grid above because their Wm changes every
-	// frame -- door leaves and their lock hardware (see GameLogic()'s
-	// d.inst->C->setWorldMatrix() calls). A cached AABB for one of these
-	// would still be blocking a ghost long after the door swung open, so
-	// they're tested live instead, on top of the grid lookup. Short list, so
-	// a plain scan of it stays cheap.
+	// Colliders left out of the grid because their Wm changes every frame
+	// (door leaves/lock hardware) -- a cached AABB would keep blocking a ghost
+	// after the door swung open, so these are tested live instead.
 	std::vector<Collider *> ghostDynamicColliders;
 
-	// Every ghost collider query goes through here: the static grid first,
-	// then the movers above, read fresh each time.
+	// Every ghost collider query goes through here: static grid, then movers.
 	template<typename F>
 	void ghostForEachNearbyCollider(const glm::vec3 &p, F &&fn) const {
 		ghostColliderGrid.forEachNear(p, fn);
@@ -658,88 +516,39 @@ class Castlescape : public BaseProject {
 	// Not persisted across runs, reset to default values on launch.
 	struct CheatFlags {
 		bool collisionEnabled = true;   // false = no-clip
-		// Live readout of the camera's world position/yaw, for hand-placing
-		// scene.json objects. No gameplay to preserve, so defaults off.
-		bool showCoordinates = false;
+		bool showCoordinates = false;   // live camera position/yaw readout, for placing scene.json objects
+		bool ghostsCanCatch = true;     // off: hunt still plays out but can't end the run
 
-		// Whether a hunting ghost ending the run. Off, the hunt still plays
-		// out, you just can't lose -- useful while tuning it.
-		bool ghostsCanCatch = true;
-
-		// The two flame switches, read by flameBurning() (which every
-		// flame-showing path goes through: point light, billboard, shadow
-		// candidacy, glare). Here and not in SceneLights because the flames
-		// never go through lights.json -- their lights are appended into gubo
-		// from updateUniformBuffer() off the flame's own position. Torches =
-		// the wall-mounted ones; candles are separate and stay lit.
+		// Flame switches, read by flameBurning(). Not in SceneLights: flame
+		// lights are appended into gubo directly, never via lights.json.
 		bool roomTorchesEnabled = true;
-		// The held torch: off hides the model too, since a dark stick in front
-		// of the camera isn't "no torch in hand".
-		bool handTorchEnabled = true;
+		bool handTorchEnabled = true;   // off also hides the held torch model
 
-		// Lighting debug views, resolved into gubo.debugFlags and read by
-		// CookTorrance.frag. No "legit" state to preserve, so each defaults to
-		// leaving the picture as authored. The light SOURCE switches (sun,
-		// spot, ambient) live in SceneLights instead.
-		bool unlit = false;          // albedo only -- "dark texture" vs "no light"
-		bool showNormals = false;    // the shading normal as a color; what flatNormals is for
-		// Off suppresses the aura on the gazed target. The cue goes, but [E]
-		// and the prompt stay -- for viewing the scene's own lighting on a
-		// door without an aura on top. Defaults on.
-		bool focusGlowEnabled = true;
-		bool specularEnabled = true; // off forces k to 1 -- highlight vs bright surface
-		bool toneMapEnabled = true;  // off clips overexposure to white instead of compressing
-		// Off forces shadowFactor() to 1 while still rendering the shadow
-		// passes: splits "shadow sampling artifact" from "geometry artifact".
-		bool shadowsEnabled = true;
+		// Lighting debug views, resolved into gubo.debugFlags for CookTorrance.frag.
+		bool unlit = false;          // albedo only, no lighting
+		bool showNormals = false;    // shading normal as color
+		bool focusGlowEnabled = true;   // aura on the gazed target ([E] prompt stays either way)
+		bool specularEnabled = true; // off forces k to 1
+		bool toneMapEnabled = true;  // off clips overexposure to white
+		bool shadowsEnabled = true;  // off forces shadowFactor() to 1 (shading vs geometry diagnostic)
 
-		// Per-flame-TYPE shadow casting, read by updateDynamicShadowSlots()
-		// and the light-append loop in updateUniformBuffer(). Distinct from
-		// shadowsEnabled above: that one forces shadowFactor() to 1 for
-		// every already-cast shadow (a shading diagnostic), these two decide
-		// which flames COMPETE for a cube-shadow slot in the first place --
-		// off means that category never casts a shadow at all, not merely
-		// that its shadow renders as if absent. Torches and candles rather
-		// than per-instance: same reasoning as SceneLights' directEnabled/
-		// pointEnabled/spotEnabled, there's no use case for singling out one
-		// specific torch. Both default on, matching the authored scene.
+		// Off means that flame category never competes for a cube-shadow slot
+		// at all, unlike shadowsEnabled which just blanks an already-cast one.
 		bool torchShadowsEnabled = true;
 		bool candleShadowsEnabled = true;
 
-		// Whether the held torch's own MESH occludes other lights' shadows
-		// (the cube maps of the wall torches/candles it walks past) while
-		// it's actually in the player's hand. Its floor pose is unaffected --
-		// see the handTorchInst checks in recordCubeSlotFaces and
-		// queueMoverCubeSlotRenders -- and always occludes normally there,
-		// the same as any other static prop, because that pose is static and
-		// nothing about it is camera-anchored.
-		//
-		// Off by default: nothing occupies the hand but the torch itself, so
-		// a shadow it throws while carried would read as the torch floating
-		// in mid-air with no arm or body to explain its shape -- worse than
-		// no shadow at all. A HUD row so it can be compared without a recompile
-		// once there's a player model/arm to anchor the shape.
+		// Off by default: the held torch has no arm/body to anchor a shadow of
+		// its own mesh, so it would look like the torch floating mid-air.
 		bool handTorchModelCastsShadowWhenHeld = false;
 
-		// Geometry overlays (DebugLines.hpp): light-position gizmos, and
-		// wireframe boxes at each torch's shadow-cube clip distances.
+		// Geometry overlays (DebugLines.hpp).
 		bool showLightGizmos = false;
 		bool showShadowFrustums = false;
-		// Wireframe box around every gameplay collider plus every ramp's quad.
-		// The one view that answers "is this wall solid where it looks solid"
-		// without walking into it. Drawn from getExtents() (world-space
-		// axis-aligned), so it shows the same envelope the ground pass
-		// collides against -- an OOBB as its fattened box, not its true one.
-		bool showColliders = false;
-		// Third-person spectator view: pulls the rendered camera far back from
-		// the player while every visibility cull (geometry cone, torch-light
-		// list, shadow pool) keeps running from the real first-person eye. The
-		// cull boundary -- instances popping in and out at the cone edge -- is
-		// then visible from outside. DebugLines sketches the cone itself.
+		bool showColliders = false;     // wireframe box per collider/ramp quad
+		// Third-person spectator view; visibility culls still run from the real
+		// first-person eye, so the cull boundary becomes visible from outside.
 		bool debugCam = false;
-		// Shader-side: recolors surfaces by incoming light intensity. See
-		// LIGHT_DEBUG_HEATMAP.
-		bool showLightHeatmap = false;
+		bool showLightHeatmap = false;  // recolor surfaces by incoming light intensity
 	} cheats;
 
 	// Numeric tuning for the movement cheats -- "how strong", not "on/off", so
@@ -749,108 +558,75 @@ class Castlescape : public BaseProject {
 		float moveSpeed = 3.0f;
 		// Multiplier applied to moveSpeed while sprinting
 		float sprintMultiplier = 2.0f;
-		// Initial upward velocity on jump, world units/second
-		float jumpSpeed = 5.0f;
-		// Downward acceleration, world units/second^2 (negative = down)
-		float gravity = -9.81f;
+		float jumpSpeed = 5.0f;				// initial upward velocity, world units/second
+		float gravity = -9.81f;				// world units/second^2
 	} movement;
 
 	// A door leaf (its own instance) that swings around a vertical hinge on E.
-	// A list, not one hardcoded door, so adding one is a single addDoor() call.
-	//
-	// SM_Door_01's local origin is AT the hinge edge (the panel hangs to one
-	// side of Z=0), so the instance's authored transform already IS the
-	// closed-door hinge frame and "open" is one extra rotation about world Y
-	// appended to it -- no separate hinge point to compute.
+	// IMPORTANT: SM_Door_01's local origin is at the hinge edge, so the
+	// instance's authored transform already is the closed-door hinge frame;
+	// "open" is just one extra rotation about world Y appended to it.
 	struct Door {
 		std::string instanceId;
 		Instance *inst = nullptr;
 		glm::mat4 baseWm{1.0f};	// authored (closed) world matrix
 		glm::vec3 promptPos{0.0f};	// interact-range point: the doorway centre, not the hinge
-		// The same point in the leaf's LOCAL frame. promptPos is the fixed
-		// doorway; leafPos() below is where the panel's centre has swung to,
-		// and the two are tested as alternatives so a wide-open leaf can still
-		// be aimed at to close it.
+		// Same point in the leaf's local frame; leafPos() tracks where the
+		// panel has swung to, so a wide-open leaf can still be aimed at to close it.
 		glm::vec3 promptOffset{0.0f};
 		glm::vec3 leafPos() const {
 			return inst == nullptr ? promptPos
 								   : glm::vec3(inst->Wm * glm::vec4(promptOffset, 1.0f));
 		}
-		// Open travel. Only the MAGNITUDE is used at runtime; the direction is
-		// decided per opening by swingSignAwayFrom(). The authored sign is the
-		// fallback for a leaf whose geometry can't be read.
+		// Open travel magnitude; direction is decided per-opening by swingSignAwayFrom().
 		float openAngleDeg = 100.0f;
 		bool open = false;
 		float angle = 0.0f;	// current animated angle, eases toward the target
-		// Current swing direction, a sign on |openAngleDeg|. Only recomputed
-		// while the door is fully closed: flipping it mid-swing would sweep the
-		// leaf through its own frame.
+		// Swing direction sign, only recomputed while fully closed (flipping
+		// mid-swing would sweep the leaf through its own frame).
 		float swingSign = 1.0f;
-		// Padlock. Empty lockKeyId = no lock (E just toggles). A non-empty id
-		// means the door won't budge without a carried key whose keyId matches
-		// -- by id, not "any key", so a two-key level can't be opened in the
-		// wrong order.
+		// Empty lockKeyId = no lock. Matched by id, not "any key", so a
+		// two-key level can't be opened in the wrong order.
 		std::string lockKeyId;
-		// Human-readable name for the locked prompt. Defaults to lockKeyId.
-		std::string lockLabel;
-		// Per-door wording for the locked prompts, or empty for the generic
-		// padlock lines. Empty on every chained castle door; set on the secret
-		// bookcase, where "Locked - needs the iron key" would give the trick
-		// away (the gap on the shelf IS the keyhole).
+		std::string lockLabel;	// human-readable name for the locked prompt, defaults to lockKeyId
+		// Per-door locked-prompt wording; empty uses the generic padlock lines.
 		std::string promptReady;	// carrying what it wants
 		std::string promptMissing;	// not carrying it
 		std::string promptBlocked;	// standing on the far side of the lock
-		// A door that doesn't admit to being one until it can be opened. While
-		// set AND still locked AND the player isn't carrying the key, it's not
-		// a gaze target at all (doorIsHidden): no aura, no prompt. On a
-		// padlock the red aura is fine (the player sees the padlock); on a
-		// bookcase it would point straight at the secret.
+		// While set and still locked without the key, this door isn't even a
+		// gaze target (doorIsHidden): no aura, no prompt. Used for the secret
+		// bookcase, where a red aura would give the trick away.
 		bool secret = false;
-		// True while the padlock holds. Set from lockKeyId at load and in
-		// restartRun(), cleared for good once a matching key is spent -- keys
-		// are one-shot, so an unlocked door must never re-lock.
+		// True while the padlock holds; cleared for good once the key is
+		// spent -- keys are one-shot, an unlocked door must never re-lock.
 		bool locked = false;
-		// The visible padlock (SM_DoorChains_01 + SM_Padlock_01, or anything
-		// from addLockProp()). Modelled in the LEAF's local frame, so their
-		// world matrix is the leaf's times `local`. Shown while locked, parked
-		// below the map once the key is spent.
+		// Visible padlock hardware, in the leaf's local frame (world = leaf Wm * local).
 		struct LockProp {
 			Instance *inst;
-			// Extra transform in the leaf's local frame. Identity, or a half
-			// turn for a door approached from the other side (addLockProp's `flip`).
-			glm::mat4 local;
-			// Inverts the effect: hardware that appears when the lock comes
-			// OFF. One user, the secret bookcase -- a book handed over ends up
-			// in the gap on the shelf. With it set the prop is left alone
-			// while locked (it's still a Pickup the pickup code owns), not
-			// parked underground.
+			glm::mat4 local;	// identity, or a half turn for a flipped door (addLockProp's `flip`)
+			// Inverted lifecycle: hardware that appears once the lock is OFF.
+			// Used by the secret bookcase (a returned book fills the shelf gap).
 			bool whenUnlocked = false;
 		};
 		std::vector<LockProp> lockProps;
-		// How far past its mesh a lock prop's collider reaches on the hardware
-		// face: the stand-off keeping the held torch out of the chains.
+		// Extra collider stand-off on the hardware face, keeping the held torch out of the chains.
 		static constexpr float LOCK_PROP_KEEPOUT = 0.45f;
-		// Which face the hardware is on, a sign on the leaf's local X: +1 as
-		// make_door_lock.py exports, -1 for the flipped copy. The padlock is
-		// reachable only from its own face, so a player behind the door meets
+		// Which face the hardware is on: +1 as make_door_lock.py exports, -1 for
+		// the flipped copy. Reachable only from its own face.
 		// one that won't move, key or no key.
 		float lockFaceSign = 1.0f;
 		// True when `p` stands on the padlock's face. Against baseWm, not the
-		// live Wm: a locked door never swings. XZ only -- height has no say.
+		// live Wm, since a locked door never swings. XZ only.
 		bool onLockSide(const glm::vec3 &p) const {
 			glm::vec3 axis(baseWm[0].x, 0.0f, baseWm[0].z);	// leaf local +X, in world
 			if(glm::length(axis) < 1e-6f) return true;	// degenerate: don't lock anyone out
 			glm::vec3 d(p.x - promptPos.x, 0.0f, p.z - promptPos.z);
 			return glm::dot(d, glm::normalize(axis)) * lockFaceSign > 0.0f;
 		}
-		// Sign on |openAngleDeg| that swings the leaf AWAY from a player at
-		// `p`, so the door always opens outward, never into their face.
-		//
-		// The closed leaf's plane has local +X as normal, which answers both
-		// "which side is the player" and "which side did the panel swing to".
-		// Rather than reason about a cross product through an arbitrary
-		// transform, rotate a panel point the positive way and check where it
-		// lands. XZ only, like onLockSide.
+		// Sign on |openAngleDeg| that swings the leaf away from a player at
+		// `p`, so the door always opens outward. Rotates a panel point the
+		// positive way and checks which side it lands on, rather than reasoning
+		// about a cross product through an arbitrary transform. XZ only.
 		float swingSignAwayFrom(const glm::vec3 &p) const {
 			float authored = openAngleDeg < 0.0f ? -1.0f : 1.0f;
 			glm::vec3 n(baseWm[0].x, 0.0f, baseWm[0].z);	// leaf local +X, in world
@@ -876,92 +652,67 @@ class Castlescape : public BaseProject {
 	// How close (XZ, to the doorway centre) before a door's prompt appears.
 	static constexpr float DOOR_INTERACT_RADIUS = 6.0f;
 	static constexpr float DOOR_OPEN_SPEED = 120.0f;	// degrees/second
-	// How far a door can still be a gaze candidate. Larger than
-	// DOOR_INTERACT_RADIUS, which still gates actual interaction once aimed at.
+	// Gaze-candidate range; DOOR_INTERACT_RADIUS still gates actual interaction.
 	static constexpr float DOOR_LOOK_DISTANCE = 9.0f;
-	// Doorway half-width, turning promptPos into an aiming tolerance -- wide.
-	static constexpr float DOOR_AIM_RADIUS = 1.2f;
+	static constexpr float DOOR_AIM_RADIUS = 1.2f;		// doorway half-width as aiming tolerance
 
 	// Edge-detection for E, so holding it doesn't toggle every frame.
 	bool interactKeyWasPressed = false;
-	// Index into `doors` of the one in range, or -1. Set in GameLogic(), read
-	// by updateUniformBuffer() for the "[E] Interact" prompt.
+	// Index into `doors` of the one in range, or -1; read by updateUniformBuffer()
+	// for the "[E] Interact" prompt.
 	int nearbyDoor = -1;
 
-	// A world object collected with [E]. Same list reasoning as Door. Not
-	// strictly one-way: the key can be dropped again (G).
+	// A world object collected with [E]. Not strictly one-way: can be dropped again (G).
 	struct Pickup {
 		std::string instanceId;
 		Instance *inst = nullptr;
 		glm::vec3 worldPos{0.0f};	// measured at load, for the in-range check
 		bool collected = false;
-		// The authored pose, so restartRun() can put a picked-up/dropped item
-		// back where scene.json placed it (worldPos gets overwritten on drop).
+		// Authored pose, so restartRun() can reset a picked-up/dropped item
+		// (worldPos gets overwritten on drop).
 		glm::mat4 spawnWm{1.0f};
 		glm::vec3 spawnPos{0.0f};
-		// Non-empty => this pickup IS a key, opening every Door with a matching
-		// lockKeyId (plus the exit). Empty => an ordinary carried item.
+		// Non-empty => this pickup is a key, opening every Door with a matching lockKeyId.
 		std::string keyId;
-		// Spent on a lock and gone for the run. Distinct from `collected`: a
-		// collected key can still be dropped or spent, a consumed one is off
-		// the board until restartRun().
+		// Spent on a lock and gone for the run, distinct from `collected`
+		// (a collected key can still be dropped; a consumed one can't come back).
 		bool consumed = false;
-		// Uniform world scale, read from the authored matrix at load, so
-		// scene.json's "scale" stays the one place it's written. Per-pickup
-		// (several keys need not be one size).
-		float worldScale = 1.0f;
-		// Euler angles (deg) orienting this item in the hand. Per-pickup
-		// because the grip is a fact about the MESH's axes: the key's long
-		// axis is local Z and swings upright, the book lies flat and tilts up
-		// to be read. addPickup() defaults it to HAND_KEY_TILT_DEG.
+		float worldScale = 1.0f;		// uniform world scale, read from the authored matrix at load
+		// Euler angles (deg) orienting the item in hand, per-pickup since grip
+		// depends on mesh axes (key stands on its long axis, book tilts flat-up).
 		glm::vec3 handTiltDeg{0.0f};
-		// Where the item hangs relative to the eye, camera space. Per-pickup:
-		// it positions the mesh ORIGIN, and the key's is near one end while the
-		// book's is at its middle, so the same offset rides them differently.
-		// addPickup() defaults it to HAND_KEY_OFFSET.
+		// Item position relative to the eye, camera space; per-pickup since it
+		// positions the mesh origin, which differs per model.
 		glm::vec3 handOffset{0.0f};
 	};
 	std::vector<Pickup> pickups;
-	// The key ring: indices into `pickups`, in collection order. A vector, not
-	// a set of ids, because two keys can share an id and the ring must
-	// remember which instance each was. keyRing.back() is drawn in the hand.
+	// Key ring: indices into `pickups`, in collection order (a vector, not an
+	// id set, since two keys can share an id). keyRing.back() is drawn in the hand.
 	std::vector<int> keyRing;
-	// 3D check (unlike DOOR_INTERACT_RADIUS's XZ): a pickup can be at table height.
-	static constexpr float PICKUP_INTERACT_RADIUS = 4.0f;
-	// Index into `pickups` of the one in range, or -1. Checked before
-	// nearbyDoor -- grabbing should win over interacting with what's behind it.
+	static constexpr float PICKUP_INTERACT_RADIUS = 4.0f;	// 3D check, unlike doors' XZ one
+	// Index into `pickups` of the one in range, or -1; checked before nearbyDoor
+	// so grabbing wins over interacting with what's behind it.
 	int nearbyPickup = -1;
 	static constexpr float PICKUP_LOOK_DISTANCE = 6.0f;	// gaze-candidate range
-	// Pickup half-width for aiming tolerance -- tight, they're small props.
-	static constexpr float PICKUP_AIM_RADIUS = 0.35f;
+	static constexpr float PICKUP_AIM_RADIUS = 0.35f;		// tight, they're small props
 
-	// Base half-angle of the aiming cone, before an object's aim radius widens
-	// it at range. Shared by doors and pickups.
+	// Base half-angle of the aiming cone, before an object's aim radius widens it. Shared by doors/pickups.
 	static constexpr float GAZE_CONE_DEG = 7.0f;
 
-	// The Instance* the crosshair rests on within interact range, or nullptr.
-	// Resolved once per frame in GameLogic(), read by updateUniformBuffer() to
-	// set ubo.glow.
+	// Instance the crosshair rests on within interact range, or nullptr.
+	// Resolved once per frame in GameLogic(), read by updateUniformBuffer() for ubo.glow.
 	Instance *gazedInstance = nullptr;
-	// True when gazedInstance is aimed at but [E] would do nothing (a locked
-	// door with no key, or approached from the wrong side). General so a future
-	// interactable can flip it too. Flips ubo.glow's sign, swapping the aura
-	// gold -> red.
+	// True when gazedInstance is aimed at but [E] would do nothing (locked
+	// door, wrong side, etc). Flips ubo.glow's sign, swapping the aura gold -> red.
 	bool gazedInteractionDisabled = false;
-	// What kind of thing gazedInstance is, so CookTorrance.frag can pick a
-	// distinct aura color per category (doors gold, pickups blue/purple)
-	// instead of every interactable looking the same. Encoded as
-	// ubo.glow's magnitude (1 = Door, 2 = Pickup, 3 = Candle, 4 = WallTorch)
-	// alongside the sign for gazedInteractionDisabled -- see the assignment in
-	// updateUniformBuffer(). A plain enum rather than a bool, which is what
-	// let Candle and WallTorch slot in later without renaming anything.
+	// Category of gazedInstance, so CookTorrance.frag can pick a distinct aura
+	// color per kind. Encoded as ubo.glow's magnitude alongside the
+	// gazedInteractionDisabled sign; see the assignment in updateUniformBuffer().
 	enum class GlowKind { Door = 1, Pickup = 2, Candle = 3, WallTorch = 4 };
 	GlowKind gazedGlowKind = GlowKind::Door;
 
 	// True if `front` is aimed closely enough at `target`: within lookDist and
-	// within a cone whose half-angle is GAZE_CONE_DEG widened by the angular
-	// size aimRadius subtends (so a wide door forgives worse aim than a small
-	// pickup). cosAngleOut lets a caller track the best candidate.
+	// a cone widened by the angular size aimRadius subtends at that distance.
 	bool isGazedAt(const glm::vec3 &front, const glm::vec3 &target,
 				   float lookDist, float aimRadius, float &cosAngleOut) const {
 		glm::vec3 to = target - camPos;
@@ -975,16 +726,13 @@ class Castlescape : public BaseProject {
 		return true;
 	}
 
-	// True for a secret door the player has no business seeing yet. Gated
-	// inside findGazedDoor so the aura, prompt and E key all read the one
-	// nearbyDoor this decides.
+	// True for a secret door the player has no business seeing yet.
 	bool doorIsHidden(const Door &d) const {
 		return d.secret && d.locked && findKeyInRing(d.lockKeyId) < 0;
 	}
 
-	// Index into `doors` aimed at within look range, or -1. Does NOT check
-	// DOOR_INTERACT_RADIUS -- the caller does, keeping "targetable" and "close
-	// enough" as two separate gates.
+	// Index into `doors` aimed at within look range, or -1. Does not check
+	// DOOR_INTERACT_RADIUS; the caller does that separately.
 	int findGazedDoor(const glm::vec3 &front) const {
 		int best = -1;
 		float bestCos = -1.0f;
@@ -1049,19 +797,16 @@ class Castlescape : public BaseProject {
 	int heldKeyIdx() const {
 		return keyRing.empty() ? -1 : keyRing.back();
 	}
-	// Slot IN keyRing of a carried key matching `id`, or -1. Empty `id` = "any
-	// key" (the exit, when gameplay.json names none). Back to front, so the key
-	// in hand is spent first.
+	// Slot in keyRing of a carried key matching `id`, or -1. Empty `id` = "any
+	// key". Back to front, so the key in hand is spent first.
 	int findKeyInRing(const std::string &id) const {
 		for(int slot = (int)keyRing.size() - 1; slot >= 0; slot--) {
 			if(id.empty() || pickups[keyRing[slot]].keyId == id) return slot;
 		}
 		return -1;
 	}
-	// Spend a carried key: off the ring, off the board, permanently for this
-	// run. `slot` indexes keyRing, not pickups. Parking the instance below the
-	// map is how every mesh here is hidden (Starter draws every instance, no
-	// visibility flag).
+	// Spend a carried key permanently for this run. `slot` indexes keyRing, not
+	// pickups. Parking below the map is how a mesh is hidden (no visibility flag exists).
 	void consumeKey(int slot) {
 		if(slot < 0 || slot >= (int)keyRing.size()) return;
 		int idx = keyRing[slot];
@@ -1069,22 +814,16 @@ class Castlescape : public BaseProject {
 		p.consumed = true;
 		p.collected = true;
 		keyRing.erase(keyRing.begin() + slot);
-		// Off the ring now, but not parked yet: it sinks out of frame first
-		// (the mirror of the pick-up rise), and the lowering block in
-		// GameLogic() parks it when the animation ends. Only one key can
-		// animate, so an already-sinking one is parked now.
+		// Not parked yet: it sinks out of frame first, parked once the
+		// animation ends in GameLogic(). Only one key can animate at a time.
 		if(keyLowerIdx >= 0) {
 			pickups[keyLowerIdx].inst->Wm = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
 		}
 		keyLowerIdx = idx;
 		keyLowerElapsed = 0.0f;
 	}
-	// Put a carried key back in the world: off the ring, lying flat in front
-	// of the player, so walking up shows the pick-up prompt again. `slot`
-	// indexes keyRing. `fwdDist` is how far ahead it lands -- arm's length for
-	// the manual drop (G), closer for the automatic one that frees the hand.
-	// Re-parks the same instance the held-key block was drawing; here rather
-	// than inline so both callers agree on the pose.
+	// Puts a carried key back in the world, lying flat in front of the player.
+	// `fwdDist`: arm's length for manual drop (G), closer for the automatic one.
 	void dropKeyFromRing(int slot, const glm::vec3 &camPos, const glm::vec3 &front, float fwdDist) {
 		if(slot < 0 || slot >= (int)keyRing.size()) return;
 		Pickup &p = pickups[keyRing[slot]];
@@ -1106,15 +845,12 @@ class Castlescape : public BaseProject {
 					* glm::rotate(glm::mat4(1.0f), yaw, glm::vec3(0.0f, 1.0f, 0.0f))
 					* glm::scale(glm::mat4(1.0f), glm::vec3(p.worldScale));
 	}
-	// Held pose. Negative X = LEFT hand (the torch owns the right). Default
-	// only: each pickup carries its own (Pickup::handOffset / handTiltDeg),
-	// since these numbers describe the key mesh's axes.
+	// Default held pose; negative X = left hand (torch owns the right). Each
+	// pickup can override via Pickup::handOffset/handTiltDeg.
 	static constexpr glm::vec3 HAND_KEY_OFFSET = glm::vec3(-0.40f, -0.4f, -0.9f);
-	// X = 90 swings the key's long axis (local Z) onto world Y -- upright, tip
-	// up. Negate to -90 if a render shows it tip-down.
+	// X = 90 swings the key's long axis (local Z) onto world Y, tip up.
 	static constexpr glm::vec3 HAND_KEY_TILT_DEG = glm::vec3(90.0f, -20.0f, 0.0f);
-	// The held item's orientation: its own tilt, with the walk's roll on the
-	// last axis. Shared by the rise and the sink so the two can't drift apart.
+	// Shared by rise and sink animations so the two can't drift apart.
 	static glm::mat4 handGrip(const glm::vec3 &tiltDeg, float bobRollDeg) {
 		return glm::rotate(glm::mat4(1.0f), glm::radians(tiltDeg.x), glm::vec3(1.0f, 0.0f, 0.0f))
 			 * glm::rotate(glm::mat4(1.0f), glm::radians(tiltDeg.y), glm::vec3(0.0f, 1.0f, 0.0f))
@@ -1122,73 +858,53 @@ class Castlescape : public BaseProject {
 	}
 
 	// ---- Held-item wall tuck -------------------------------------------------
+	// IMPORTANT: held items sit ~1 unit out from the camera, past the 0.3
+	// PLAYER_RADIUS clearance, so at a wall the item pokes through it. For the
+	// torch this is a lighting bug, not just a clipping one: its point light
+	// and cube shadow ride the flame at the torch head, so a head through a
+	// wall darkens the near face and lights the room beyond through solid
+	// geometry. Fixed by retracting the item geometrically (probe how far it
+	// can reach right now, place it exactly there) rather than blending to a
+	// fixed "tucked" pose, which would be wrong at any distance but the one it
+	// was tuned for.
 	//
-	// Both hands are welded to the camera and hold their item ~1 unit out, past
-	// the 0.3 PLAYER_RADIUS the body is held off walls by. Walk up to a wall
-	// and the far end of what you carry is inside it. For the key that's ugly;
-	// for the torch it's a lighting bug -- its point light and cube shadow ride
-	// the flame at the torch head, so a head through a wall darkens the wall in
-	// front and lights the room beyond through solid geometry. A depth-cleared
-	// second pass wouldn't help (the light isn't in the depth buffer); the item
-	// has to move -- lowered and turned across the body, not yanked to the face.
-	//
-	// Driven GEOMETRICALLY, not by blending toward a fixed "tucked" pose: a
-	// fixed pull is the same whether the wall is at arm's length or the wrist.
-	// The probe measures how far the item may reach RIGHT NOW, and the pose is
-	// built to reach exactly that far -- looking down at a table (half an arm
-	// away) is the case that proves a wall-tuned constant wrong.
-	//
-	// Everything below is a REACH FRACTION: 1 extended, HAND_TUCK_MIN_REACH
-	// against the chest.
+	// Everything below is a REACH FRACTION: 1 extended, HAND_TUCK_MIN_REACH against the chest.
 
-	// How far the item's body reaches past the grip, camera-space, so the probe
-	// stops at its leading edge. Rough -- HAND_TUCK_SKIN dwarfs the error.
+	// How far the item's body reaches past the grip, camera-space (rough; HAND_TUCK_SKIN dwarfs the error).
 	static constexpr float HAND_TUCK_TORCH_PAD = 0.30f;
 	static constexpr float HAND_TUCK_KEY_PAD = 0.15f;
 
-	// Colliders grown by this for the probe only (the body still hits the real
-	// boxes). Two jobs: the collision shell is coarse (walls are thin plates),
-	// so this stops the item a stand-off short and covers jambs/pilasters no
-	// one authored a box for; and it's the safety margin for the drop and
-	// rotation the pose adds off the probed line. Can't just be large: it's a
-	// stand-off from every surface, so the item folds away in merely narrow
-	// rooms. Raise if something clips, lower if it tucks in open space.
+	// Collider growth for the probe only, covering the coarse collision shell
+	// and giving the tuck's drop/rotation a safety margin. Keep small, or it folds the item away even in open rooms.
 	static constexpr float HAND_TUCK_SKIN = 0.30f;
 
-	// The reach the item is never retracted past. A LIGHTING limit: a light at
-	// the eye flattens all shading and blows out what's closest -- better a few
-	// cm of torch in a wall. Also the probe's start: everything nearer is taken
-	// as clear (the body's own 0.3 clearance guarantees it, and the inflated
-	// skin would otherwise read "blocked" whenever you brush a wall).
+	// Reach never retracts past this: a light at the eye flattens shading and
+	// blows out what's closest, so a few cm of torch in a wall reads better.
+	// Also the probe's start point (everything nearer is assumed clear).
 	static constexpr float HAND_TUCK_MIN_REACH = 0.35f;
 
-	// Samples across the probed stretch. Ten over ~1 unit -> ~0.1 granularity,
-	// fine enough that the smoothing hides the steps.
+	// Samples across the probed stretch; ten over ~1 unit gives ~0.1 granularity.
 	static constexpr int HAND_TUCK_SAMPLES = 10;
 
-	// Tuck in fast, out slow: one time constant can't be both slow enough not
-	// to strobe the torchlight and fast enough not to let the item dip in.
+	// Tuck in fast, out slow -- one constant can't avoid both strobing the
+	// torchlight and letting the item dip into the wall.
 	static constexpr float HAND_TUCK_TAU_IN = 0.05f;
 	static constexpr float HAND_TUCK_TAU_OUT = 0.18f;
 
-	// Radial retraction shortens Y too, so the item drifts UP as it comes in,
-	// reading as raised-to-face rather than tucked. This cancels that lift at
-	// full retraction; not a motion of its own.
+	// Cancels the upward drift retraction otherwise causes (shortening Y along
+	// with reach), so the tuck doesn't read as "raised to face".
 	static constexpr float HAND_TUCK_DROP = 0.28f;
-	// Extra grip rotation on top of the item's tilt: nose down (X), across the
-	// body (Y). This sells the tuck as a gesture, and it's free -- rotating
-	// about the grip barely moves the light. Negate a component if a render
-	// shows an item rotating the wrong way.
+	// Extra grip rotation sold as part of the tuck gesture; rotating about the
+	// grip barely moves the light. Negate a component if an item rotates the wrong way.
 	static constexpr glm::vec3 HAND_TUCK_TILT_DEG = glm::vec3(40.0f, 30.0f, 0.0f);
 
-	// Live reach fraction per hand, advanced by advanceReach() each frame. Two
-	// values: a wall to your right reaches the torch before the key.
+	// Live reach fraction per hand, advanced by advanceReach() each frame
+	// (torch and key retract independently).
 	float handTorchReach = 1.0f;
 	float handKeyReach = 1.0f;
 
-	// ghostPointBlocked's test with a stand-off. Separate, not a defaulted
-	// argument: that one answers a sightline question where inflating the world
-	// would be wrong.
+	// Like ghostPointBlocked but with a stand-off; kept separate since that one
+	// answers a sightline question where inflating the world would be wrong.
 	bool handPointBlocked(const glm::vec3 &p, float skin) const {
 		for(Collider *C : allColliders) {
 			AABBextents E = C->getExtents();
@@ -1201,10 +917,8 @@ class Castlescape : public BaseProject {
 	}
 
 	// How far the item at `camOffset` may reach this frame, as a fraction of
-	// its authored offset. Marches outward from HAND_TUCK_MIN_REACH along the
-	// eye->item line, stops at the first solid sample; the last clear one is
-	// where the leading edge goes. A distance, not a severity, so the caller
-	// can place the item AT it -- the difference from the fixed-pose version.
+	// its authored offset. Marches outward along the eye->item line and stops
+	// at the first solid sample.
 	float handFreeReach(const glm::mat4 &camWm, const glm::vec3 &camOffset, float pad) const {
 		float reach = glm::length(camOffset);
 		if(reach < 1e-4f) {
@@ -1224,18 +938,15 @@ class Castlescape : public BaseProject {
 		return 1.0f;
 	}
 
-	// One asymmetric exponential smoothing step of a reach fraction. Can't
-	// overshoot, needs no "still tucking" state. Tucking IN means reach going
-	// DOWN, so the comparison is inverted against the tau names.
+	// One asymmetric exponential smoothing step; tucking in means reach
+	// decreasing, so the comparison is inverted against the tau names.
 	static void advanceReach(float &state, float target, float deltaT) {
 		float tau = (target < state) ? HAND_TUCK_TAU_IN : HAND_TUCK_TAU_OUT;
 		state += (target - state) * (1.0f - std::exp(-deltaT / tau));
 	}
 
-	// Builds the tucked pose in place, so callers still compose the walk bob on
-	// top. Radial retraction along handFreeReach's line, then the gesture: a
-	// drop to cancel the lift, and rotation. "Inward" is read off the offset's
-	// sign (torch +X, key -X), so neither hand carries a mirrored constant.
+	// Builds the tucked pose in place, so callers can still compose the walk
+	// bob on top. "Inward" is read off the offset's sign (torch +X, key -X).
 	static void applyTuck(float reachFrac, glm::vec3 &offset, glm::vec3 &tiltDeg) {
 		if(reachFrac >= 1.0f) {
 			return;
@@ -1289,162 +1000,112 @@ class Castlescape : public BaseProject {
 	// Torch position relative to the eye, camera space. Low and close, so the
 	// handle crops off the bottom and only the torch shows, like a viewmodel.
 	static constexpr glm::vec3 HAND_TORCH_OFFSET = glm::vec3(0.5f, -0.35f, -1.1f);
-	// Extra tilt so it looks gripped, not dead level.
 	static constexpr glm::vec3 HAND_TORCH_TILT_DEG = glm::vec3(-15.0f, 20.0f, 0.0f);
-	// Uniform scale: the mesh is sized for a wall mount.
-	static constexpr float HAND_TORCH_SCALE = 0.35f;
-	// Pick-up animation, mirror of the key's: the torch rises into frame from
-	// below. Its own constants so tweaking one item doesn't retune the other.
+	static constexpr float HAND_TORCH_SCALE = 0.35f;	// mesh is sized for a wall mount
+	// Pick-up animation, mirror of the key's: torch rises into frame from below.
 	static constexpr float TORCH_RAISE_DURATION = 0.35f;
 	static constexpr float TORCH_RAISE_DROP = 0.8f;
-	// Seconds since pickup, or >= TORCH_RAISE_DURATION once the rise is over.
-	// Starts saturated so an already-collected torch doesn't play it.
+	// Seconds since pickup, or >= TORCH_RAISE_DURATION once done. Starts
+	// saturated so an already-collected torch doesn't replay it.
 	float torchRaiseElapsed = TORCH_RAISE_DURATION;
 
-	// The flame at a torch's head (Flame.hpp). One Flame instance drives every
-	// torch, held one included.
+	// The flame at a torch's head (Flame.hpp); one instance drives every torch, held one included.
 	Flame flame;
 
-	// The daylight outside the exit door (ExitGlow.hpp): one overbright quad,
-	// its glare all the work of the bloom chain. Driven by exitDoorIndex/EXIT_GLOW_*.
+	// Daylight outside the exit door (ExitGlow.hpp): one overbright quad, its
+	// glare done entirely by the bloom chain.
 	ExitGlow exitGlow;
 
-	// Line renderer for the cheat-gated debug overlays. What each draws is
-	// decided in updateUniformBuffer(). See DebugLines.hpp for vertex pulling.
+	// Line renderer for cheat-gated debug overlays; see DebugLines.hpp.
 	DebugLines debugLines;
 
-	// One entry per torch with a flame, filled in localInit() (addTorchFlame)
-	// and walked every frame in updateUniformBuffer(). `anchor` is in the TORCH
-	// MODEL's local space; `inst->Wm * vec4(anchor,1)` is the flame's world
-	// position.
-	//
-	// The rest is this torch's live fire state, simulated on the CPU because
-	// three consumers must agree on it: the billboards, the sparks, and the
-	// cast point light. One signal, produced once.
+	// One entry per torch with a flame (localInit's addTorchFlame). `anchor` is
+	// in the torch model's local space; inst->Wm * vec4(anchor,1) is world position.
+	// The rest is live fire state, simulated on the CPU since billboards,
+	// sparks and the cast point light all need to agree on one signal.
 	struct TorchFlame {
 		Instance *inst;
 		int flameId;
 		glm::vec3 anchor;
 
-		// True only for the held torch. A wall torch billboards the ordinary
-		// CYLINDRICAL way (spin about world up, stay upright). The held torch
-		// is anchored in CAMERA space and tilts with the view like a weapon
-		// viewmodel, so its flame must ride the camera's actual up/right
-		// (pitch included) or it swings out of alignment with the shaft.
+		// True only for the held torch: it's anchored in camera space and
+		// tilts with the view, so its flame must ride the camera's actual
+		// up/right rather than the ordinary cylindrical (world-up) billboard.
 		bool heldByCamera = false;
 
-		// Phase offset into the noise field, so no two torches gutter together.
-		float phase = 0.0f;
+		float phase = 0.0f;		// noise-field phase offset, so torches don't gutter in sync
 
-		// BRIGHTNESS envelope, ~0.30 (gutter) to ~1.40 (flare). Scales
-		// brightness, spark output, and the point light's colour/reach -- not
-		// height (heightScale). Chased by a critically-damped spring
-		// (intensityVel), not assigned raw, so brightness glides rather than
-		// jumping to a fresh noise sample each frame.
+		// Brightness envelope (~0.30 gutter to ~1.40 flare), chased by a
+		// critically-damped spring so it glides instead of jumping per noise sample.
 		float intensity = 1.0f;
 		float intensityVel = 0.0f;
 
-		// HEIGHT envelope, ~0.78..1.09. The same signal as intensity, but
-		// compressed and low-passed much harder (FLAME_HEIGHT_TAU): the fuel
-		// column follows the light output late. Its own value so height glides
-		// instead of teleporting at flicker rate.
+		// Height envelope (~0.78..1.09): same signal as intensity but
+		// low-passed harder, since the fuel column follows light output late.
 		float heightScale = 1.0f;
 
-		// This torch's smoothed stare-at factor, 0..1 (glare block in
-		// updateUniformBuffer): overdrives its HDR output.
-		float glare = 0.0f;
+		float glare = 0.0f;		// smoothed stare-at factor, 0..1, overdrives HDR output
 
-		// Last frame's anchor and a low-passed velocity from it. A flame is
-		// dragged by the air, so it leans AGAINST its own motion.
+		// Low-passed anchor velocity; the flame leans against its own motion (air drag).
 		glm::vec3 prevPos = glm::vec3(0.0f);
 		glm::vec3 smoothedVel = glm::vec3(0.0f);
 		bool velPrimed = false;
 
-		// This torch's fire colour: drives both the flame gradient and the
-		// cast light (one signal). Overwritten every frame by the hunt cycle
-		// (baseColor dragged toward violet); everything downstream reads this
-		// field, so the colour change needed no other plumbing.
+		// Fire colour driving both the flame gradient and the cast light.
+		// Overwritten every frame by the hunt cycle (dragged toward violet).
 		glm::vec3 color = TORCH_LIGHT_COLOR;
-
-		// The colour with nothing hunting (flames.json, or default orange),
-		// captured at spawn. `color` can't double as its own base -- mixing
-		// toward violet and storing back converges on violet.
+		// Colour with nothing hunting, captured at spawn -- `color` can't be
+		// its own base since mixing toward violet and storing back converges on violet.
 		glm::vec3 baseColor = TORCH_LIGHT_COLOR;
 
-		// Multiplies FLAME_HEIGHT/HALF_WIDTH on top of the instance scale. 1.0
-		// for torches; candles pass smaller so the flame reads as a candle's.
+		// Multiplies FLAME_HEIGHT/HALF_WIDTH on top of instance scale; candles pass smaller.
 		float sizeScale = 1.0f;
-
-		// Multiplies the point light's colour only -- independent of
-		// sizeScale, since a small flame isn't automatically dim. Candles pass
-		// small so they cast the faint local light a candle actually does.
+		// Multiplies point light colour only, independent of sizeScale, so
+		// candles can cast their (small but not necessarily dim) light.
 		float lightScale = 1.0f;
 
-		// True for a candle, false for a torch (held included). The whole
-		// distinction the HUD's separate "Torch/Candle Shadows" toggles need;
-		// everything else treats the two identically. From flames.json's
-		// per-model "isCandle", default false.
+		// True for a candle, false for a torch (held included); from
+		// flames.json's "isCandle". Only used by the HUD's Torch/Candle Shadows toggles.
 		bool isCandle = false;
 
-		// Is this flame burning? Read through flameBurning(), so switching it
-		// off takes the light, billboard, sparks, shadow candidacy and glare
-		// in one go -- nothing is spawned/destroyed at runtime. False for a
-		// candle authored unlit (lit with [E] off the held torch) and for the
-		// held torch (lit from a burning wall torch). Wall torches are
-		// authored burning and never go out.
+		// Read through flameBurning(): off takes light, billboard, sparks,
+		// shadow candidacy and glare all at once, nothing spawned/destroyed at runtime.
 		bool burning = true;
-		// What `burning` was authored as, so restartRun() can blow out the
-		// candles the player lit -- a dark run must start dark again.
+		// Authored value of `burning`, so restartRun() re-darkens candles the player lit.
 		bool spawnBurning = true;
 
-		// Catching-fire envelope: 0 (unlit) .. ~1.05 flare .. 1 (lit). Scales
-		// the billboard AND the light colour (one signal, two consumers), so a
-		// catching flame doesn't pop to size while its light is still dark.
-		// Seeded 1 for anything authored burning, 0 for unlit, so nothing
-		// plays this on its spawn frame.
+		// Catching-fire envelope: 0 unlit, ~1.05 flare, 1 lit. Scales billboard
+		// and light colour together so it doesn't pop to size before lighting up.
 		float ignitionScale = 1.0f;
 		float ignitionVel = 0.0f;
 
-		// This flame's anchor in WORLD space, computed at spawn. Only
-		// meaningful for a static flame (!heldByCamera) -- the held torch's is
-		// recomputed each frame. Aim target for findGazedCandle().
+		// World-space anchor computed at spawn; only meaningful for a static
+		// flame (held torch recomputes it every frame). Aim target for findGazedCandle().
 		glm::vec3 anchorWorld = glm::vec3(0.0f);
 
-		// True for every flame that competes for a DYNAMIC shadow-cube slot.
-		// Set in addTorchFlame() as !heldByCamera: every flame is either the
-		// held torch (its own fixed slot) or a static object that belongs in
-		// the pool, so a future torch/candle is a candidate for free.
+		// True for every flame competing for a dynamic shadow-cube slot
+		// (everything except the held torch, which has its own fixed slot).
 		bool shadowCandidate = false;
+		int shadowSlot = -1;		// absolute cube-shadow slot if held, else -1
 
-		// This flame's absolute cube-shadow slot if it holds one, else -1.
-		// Read by the light-append loop to fill LightData::shadowIndex.
-		int shadowSlot = -1;
-
-		// This candidate's 6 face view-projections, computed once at
-		// registration (it's static, like the lights.json torches). Copied
-		// into torchFaceMatrices[]/torchLightPos[] whenever it's given a slot.
+		// Six face view-projections, computed once at registration since this
+		// flame is static like the lights.json torches.
 		std::array<glm::mat4, 6> shadowFaceMatrices{};
 
-		// The lean, resolved into the billboard's axes (x right, y forward),
-		// in the flame's local units. Uploaded straight to the shader.
-		glm::vec2 lean = glm::vec2(0.0f);
+		glm::vec2 lean = glm::vec2(0.0f);	// resolved into billboard axes, uploaded to the shader
 	};
 	std::vector<TorchFlame> torchFlames;
 
-	// Candle lighting: the third interactable, needing no list of its own -- a
-	// candle IS a TorchFlame authored unlit, so `nearbyCandle` indexes
-	// torchFlames. Same gaze-then-proximity shape as doors and keys. Radii in
-	// 3D like a pickup's (a candle is on a table), tighter because lighting one
-	// means holding a torch up to it -- close range.
+	// A candle needs no list of its own: it IS a TorchFlame authored unlit, so
+	// `nearbyCandle` indexes torchFlames. 3D radii like a pickup's, tighter
+	// since lighting one means holding a torch close.
 	static constexpr float CANDLE_INTERACT_RADIUS = 2.5f;
 	static constexpr float CANDLE_LOOK_DISTANCE = 5.0f;
 	static constexpr float CANDLE_AIM_RADIUS = 0.35f;	// tight, the wick is small
-	// Index into `torchFlames` of the unlit candle in range, or -1. Set in GameLogic().
-	int nearbyCandle = -1;
+	int nearbyCandle = -1;		// index into `torchFlames` of the unlit candle in range, or -1
 
 	// Index into `torchFlames` of the unlit candle aimed at within look range,
-	// or -1. Two-gate split like findGazedDoor. Lit candles are skipped, so
-	// they neither glow nor steal aim.
+	// or -1. Lit candles are skipped, so they neither glow nor steal aim.
 	int findGazedCandle(const glm::vec3 &front) const {
 		int best = -1;
 		float bestCos = -1.0f;
@@ -1463,20 +1124,14 @@ class Castlescape : public BaseProject {
 		return best;
 	}
 
-	// Wall-torch lighting: the mirror of the candle interaction. The held torch
-	// starts unlit; aiming at a burning wall torch and pressing [E] lights it,
-	// for the run (restartRun blows it out). A wall torch is a bigger target
-	// at head height, so the aim cone is more forgiving.
+	// Wall-torch lighting mirrors the candle interaction: aim at a burning wall
+	// torch with the (unlit) held torch and press [E] to light it.
 	static constexpr float WALL_TORCH_INTERACT_RADIUS = 3.0f;
 	static constexpr float WALL_TORCH_LOOK_DISTANCE = 6.0f;
 	static constexpr float WALL_TORCH_AIM_RADIUS = 0.6f;
-	// Index into `torchFlames` of the burning wall torch in reach and aimed
-	// at, or -1. Set in GameLogic().
-	int nearbyWallTorch = -1;
+	int nearbyWallTorch = -1;	// index into `torchFlames` of the burning wall torch in range, or -1
 
-	// Index into `torchFlames` of the burning wall torch aimed at within look
-	// range, or -1. Non-negative only while the held torch is unlit AND in
-	// hand. Two-gate split like findGazedCandle.
+	// Non-negative only while the held torch is unlit and in hand.
 	int findGazedWallTorch(const glm::vec3 &front) const {
 		if(handFlameIdx < 0 || !handTorchCollected ||
 		   torchFlames[handFlameIdx].burning) return -1;
@@ -1497,12 +1152,8 @@ class Castlescape : public BaseProject {
 		return best;
 	}
 
-	// The floor torch, before it's picked up: a single gaze target at its
-	// authored resting place. True when aimed at within look range and
-	// still on the ground. The mirror of findGazedPickup for the one prop
-	// that doesn't ride the Pickup/keyRing machinery -- it reuses the
-	// pickup look/aim tolerances since it's the same kind of small floor
-	// object.
+	// The floor torch, before pickup: mirrors findGazedPickup for the one
+	// prop that doesn't ride the Pickup/keyRing machinery.
 	bool findGazedHandTorch(const glm::vec3 &front) const {
 		if(handTorchInst == nullptr || handTorchCollected) return false;
 		float cosAngle;
@@ -1534,90 +1185,67 @@ class Castlescape : public BaseProject {
 	// so the smoothing survives between frames.
 	float glareSmoothed = 0.0f;
 
-	// One anchor for every torch (the wall and held meshes are identical,
-	// confirmed by walking the POSITION accessors). X/Z at the centroid of the
-	// mesh's top (a wide flat cup). Y 0.30, below the rim (0.413): the cup has
-	// depth, so sitting the flame at the rim left it floating above the torch.
-	// The flame's field fades in a few percent up the card, so the anchor
-	// sinks that much further and the fade reads as the flame emerging.
-	// Also flames.json's fallback default.
+	// One anchor for every torch (wall and held meshes share layout). Y sits
+	// below the rim since the cup has depth and the flame's field fades in
+	// gradually. Also flames.json's fallback default.
 	static constexpr glm::vec3 TORCH_FLAME_ANCHOR = glm::vec3(-0.384f, 0.30f, 0.0f);
 
-	// The flame's size in the torch model's local units, so it rides each
-	// instance's uniform scale -- full size on the wall torches, shrunk on the
-	// held one. A fixed world size looked right on one and wrong on the other.
-	// HALF_WIDTH is wider than the visible flame: the noise field eats into
-	// its own silhouette, so the quad must be bigger than the fire inside it.
+	// Flame size in the torch model's local units, so it scales with each
+	// instance (full on wall torches, shrunk on the held one). HALF_WIDTH is
+	// wider than the visible flame since the noise field eats into its own silhouette.
 	static constexpr float FLAME_HEIGHT = 0.95f;
 	static constexpr float FLAME_HALF_WIDTH = 0.20f;
 
-	// The torch flame's point light. One colour/falloff for every torch --
-	// all the same kind of fire. Tighter than the gate lanterns: a flame is a
-	// smaller, closer source than a lamp head.
+	// Torch flame's point light: one colour/falloff for every torch, tighter than gate lanterns.
 	static constexpr glm::vec3 TORCH_LIGHT_COLOR = glm::vec3(1.0f, 0.5f, 0.16f);
 	static constexpr float TORCH_LIGHT_G = 2.1f;
 	static constexpr float TORCH_LIGHT_BETA = 1.4f;
-	// Candles also shrink g (falloff reach) on top of flames.json's lightScale
-	// (peak brightness) -- two independent knobs. Without it a dim candle would
-	// still carry into the next room at torch range instead of a local pool.
+	// Candles also shrink g (reach) on top of flames.json's lightScale (peak
+	// brightness) so a dim candle doesn't still carry into the next room.
 	static constexpr float CANDLE_LIGHT_G_SCALE = 0.35f;
-	// Fraction of peak below which a light's shadow isn't worth re-capturing
-	// for a moving occluder (shadowRelevantReach() turns it into a distance).
-	// 2%: invisible even in this dark, but a ghost at the far end doesn't keep
-	// every torch re-rendering. Lower it if a shadow stops following its ghost.
+	// Fraction of peak below which a moving occluder's shadow isn't worth
+	// re-capturing (shadowRelevantReach()). Lower if a shadow stops following its ghost.
 	static constexpr float SHADOW_REACH_CUTOFF = 0.02f;
-	// Fraction of a torch light's peak below which lightReachesViewCone() treats
-	// it as lighting nothing: once that contour clears the drawn region (the
-	// GEOM_CULL_RADIUS ball or the view cone) the light is dropped from gubo and
-	// its shadow cube slot is freed. Higher than SHADOW_REACH_CUTOFF -- a shadow
-	// that lags its caster reads worse than a faint light winking out -- but low
-	// enough to stay invisible in this dark. Raise it to cull harder; watch the
-	// boundary from cheats.debugCam (the per-flame live/dead crosses).
+	// Fraction of peak below which lightReachesViewCone() treats a light as
+	// lighting nothing and drops it (and its shadow slot). Higher than
+	// SHADOW_REACH_CUTOFF: a lagging shadow reads worse than a faint light
+	// winking out. Raise to cull harder; watch the boundary via cheats.debugCam.
 	static constexpr float LIGHT_CULL_REACH_CUTOFF = 0.04f;
 
-	// How far a torch light is still uploaded, and how many may be live. Each
-	// costs a full GGX eval per SAMPLE -- the dominant GPU cost. The
-	// static_assert below ties it to the geometry cone.
+	// How far a torch light is still uploaded, and how many may be live at
+	// once -- each costs a full GGX eval per sample, the dominant GPU cost.
 	static constexpr float TORCH_LIGHT_CULL_DIST = 55.0f;
 	static constexpr int TORCH_LIGHT_MAX_LIVE = 32;
 
-	// Geometry visibility: a radius around the player plus a longer view cone.
-	// GEOMETRY only, never the light list. Carries headroom past the real
-	// frustum rather than tracking it.
+	// Geometry visibility cull: radius around the player plus a longer view
+	// cone. Geometry only, never the light list.
 	static constexpr float GEOM_CULL_RADIUS = 12.0f;  // always drawn this close, any facing
 	static constexpr float GEOM_CULL_CONE_DIST = 50.0f;  // dungeon's longest sightline is ~60
-	// Keeps a drawn torch bracket always a lit one.
+	// IMPORTANT: keeps a drawn torch bracket always a lit one -- if the light
+	// cull were shorter than the geometry cone a visible torch model could render unlit.
 	static_assert(TORCH_LIGHT_CULL_DIST >= GEOM_CULL_CONE_DIST,
 				  "a torch light cull shorter than the geometry cone would "
 				  "leave a visible torch model unlit");
-	// Cone half-angle as a cosine (a plain dot product, no per-instance acos).
-	// ~70 degrees, well past the widest FOV, plus the per-instance size allowance.
-	static constexpr float GEOM_CULL_CONE_COS = 0.34f;
-	// Instances are tested by CENTRE, and this pack's meshes aren't
+	static constexpr float GEOM_CULL_CONE_COS = 0.34f;	// ~70 degree half-angle as a cosine
+	// IMPORTANT: instances are tested by centre, and this pack's meshes aren't
 	// centre-pivoted, so a long wall could measure outside the cone with half
-	// of it still on screen -- the real cause of edge-of-screen popping. Fixed
-	// by treating every instance as a bounding SPHERE: its collider's extents
-	// where it has one, else this flat allowance (sized to a floor tile, the
-	// largest un-collided thing).
+	// still on screen (the real cause of edge-of-screen popping). Fixed by
+	// treating every instance as a bounding sphere: collider extents where
+	// available, else this flat fallback radius.
 	static constexpr float GEOM_CULL_FALLBACK_RADIUS = 4.0f;
 
-	// Third-person debug camera (cheats.debugCam): the render view orbits the
-	// player at these starting spherical coords (I/K pitch, J/; yaw, U/O
-	// dolly at runtime). Only ViewPrj changes -- every cull runs from the real
-	// first-person eye, so culled instances visibly wink out when watched
-	// from here.
+	// Third-person debug camera (cheats.debugCam) starting spherical coords
+	// (I/K pitch, J/; yaw, U/O dolly at runtime). Only ViewPrj changes; every
+	// cull still runs from the real first-person eye, so culled instances
+	// visibly wink out when watched from here.
 	static constexpr float DEBUG_CAM_DIST0 = 17.0f;   // metres from the player
 	static constexpr float DEBUG_CAM_PITCH0 = 20.0f;  // degrees above the player
 	static constexpr float DEBUG_CAM_ORBIT_SPEED = 90.0f;  // deg/s, IJKL
 	static constexpr float DEBUG_CAM_DOLLY_SPEED = 14.0f;  // m/s, U/O
-	// How much clear space the debug camera's near plane leaves in front of
-	// the player after clipping away the room shell between them.
+	// Clear space the debug camera's near plane leaves after clipping the room shell.
 	static constexpr float DEBUG_CAM_CLIP_MARGIN = 4.0f;
-	// With the debug camera on, instances whose origin sits above this height
-	// (the ceilings at y=6.2, nothing else) are skipped, so the spectator
-	// looks into an open-top dollhouse instead of at a roof. The near-plane
-	// cutaway only clears the roof right over the player; this clears it over
-	// every room the cone reaches.
+	// Instances above this height (ceilings, at y=6.2) are skipped so the
+	// spectator sees an open-top dollhouse instead of a roof.
 	static constexpr float DEBUG_CAM_ROOF_CUT = 5.0f;
 
 	// True if the instance at worldPos (bounding radius objRadius) is close or
@@ -1627,9 +1255,8 @@ class Castlescape : public BaseProject {
 								const glm::vec3 &eyePos, const glm::vec3 &forward) {
 		glm::vec3 d = worldPos - eyePos;
 		float dist = glm::length(d);
-		// The object's own half-size eaten out of the distance it's judged
-		// by, so a big/near object (large objRadius relative to dist) is
-		// effectively already "at" the camera well before its centre is.
+		// Subtract the object's own half-size from the judged distance, so a
+		// big/near object counts as "at" the camera before its centre is.
 		float effDist = std::max(0.0f, dist - objRadius);
 		if(effDist <= GEOM_CULL_RADIUS) {
 			return true;
@@ -1641,28 +1268,21 @@ class Castlescape : public BaseProject {
 			return true;	// camera at the object's centre
 		}
 		float facing = glm::dot(d / dist, forward);
-		// The object's angular size is ~objRadius/dist, so a near or large one
-		// needs less head-on facing to count as in the cone. Clamped so a
-		// tiny/far one still needs the full cosine.
+		// Angular size ~objRadius/dist, so a near/large object needs less
+		// head-on facing to count as in the cone; clamped for tiny/far ones.
 		float angularSlack = glm::clamp(objRadius / dist, 0.0f, 1.0f) * 0.5f;
 		return facing >= (GEOM_CULL_CONE_COS - angularSlack);
 	}
 
-	// True if a point light at `lightPos` with effective reach `reach` could
-	// light ANY geometry the frame draws -- i.e. its illumination sphere
-	// overlaps the geometry-visible region: the always-drawn GEOM_CULL_RADIUS
-	// ball around the eye, or the view cone (apex at the eye, axis `forward`,
-	// half-angle from GEOM_CULL_CONE_COS, length GEOM_CULL_CONE_DIST). Torch
-	// lights and their shadow cubes are dropped when this is false: a torch
-	// whose whole lit sphere sits behind the player or down an off-cone
-	// corridor contributes nothing on screen.
-	//
-	// Deliberately conservative -- it inflates the cone by the full `reach` and
-	// skips geometryVisible()'s per-instance angular slack, so it only ever
-	// culls a light that truly reaches nothing drawn. The perpendicular and
-	// axial distances are both 1-Lipschitz in world position, so evaluating the
-	// cone's flare at the farthest axial point the sphere can touch
-	// (axial + reach) bounds every lit point inside it. One sqrt, no acos/tan.
+	// True if a point light's illumination sphere overlaps the geometry-visible
+	// region (the GEOM_CULL_RADIUS ball, or the view cone). Used to drop torch
+	// lights/shadow cubes that contribute nothing on screen.
+	// IMPORTANT: deliberately conservative -- inflates the cone by the full
+	// `reach` rather than testing exactly, so it only ever culls a light that
+	// truly reaches nothing drawn. Perpendicular/axial distances are both
+	// 1-Lipschitz in world position, so evaluating the cone's flare at the
+	// farthest axial point the sphere can touch (axial + reach) bounds every
+	// lit point inside it -- one sqrt, no acos/tan.
 	static bool lightReachesViewCone(const glm::vec3 &lightPos, float reach,
 									 const glm::vec3 &eyePos, const glm::vec3 &forward) {
 		glm::vec3 d = lightPos - eyePos;
@@ -1687,16 +1307,13 @@ class Castlescape : public BaseProject {
 		return perp <= tHi * tanHalf + reach;
 	}
 
-	// How much a candidate's priority (live-light cut and shadow pool) is
-	// skewed by being ahead of vs behind the player. 0 = pure nearest-first.
-	// The (1 + W*(1 - alignment)) term is 1 dead ahead, 1+W to the side, 1+2W
-	// dead behind. At 0.6 a torch 8 units behind loses to one 10 units in view.
+	// Skews candidate priority (live-light cut, shadow pool) toward what's
+	// ahead of the player. 0 = pure nearest-first; at 0.6 a torch 8 units
+	// behind loses to one 10 units in view.
 	static constexpr float SHADOW_FACING_BIAS_WEIGHT = 0.6f;
 
-	// Squared eye->pos distance, inflated for anything behind `forward`. Still
-	// monotonic in real distance for a fixed alignment, so only the
-	// front/behind axis gets a thumb on the scale. One sqrt (distSq is already
-	// at hand at every call site).
+	// Squared eye->pos distance, inflated for anything behind `forward` but
+	// still monotonic in real distance for a fixed alignment.
 	static float facingBiasedDistSq(const glm::vec3 &pos, const glm::vec3 &eyePos,
 									 const glm::vec3 &forward) {
 		glm::vec3 d = pos - eyePos;
@@ -1709,74 +1326,53 @@ class Castlescape : public BaseProject {
 	}
 
 	// Fire envelope. The fast flicker band lives in Flame.frag as a per-pixel
-	// shimmer varying along the flame -- one twitch on every pixel at once
-	// reads as a brightness dial. The CPU keeps a slower 7 Hz term at reduced
-	// weight so the cast light still dances, layered under slower terms so it
-	// doesn't read as a metronome.
+	// shimmer; the CPU keeps a slower 7 Hz term at reduced weight so the cast light dances too.
 	static constexpr float FLAME_FLICKER_HZ = 7.0f;
-	// Spring rate for the brightness envelope (critically damped,
-	// TorchFlame::intensityVel). 14 rad/s settles in ~0.15 s: a gutter still
-	// ducks, no noise step survives as a jump.
+	// Critically-damped spring rate for the brightness envelope; settles in ~0.15s.
 	static constexpr float FLAME_BRIGHT_OMEGA = 14.0f;
-	// One-pole rate for the HEIGHT envelope, seconds. A flame shortens over a
-	// third of a second; it doesn't teleport between heights.
+	// One-pole rate for the height envelope: a flame shortens over ~1/3s, doesn't teleport.
 	static constexpr float FLAME_HEIGHT_TAU = 0.35f;
-	// Guttering: brief irregular collapses. Driven by its own slow noise
-	// crossing a high threshold, so it happens rarely and off-schedule.
+	// Guttering: brief irregular collapses, driven by slow noise crossing a high threshold.
 	static constexpr float FLAME_GUTTER_SPEED = 0.85f;
 	static constexpr float FLAME_GUTTER_LO = 0.66f;	// noise below this: no gutter
 	static constexpr float FLAME_GUTTER_HI = 0.82f;	// above this: full gutter
 	static constexpr float FLAME_GUTTER_DEPTH = 0.48f;	// how far it ducks
 
-	// Catching fire: a flame grows in from nothing when lit, rather than
-	// snapping to full size. An UNDERDAMPED spring
-	// (TorchFlame::ignitionScale/ignitionVel) chasing 1/0 -- ZETA < 1 lets it
-	// flare a little past resting size on the way up, which reads as
-	// "catching" rather than "fading in". OMEGA sets the pace (~0.3 s).
+	// Catching fire: underdamped spring (ZETA < 1) chasing 1/0, so it flares
+	// slightly past resting size on the way up, reading as "catching" rather than "fading in".
 	static constexpr float FLAME_IGNITION_OMEGA = 9.0f;
 	static constexpr float FLAME_IGNITION_ZETA = 0.55f;
 
-	// Stare-at glare: centring a wall torch in view swells the post chain's
-	// exposure/bloom and that torch's HDR output. View-dependent, so it masks
-	// the billboard's flat-card nature exactly when it shows -- face-on, close.
-	// Purely geometric, no feedback through the renderer.
+	// Stare-at glare: centring a wall torch in view swells exposure/bloom and
+	// that torch's HDR output, masking the billboard's flat-card look exactly when it would show.
 	static constexpr float GLARE_COS_MIN = 0.90f;	// facing cosine: below, no glare
 	static constexpr float GLARE_COS_MAX = 0.985f;	// above, full glare
 	static constexpr float GLARE_DIST_NEAR = 1.0f;	// fades in past this...
 	static constexpr float GLARE_DIST_FAR = 9.0f;	// ...and is gone by here
-	// Asymmetric smoothing: dazzle arrives fast, the eye recovers slower.
-	// The asymmetry is also what prevents pumping when the view strafes back
-	// and forth across the facing threshold.
+	// Asymmetric smoothing: dazzle arrives fast, eye recovers slower (also
+	// prevents pumping when the view strafes across the facing threshold).
 	static constexpr float GLARE_TAU_RISE = 0.15f;
 	static constexpr float GLARE_TAU_FALL = 0.40f;
 	static constexpr float GLARE_EXPOSURE_GAIN = 0.30f;	// exposure *= 1 + gain*glare
 	static constexpr float GLARE_BLOOM_GAIN = 0.90f;	// bloomIntensity likewise
 	static constexpr float GLARE_FLAME_GAIN = 0.50f;	// that flame's own HDR boost
 
-	// Lean. TAU: how fast the smoothed velocity chases the real one. PER_SPEED:
-	// flame half-widths of tip offset per world-unit/s of hand speed (a brisk
-	// walk ~3 u/s puts the tip over by under a fifth of a half-width). MAX
-	// caps it so sprinting can't fold the flame onto its side.
+	// Lean: TAU is how fast smoothed velocity chases the real one; PER_SPEED
+	// scales tip offset with hand speed; MAX stops sprinting folding the flame onto its side.
 	static constexpr float TORCH_LEAN_TAU = 0.14f;
 	static constexpr float TORCH_LEAN_PER_SPEED = 0.055f;
 	static constexpr float TORCH_LEAN_MAX = 0.30f;
 
-	// Seconds since startup, uploaded as gubo.time. A free-running
-	// accumulator, so the sway/flicker never repeats on a noticeable cycle.
+	// Seconds since startup, uploaded as gubo.time; free-running so sway/flicker never visibly repeats.
 	float animTime = 0.0f;
 
-	// Walking sway: a lateral swing once per stride plus a vertical bounce at
-	// twice that, from one accumulating phase. walkBobBlend is the 0..1
-	// amplitude, eased toward 1 while walking, 0 at rest.
+	// Walking sway: lateral swing once per stride, vertical bounce at twice
+	// that, from one accumulating phase. walkBobBlend eases 0..1 amplitude with walk state.
 	float walkBobPhase = 0.0f;
 	float walkBobBlend = 0.0f;
-	// Radians/second the phase advances at normal walking speed, faster
-	// while sprinting.
-	static constexpr float WALK_BOB_SPEED = 7.0f;
-	// Sway amplitude in world units, before walkBobBlend scales it down.
-	static constexpr float WALK_BOB_VERTICAL = 0.035f;
+	static constexpr float WALK_BOB_SPEED = 7.0f;			// rad/s at normal walking speed
+	static constexpr float WALK_BOB_VERTICAL = 0.035f;		// amplitude before walkBobBlend scales it
 	static constexpr float WALK_BOB_LATERAL = 0.02f;
-	// How fast walkBobBlend eases toward its target.
 	static constexpr float WALK_BOB_BLEND_TAU = 0.15f;
 	// Vertical head-bob applied to the view itself, kept well under the hand's
 	// bob so the world only just nods.
@@ -1801,102 +1397,68 @@ class Castlescape : public BaseProject {
 		float chaseSpeed = 3.4f;			// hunting pace, from gameplay.json
 
 		GhostMode mode = GhostMode::Patrol;
-		// Live position WITHOUT the bob (presentation only -- folding it in
-		// would pump the collision slab). Maintained in every mode.
+		// Live position without the bob (folding it in would pump the collision slab).
 		glm::vec3 pos{0.0f};
-		// Facing, eased not snapped: a ghost spinning on the spot reads as a bug.
-		float yaw = 0.0f;
-		// Which way it went round an obstacle last frame, +/-1. Kept until it
-		// has a clear run again, so it commits to one side of a pillar.
-		float turnBias = 1.0f;
+		float yaw = 0.0f;			// eased not snapped: spinning on the spot reads as a bug
+		float turnBias = 1.0f;		// which way it went round an obstacle last frame, kept until clear
 
-		// Breadcrumbs, oldest first. trail[0] is where the chase began.
-		std::vector<glm::vec3> trail;
-		// Patrol progress saved when the chase started, restored on getting home.
-		int resumeIdx = 1;
+		std::vector<glm::vec3> trail;	// breadcrumbs, oldest first; trail[0] is where the chase began
+		int resumeIdx = 1;				// patrol progress saved when chase started
 		float resumeDist = 0.0f;
 
-		// Where the ghost last SAW the player, and whether it has this hunt.
-		// Chase steers toward this, not the live position. Never seen = stays
-		// on patrol.
+		// Where the ghost last saw the player; chase steers toward this, not the live position.
 		glm::vec3 lastKnownPlayerPos{0.0f};
 		bool hasLastKnown = false;
 
-		// Stuck detection for Chase: `pos` at the last check, and time since it
-		// covered less than GHOST_STUCK_EPS. Pinned against a door and idling
-		// at a stale target look the same; GHOST_GIVEUP_TIME turns either into
-		// giving up.
+		// Stuck detection for Chase: pinned-against-a-door and idling-at-a-stale-target
+		// look the same; GHOST_GIVEUP_TIME turns either into giving up.
 		glm::vec3 stuckCheckPos{0.0f};
 		float stuckTimer = 0.0f;
 
-		// 0..1, how far into a chase, eased not switched. Presentational:
-		// Spectral.frag reads it (as ubo.F0) to shift the apparition toward
-		// hunt red and brighter, and it's the only thing on that shader that
-		// changes over time -- so this ease IS the animation. Eased because
-		// `mode` flips in one frame, and Chase is entered/left repeatedly
-		// within a hunt (the stuck/give-up path).
+		// 0..1 chase progress, eased not switched (`mode` flips in one frame,
+		// and Chase is entered/left repeatedly per hunt). Read by Spectral.frag
+		// as ubo.F0 to shift the apparition toward hunt red/brighter.
 		float chaseBlend = 0.0f;
 	};
 	std::vector<Ghost> ghosts;
 
-	// Time constant of chaseBlend's ease, one per direction. Lighting up
-	// faster than calming down: the telegraph has to arrive while it still
-	// buys you something, the fade out sells the chase being let go of.
+	// chaseBlend's ease time constants: lighting up faster than calming down,
+	// so the telegraph lands while it still matters.
 	static constexpr float GHOST_CHASE_FADE_IN_TAU = 0.25f;
 	static constexpr float GHOST_CHASE_FADE_OUT_TAU = 1.1f;
 
-	// Bob envelope: how far above/below the resting hover height (radians/sec, world units).
 	static constexpr float GHOST_BOB_SPEED = 1.6f;
 	static constexpr float GHOST_BOB_AMPLITUDE = 0.3f;
-	// How fast a ghost walks its breadcrumbs home. Faster than patrol or chase:
-	// the return is dead time, and a ghost drifting back at patrol speed would
-	// be out of position for the next hunt.
+	// Faster than patrol/chase: the return is dead time, no reason to dawdle back.
 	static constexpr float GHOST_RETURN_SPEED = 4.5f;
-	static constexpr float GHOST_TURN_SPEED = 9.0f;	// yaw easing, rad/s (~half-turn in 0.3 s)
+	static constexpr float GHOST_TURN_SPEED = 9.0f;	// yaw easing, rad/s
 
-	// A vertical cylinder, not a box: a box's corners project further on a
-	// diagonal and snag on jambs. Fitted from Ghost.gltf at load. The radius
-	// is shrunk below the real fit -- 0.45 not 0.65, where the clear/blocked
-	// test flipped every frame and the ghost vibrated.
+	// Vertical cylinder, not a box: box corners project further on a diagonal
+	// and snag on jambs. Radius shrunk below the real mesh fit (0.45 vs 0.65)
+	// to stop the clear/blocked test flipping every frame and the ghost vibrating.
 	static constexpr float ghostXZFitShrink = 0.45f;
-	// No extra steering padding. Tried with the 0.65 shrink and it made
-	// "blocked" win the flip-flop more often. Kept in case it's worth revisiting.
 	static constexpr float ghostSteerMargin = 1.0f;
 	float ghostRadius = 0.5f;
 	float ghostBodyBottom = -1.80f;
 	float ghostBodyTop = 0.83f;
-	// How far ahead a candidate heading is probed for walls. Long enough to
-	// turn along a wall in time, short enough not to refuse a doorway.
-	static constexpr float GHOST_PROBE_DIST = 1.2f;
-	// Horizontal catch distance plus vertical slack. Split because the ghosts
-	// hover at 2.2 and the player's eyes are at 1.8, so a 3D test would need an
-	// unfair horizontal radius.
+	static constexpr float GHOST_PROBE_DIST = 1.2f;	// wall-probe lookahead
+	// Horizontal catch distance plus vertical slack: ghosts hover at 2.2, player eyes at 1.8.
 	static constexpr float GHOST_CATCH_RADIUS = 0.85f;
 	static constexpr float GHOST_CATCH_VERTICAL = 2.5f;
 
-	// THE SPECTRAL VEIL, the screen half of the ghost fade
-	// (SpectralFade.glsl). A ghost that disappears when you reach it was never
-	// a body, so Composite.frag washes the frame cold. These MUST match
-	// SPECTRAL_INSIDE_* in that file -- a gap between the ramps is a moment
-	// with no ghost and no wash.
+	// The spectral veil, the screen half of the ghost fade (SpectralFade.glsl).
+	// IMPORTANT: must match SPECTRAL_INSIDE_* in that shader file -- a gap
+	// between the ramps is a moment with no ghost and no wash.
 	static constexpr float SPECTRAL_VEIL_OUTER = 2.00f;
 	static constexpr float SPECTRAL_VEIL_INNER = 1.05f;
-	// Margin around the model's Y bounds, so the bob doesn't blink the wash on
-	// and off.
-	static constexpr float SPECTRAL_VEIL_FADE_Y = 0.60f;
-	// How far up the veil's ramp before a non-hunting ghost snuffs the held
-	// torch. Sharing the ramp ties the flame going out to when "inside the
-	// ghost" first reads, rather than only at dead centre.
+	static constexpr float SPECTRAL_VEIL_FADE_Y = 0.60f;	// margin around model Y bounds, avoids bob flicker
+	// How far up the veil's ramp a non-hunting ghost snuffs the held torch.
 	static constexpr float SPECTRAL_VEIL_SNUFF_AT = 0.5f;
-	// Breadcrumb spacing, and the radius within which a new one counts as
-	// revisiting an old one (and prunes the loop between). The prune radius
-	// must be larger than the spacing, or consecutive crumbs prune each other.
+	// Prune radius must exceed trail spacing, or consecutive crumbs prune each other.
 	static constexpr float GHOST_TRAIL_SPACING = 0.75f;
 	static constexpr float GHOST_TRAIL_PRUNE_RADIUS = 1.4f;
 
-	// How little ground counts as "not moving" for the stuck check, and how
-	// long a chasing ghost tolerates it. Padded above idle drift, so easing a
-	// yaw or a ghostResolveWalls nudge doesn't reset the clock.
+	// Padded above idle drift so easing a yaw doesn't reset the stuck clock.
 	static constexpr float GHOST_STUCK_EPS = 0.08f;
 	static constexpr float GHOST_GIVEUP_TIME = 3.0f;
 
@@ -1932,106 +1494,46 @@ class Castlescape : public BaseProject {
 	glm::vec3 exitBoxMax{0.0f};
 	bool exitHasBox = false;
 	bool exitRequiresKey = true;
-	// Which key opens the way out, from gameplay.json's "exit"."keyId". Empty
-	// (the default) means ANY key on the ring does, which is exactly what
-	// requiresKey meant before doors had locks -- so a level that names no id
-	// behaves as it always did. Name one here as soon as a door lock competes
-	// for the same key: keys are one-shot, and a player who spends the only
-	// key on a side door would otherwise reach an exit they can never open.
-	// The exit does NOT consume the key it checks: the run is over the moment
-	// it passes, so there's nothing left to spend it on.
+	// Which key opens the way out (gameplay.json's exit.keyId). Empty = any
+	// key on the ring, matching pre-lock behaviour. The exit does not consume
+	// the key: the run ends the moment it passes.
 	std::string exitKeyId;
-	// Set every frame in GameLogic() when the player is standing in a locked
-	// exit without the key, read by updateUniformBuffer() to explain why
-	// nothing happened. Same pattern as nearbyDoor/nearbyPickup.
+	// Set every frame when the player stands in a locked exit without the
+	// key; read by updateUniformBuffer() for the prompt.
 	bool atLockedExit = false;
 
 	// --- The way out, as a door ------------------------------------------
-	//
-	// Index into `doors` of the exit leaf (hbDoorE), or -1 if the scene
-	// didn't have it. Everything below rides on how far THAT door has swung,
-	// rather than on the exit box or on the run state: the light outside is a
-	// fact about the door being open, so it has to arrive while the leaf is
-	// still moving and the player is still a few metres short of winning. It
-	// is the swing that is the payoff -- by the time the box triggers, the run
-	// is already over.
+	// Index into `doors` of the exit leaf (hbDoorE), or -1. Daylight is tied
+	// to how far this door has swung, not the exit box, since the light
+	// outside has to arrive while the leaf is still moving.
 	int exitDoorIndex = -1;
 
-	// Where the daylight stands. Two quads, and the reason there are two is
-	// the door: it swings OUTWARD, so nothing can be parked right behind the
-	// opening without the leaf sweeping through it.
-	//
-	// The wall slab is x 18.758..20 and the arch spans z 28.87..31.11. The
-	// open leaf reaches x 21.78 at the widest point of its swing (its hinge is
-	// at x 19.283 and its diagonal is 2.50 long), so the upright quad stands
-	// at 22.0 -- past the leaf by 22cm, which is what lets the door open into
-	// the light and be seen as a silhouette against it instead of being cut in
-	// half by it.
-	//
-	// That distance is also what forces the second quad. Two units of open
-	// ground between the threshold and the light are visible through the
-	// bottom of the arch (the sill hides only what is within about 35cm of the
-	// wall), and a strip of lit ground is exactly the "something out there"
-	// this effect exists to deny. So the second quad lies FLAT, 6cm above the
-	// ground plane, bridging from under the wall out to the upright one. The
-	// arch then frames white above and white below, with the door swinging
-	// between the two.
-	//
-	// Both overhang what they have to cover, generously, and the margins are
-	// worked from the worst viewing angle rather than guessed. A player can
-	// stand anywhere in the dv room, which reaches back to x 12.8, and the
-	// extreme sightlines project the arch onto the upright quad's plane over
-	// roughly z 27.0..33.0 and y -0.5..6.0 -- all of which has to fall inside
-	// the quad's flat middle, not its border fade, which ExitGlow.frag starts
-	// at 78% of the half-extent. Hence half-extents of 4.4 and 4.6 rather than
-	// something that merely covers the opening head-on. Everything past the
-	// arch is masked by the wall's own depth, and the part below y 0 is buried
-	// under the ground plane outside.
-	// Hub shrunk from 4x4 to 3x3 (see tools/build_scene.py): hbDoorE moved one
-	// tile west, so every X here is shifted by -7.2 from what the comments
-	// above still describe.
+	// Where the daylight stands: two quads because the door swings OUTWARD, so
+	// nothing can be parked right behind the opening without the leaf sweeping through it.
+	// IMPORTANT: half-extents (4.4/4.6) and positions are derived from the
+	// worst-case sightline from the dv room (reaching back to x 12.8) and the
+	// door leaf's swing geometry (hinge x 19.283, 2.50 diagonal) so the arch's
+	// projected silhouette always falls inside the quad's flat middle, not its
+	// border fade (which starts at 78% of the half-extent in ExitGlow.frag).
+	// Changing the door/hub geometry requires re-deriving these.
+	// Hub shrunk from 4x4 to 3x3 (tools/build_scene.py) shifted every X here by -7.2.
 	static constexpr glm::vec3 EXIT_GLOW_CENTER = glm::vec3(23.6f, 2.8f, 10.79f);
 	static constexpr float EXIT_GLOW_HALF_WIDTH = 4.4f;		// along world Z
 	static constexpr float EXIT_GLOW_HALF_HEIGHT = 4.6f;	// along world Y
-	// Faces back into the castle, i.e. west, so the player looking out through
-	// the doorway sees it square on.
-	static constexpr glm::vec3 EXIT_GLOW_NORMAL = glm::vec3(-1.0f, 0.0f, 0.0f);
-	// The ground quad, x 19.5..22.7. Both ends are deliberately buried: the
-	// near one runs back UNDER the wall slab, so its border fade (starting at
-	// x 19.85) is hidden by stone and the light is already at full strength by
-	// the time the threshold lets you see any of it; the far one passes behind
-	// the upright quad, so the two overlap instead of meeting at a seam.
-	//
-	// 6cm above the ground plane: far enough not to z-fight it, low enough
-	// that the door -- whose own bottom edge is at y 0.2 -- always sweeps
-	// above it rather than through it.
+	static constexpr glm::vec3 EXIT_GLOW_NORMAL = glm::vec3(-1.0f, 0.0f, 0.0f);	// faces west, into the castle
+	// Ground quad: bridges under the wall (hides its border fade in stone) out
+	// to behind the upright quad (avoids a seam). 6cm up: clears z-fighting,
+	// stays below the door's swept bottom edge (y 0.2).
 	static constexpr glm::vec3 EXIT_GLOW_FLOOR_CENTER = glm::vec3(22.7f, 0.06f, 10.79f);
 	static constexpr float EXIT_GLOW_FLOOR_HALF_X = 1.6f;
 	static constexpr float EXIT_GLOW_FLOOR_HALF_Z = 3.6f;
 	static constexpr glm::vec3 EXIT_GLOW_FLOOR_NORMAL = glm::vec3(0.0f, 1.0f, 0.0f);
-	// The third quad: the same trick as the ground one, upside down, and it
-	// exists for the same reason the ground one does -- the upright wall of
-	// light is FINITE, and a player who walks up to the threshold and looks UP
-	// sees over the top of it, straight into the skybox.
-	//
-	// Raising the upright quad cannot fix that, and no value of
-	// EXIT_GLOW_HALF_HEIGHT can: the sightline through the top of the arch
-	// hits the plane x = 22 at
-	//     y = y_eye + (4.85 - y_eye) * (22 - x_eye) / (20 - x_eye)
-	// which diverges as the player approaches the wall's outer face at x = 20.
-	// The margins in EXIT_GLOW_CENTER's comment were worked from a player
-	// standing back in the room, where the ratio is small; pressed against the
-	// doorway it is unbounded. A ceiling closes the geometry instead of
-	// chasing it -- every upward ray through the arch crosses y = 4.9 sooner
-	// or later, and whichever of the two quads it reaches first is white.
-	//
-	// y = 4.9 is 5cm above the top of the doorway (the hole runs y 0..4.85,
-	// see the collider boxes for dvDoor), so it is above the leaf's sweep and
-	// buried in the stone over the arch for the whole stretch that lies inside
-	// the wall. Same x extent as the floor quad, for the same two reasons: the
-	// near end runs back under the wall so its border fade never shows, and
-	// the far end passes behind the upright quad rather than meeting it at a
-	// seam.
+	// Third quad, same trick upside down: the upright wall of light is finite,
+	// so looking up at the threshold would otherwise see over it into the
+	// skybox (no EXIT_GLOW_HALF_HEIGHT fixes this -- the sightline through the
+	// arch top diverges as the player nears the wall). y = 4.9 sits just above
+	// the doorway hole (0..4.85) so every upward ray through the arch hits a
+	// white quad before escaping. Same X extent as the floor quad, same reasoning.
 	static constexpr glm::vec3 EXIT_GLOW_CEILING_CENTER = glm::vec3(22.7f, 4.90f, 10.79f);
 	static constexpr float EXIT_GLOW_CEILING_HALF_X = 1.6f;
 	static constexpr float EXIT_GLOW_CEILING_HALF_Z = 3.6f;
@@ -2105,8 +1607,7 @@ class Castlescape : public BaseProject {
 	// eases while the physics position stays exact. Sloped ground is already
 	// smooth; this is for crates, ledges and landings.
 	float eyeStepOffset = 0.0f;
-	// Decay time constant, and the largest snap it will absorb (past this the
-	// view trails so far it reads as sinking).
+	// Past MAX_EYE_STEP_OFFSET the view trails so far it reads as sinking.
 	static constexpr float EYE_SMOOTH_TAU = 0.06f;
 	static constexpr float MAX_EYE_STEP_OFFSET = 0.6f;
 
@@ -2135,9 +1636,8 @@ class Castlescape : public BaseProject {
 	void onWindowResize(int w, int h) {
 		std::cout << "Window resized to: " << w << " x " << h << "\n";
 		Ar = (float)w / (float)h;
-		// Update render passes. Composite follows the window; the scene follows
-		// it scaled by renderScale; the bloom targets follow that, divided by
-		// BLOOM_DIV. Starter.hpp tears down and rebuilds the images around this.
+		// Composite follows the window; the scene follows it scaled by
+		// renderScale; the bloom targets follow that, divided by BLOOM_DIV.
 		RP.width = renderWidth(w);
 		RP.height = renderHeight(h);
 		RPcomposite.width = w;
@@ -2146,12 +1646,9 @@ class Castlescape : public BaseProject {
 		RPbright.width = RPblurH.width = RPblurV.width = bloomWidth();
 		RPbright.height = RPblurH.height = RPblurV.height = bloomHeight();
 
-		// Refresh windowWidth/Height (only set in setWindowParameters()
-		// otherwise); the cheat HUD needs the current size.
 		windowWidth = (uint32_t)w;
 		windowHeight = (uint32_t)h;
 
-		// updates the textual output
 		txt.resizeScreen(w, h);
 		uiQuad.resizeScreen(w, h);
 		crosshair.resizeScreen(w, h);
@@ -2159,34 +1656,28 @@ class Castlescape : public BaseProject {
 		startScreenQuad.resizeScreen(w, h);
 		settingsQuad.resizeScreen(w, h);
 		setCrosshairQuad();
-		// The collider visualizer owns a swapchain-attached render pass too and
-		// was never told about resizes, so shrinking the window rebuilt its
-		// framebuffers at the old size (VUID-...-04533).
+		// IMPORTANT: the collider visualizer owns a swapchain-attached render
+		// pass too; without this it rebuilds its framebuffers at the old size
+		// on resize (VUID-...-04533).
 		SC.ColShow.resizeScreen(w, h);
 	}
-	
-	// Fills the attachment descriptions for the HDR chain, at the current
-	// swapchain size. Called from localInit() and onWindowResize().
-	//
-	// Spelled out rather than from getStandardAttchmentsProperties() because
-	// no stock config is floating-point: AT_SURFACE_AA_DEPTH renders into the
-	// 8-bit sRGB swapchain, capping every pixel at 1.0 -- which is what makes
-	// bloom impossible. Everything here follows from wanting a 16-bit float
-	// target.
+
+	// Fills the HDR chain's attachment descriptions at the current swapchain
+	// size. IMPORTANT: spelled out rather than using
+	// getStandardAttchmentsProperties() because no stock config is
+	// floating-point -- AT_SURFACE_AA_DEPTH renders into the 8-bit sRGB
+	// swapchain, capping every pixel at 1.0, which makes bloom impossible.
 	void buildPostAttachments() {
 		const VkFormat HDR = VK_FORMAT_R16G16B16A16_SFLOAT;
-		// Black, not the old cyan: with the geometry cull stopping walls past
-		// its cone, THIS is what shows through instead of them, and black keeps
-		// that as darkness/distance rather than a bright wall in the distance.
+		// Black, not the old cyan: this is what shows past the geometry cull's
+		// cone, and black reads as darkness/distance rather than a bright wall.
 		const VkClearValue SKY = {.color = {.float32 = {0.0f, 0.0f, 0.0f, 1.0f}}};
 		const VkClearValue BLACK = {.color = {.float32 = {0.0f, 0.0f, 0.0f, 1.0f}}};
 
 		// --- the scene pass: multisampled HDR colour, depth, and a resolve
 		// target the bloom chain and the composite can both sample.
 		hdrAtt = {
-			// Multisampled colour. storeOp DONT_CARE: nothing reads the
-			// multisampled image, only the resolve, so writing it out would be
-			// pure bandwidth.
+			// Multisampled colour; storeOp DONT_CARE since only the resolve is read.
 			{COLOR_AT, HDR,
 				VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
 				VK_IMAGE_ASPECT_COLOR_BIT, false, false,
@@ -2211,9 +1702,8 @@ class Castlescape : public BaseProject {
 				VK_IMAGE_LAYOUT_UNDEFINED,
 				VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
 				VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL},
-			// The resolve. Unlike the stock AA config's, this one is NOT the
-			// swapchain image (swapChain = false): it is an ordinary sampled
-			// texture, which is what lets the passes below read the scene back.
+			// The resolve: an ordinary sampled texture, not the swapchain
+			// image, so later passes can read the scene back.
 			{RESOLVE_AT, HDR,
 				VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
 				VK_IMAGE_ASPECT_COLOR_BIT, false, false,
@@ -2228,9 +1718,8 @@ class Castlescape : public BaseProject {
 				VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}
 		};
 
-		// --- the three bloom targets. Identical: one single-sampled HDR colour
-		// attachment, no depth (a full-screen quad has nothing to test). loadOp
-		// DONT_CARE: the quad covers every pixel, so a clear would write twice.
+		// Three identical bloom targets: single-sampled HDR colour, no depth
+		// (full-screen quad, nothing to test). loadOp DONT_CARE since the quad covers every pixel.
 		std::vector<AttachmentProperties> bloomTarget = {
 			{COLOR_AT, HDR,
 				VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
@@ -2249,10 +1738,9 @@ class Castlescape : public BaseProject {
 		blurHAtt = bloomTarget;
 		blurVAtt = bloomTarget;
 
-		// --- the composite, straight onto the swapchain image. finalLayout
-		// PRESENT_SRC_KHR because the text and HUD passes that run after this
-		// one both declare PRESENT_SRC_KHR as their initialLayout and load what
-		// is already there.
+		// Composite writes straight to the swapchain image. IMPORTANT:
+		// finalLayout PRESENT_SRC_KHR because the text/HUD passes that run
+		// after this one declare it as their initialLayout and load what's already there.
 		compositeAtt = {
 			{COLOR_AT, swapChainImageFormat,
 				VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
@@ -2269,22 +1757,17 @@ class Castlescape : public BaseProject {
 		};
 	}
 
-	// Rebuilds the attachment lists via buildPostAttachments(), then re-inits
-	// the five render passes -- scene at renderWidth()/Height(), bloom chain at
-	// bloomWidth()/Height(), composite at the window size.
-	//
-	// Called from localInit(), and at runtime when msaaSamples changes: unlike
-	// renderScale (which only pokes RP.width/height like a resize), a new
-	// sample count changes the hdrAtt properties themselves, which only .init()
-	// re-copies. The caller must follow this with RebuildPipeline().
+	// Rebuilds attachment lists then re-inits the five render passes -- scene
+	// at renderWidth()/Height(), bloom chain at bloomWidth()/Height(),
+	// composite at window size. Called from localInit() and whenever
+	// msaaSamples changes (a new sample count changes hdrAtt itself, which
+	// only .init() re-copies). Caller must follow with RebuildPipeline().
 	void initRenderPasses() {
 		buildPostAttachments();
 
-		// ATDEP_SIMPLE, not the default ATDEP_SURFACE_ONLY: the scene's output
-		// is sampled by a later pass, so it needs the dependency ordering a
-		// colour write against a later shader read (and the next frame's overwrite).
-		// renderWidth()/Height() rather than -1,-1 ("match the swapchain"):
-		// this is what lets renderScale differ from the window resolution.
+		// ATDEP_SIMPLE, not ATDEP_SURFACE_ONLY: the scene's output is sampled
+		// by a later pass, so it needs dependency ordering against that read.
+		// renderWidth()/Height(), not -1,-1, is what lets renderScale differ from the window.
 		RP.init(this, renderWidth(swapChainExtent.width), renderHeight(swapChainExtent.height), -1, &hdrAtt,
 				RenderPass::getStandardDependencies(ATDEP_SIMPLE), true);
 
@@ -2294,18 +1777,14 @@ class Castlescape : public BaseProject {
 					 RenderPass::getStandardDependencies(ATDEP_SIMPLE), true);
 		RPblurV.init(this, bloomWidth(), bloomHeight(), -1, &blurVAtt,
 					 RenderPass::getStandardDependencies(ATDEP_SIMPLE), true);
-		// The composite writes the swapchain and is read by nobody, so the
-		// plain surface dependency is right.
+		// Composite writes the swapchain and is read by nobody, so plain surface dependency is right.
 		RPcomposite.init(this, -1, -1, -1, &compositeAtt,
 						 RenderPass::getStandardDependencies(ATDEP_SURFACE_ONLY), false);
 	}
 
-	// Width/height of the bloom chain's targets, derived from the SCENE pass's
-	// own current resolution (RP.width/height, already scaled by
-	// renderScale) rather than the swapchain's -- bloom reads the scene's
-	// resolve target, so its size should track what that target actually is,
-	// not the window's. Clamped at 1 so a minimised or absurdly narrow window
-	// can't ask for a zero-sized image.
+	// Bloom target size, derived from the scene pass's own resolution
+	// (already scaled by renderScale), not the swapchain's, since bloom reads
+	// the scene's resolve target. Clamped at 1 for a minimised window.
 	int bloomWidth() const {
 		return std::max(1, RP.width / BLOOM_DIV);
 	}
@@ -2316,43 +1795,23 @@ class Castlescape : public BaseProject {
 	// Here you load and setup all your Vulkan Models and Textures.
 	// Here you also create your Descriptor set layouts and load the shaders for the pipelines
 	void localInit() {
-		// windowWidth/windowHeight are still whatever setWindowParameters()
-		// requested (800x600) at this point -- that's a size in WINDOW
-		// POINTS, handed to glfwCreateWindow(), not necessarily the real
-		// FRAMEBUFFER size in pixels. On an integer-scale display the two
-		// are the same number; on a HiDPI/Retina one (2x, 3x, ...) the
-		// framebuffer is that many times larger, and nothing has corrected
-		// windowWidth/windowHeight to match it yet -- the actual swapchain
-		// is sized correctly regardless (chooseSwapExtent() in Starter.hpp
-		// queries glfwGetFramebufferSize() itself, independently), which is
-		// why the 3D scene always renders at the right resolution, but every
-		// UI widget below (txt/uiQuad/crosshair/pauseQuad/startScreenQuad/
-		// settingsQuad, and StartScreen's own first setOpen()) is about to
-		// be initialized against whatever windowWidth/windowHeight says NOW
-		// -- the stale, too-small request -- and stays that way until an
-		// actual window resize corrects it (onWindowResize() gets the real
-		// framebuffer size from GLFW's own callback and forces everything to
-		// rebuild against it). That mismatch is what read as "the launch
-		// screen isn't really fullscreen until I resize the window": its own
-		// render pass was built to only cover the smaller, wrong area.
-		//
-		// Corrected here, once, before anything below reads these two
-		// fields, rather than chasing the same fix per-widget.
+		// IMPORTANT: windowWidth/windowHeight still hold setWindowParameters()'s
+		// requested size in window points, not the real HiDPI framebuffer size
+		// in pixels (the swapchain itself is sized correctly independently, via
+		// glfwGetFramebufferSize() in chooseSwapExtent()). Left uncorrected,
+		// every UI widget below initializes against the stale smaller size and
+		// stays wrong until the first real resize -- this is why the launch
+		// screen used to not look fullscreen until the window was resized.
+		// Corrected here, once, rather than per-widget.
 		{
 			int realW = 0, realH = 0;
 			glfwGetFramebufferSize(window, &realW, &realH);
 			if(realW > 0 && realH > 0) {
 				windowWidth = (uint32_t)realW;
 				windowHeight = (uint32_t)realH;
-				// Same story as windowWidth/windowHeight above: Ar defaults
-				// to a hardcoded 4/3 guess in setWindowParameters() (matching
-				// the REQUESTED 800x600, not necessarily the real
-				// framebuffer), and is otherwise only ever recomputed by
-				// onWindowResize(). A uniform HiDPI scale factor alone
-				// wouldn't change the ratio, but there's no guarantee the
-				// real framebuffer is 4:3 shaped at all -- correcting it here
-				// on the same real dimensions keeps the very first frame's
-				// 3D projection matrix right regardless.
+				// Ar also defaults to a hardcoded 4/3 guess; corrected here so
+				// the first frame's projection matrix is right even if the
+				// real framebuffer isn't 4:3.
 				Ar = (float)realW / (float)realH;
 			}
 		}
@@ -2375,18 +1834,9 @@ class Castlescape : public BaseProject {
 					// third  element : the pipeline stage where it will be used
 					{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_ALL_GRAPHICS, sizeof(GlobalUniformBufferObject), 1}
 				  });
-		// Shadow sampling (set 2 of P, see CookTorrance.frag). One separate
-		// sampler binding per cube map -- see the member declaration for why
-		// not one array binding. linkSize on the samplers is their own index
-		// into the flat VkDescriptorImageInfo list Scene builds per instance
-		// (see the texDefs passed to PRs[0].init below), the same role it plays
-		// for DSLlocal's single texture.
-		//
-		// Built in a loop rather than written out, so the count lives in
-		// exactly one place: NUM_SHADOW_CUBES samplerCube bindings, the same
-		// order and numbering CookTorrance.frag declares its shadowCube*
-		// bindings with, which nothing but agreement here keeps true.
-		// linkSize follows the same order (see shadowMapDefs below).
+		// Shadow sampling (set 2 of P, CookTorrance.frag): one separate sampler
+		// binding per cube map. IMPORTANT: order/numbering here must agree with
+		// CookTorrance.frag's shadowCube* bindings -- nothing else enforces it.
 		std::vector<DescriptorSetLayoutBinding> shadowSampleBindings;
 		for(int i = 0; i < NUM_SHADOW_CUBES; i++) {
 			shadowSampleBindings.push_back({(uint32_t)i,
@@ -2405,22 +1855,17 @@ class Castlescape : public BaseProject {
 				         sizeof(glm::vec2), UV}
 				});
 
-		// Anti-aliasing level, set before initRenderPasses() reads it. Starter's
-		// default is the GPU's max (16 here), and Starter also forces
-		// sampleShadingEnable, so MSAA becomes full supersampling: the fragment
-		// shader runs per SAMPLE. At 16, CookTorrance.frag ran 16x per pixel
-		// with the full light loop -- 25 FPS on this Iris Xe, vs 94 at 4x.
-		// 4 is the compromise, live-adjustable via the "MSAA" slider.
+		// IMPORTANT: Starter forces sampleShadingEnable, so MSAA becomes full
+		// supersampling (fragment shader runs per sample). At the GPU's max
+		// (16), CookTorrance.frag's full light loop ran 25 FPS on this Iris Xe
+		// vs 94 at 4x, hence 4 as the default; live-adjustable via the MSAA slider.
 		msaaSamples = VK_SAMPLE_COUNT_4_BIT;
-		// The slider's upper bound: the device's real cap, not an assumed 16.
-		maxMsaaLevel = std::log2((float)getMaxUsableSampleCount());
+		maxMsaaLevel = std::log2((float)getMaxUsableSampleCount());	// slider's upper bound: the device's real cap
 
 		initRenderPasses();
 
-		// The cube shadow render pass (torches) -- see the RPShadowCubeCompat
-		// member comment for why this is built once, shared, and only its
-		// .renderPass field is used. createCubeShadowMaps() below builds the
-		// 36 real per-face framebuffers against it.
+		// Cube shadow render pass (torches); see RPShadowCubeCompat's member
+		// comment. createCubeShadowMaps() builds the 36 real per-face framebuffers against it.
 		std::vector<AttachmentProperties> cubeShadowAtt = {
 			{COLOR_AT, VK_FORMAT_R32_SFLOAT,
 				VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -2447,9 +1892,9 @@ class Castlescape : public BaseProject {
 				VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
 				VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL}
 		};
-		// ATDEP_DEPTH_TRANS, but for a COLOR attachment: external->0 puts the
-		// image into COLOR_ATTACHMENT_OPTIMAL before the write, 0->external
-		// makes the main pass's fragment read wait for the write.
+		// Like ATDEP_DEPTH_TRANS but for a color attachment: external->0 puts
+		// the image into COLOR_ATTACHMENT_OPTIMAL before the write, 0->external
+		// makes the main pass's fragment read wait for it.
 		std::vector<VkSubpassDependency> cubeShadowDeps = {
 			{
 				VK_SUBPASS_EXTERNAL, 0,
@@ -2481,35 +1926,28 @@ class Castlescape : public BaseProject {
 						  "shaders/scene/CookTorrance.frag.spv",
 						  {&DSLglobal, &DSLlocal, &DSLshadowSample});
 
-		// The ghosts. Two sets, not three: Spectral.frag is unlit and samples
-		// no shadow map, so DSLshadowSample is left off entirely.
+		// Ghosts: two sets, not three -- Spectral.frag is unlit and samples no shadow map.
 		Pspectral.init(this, &VD, "shaders/scene/PosNormUV.vert.spv",
 							  "shaders/spectral/Spectral.frag.spv",
 							  {&DSLglobal, &DSLlocal});
-		// Alpha blending, the flag the whole effect hangs off and why the
-		// ghosts need their own pipeline (blending is baked into a VkPipeline).
 		Pspectral.setTransparency(true);
-		// BACK-FACE CULLING KEPT ON, unlike Flame/ExitGlow (flat billboards):
-		// the ghost is a closed mesh, and with depthWriteEnable forced on,
-		// drawing both faces would blend two unsorted layers. One layer per
-		// pixel has no order to get wrong; the Fresnel rim supplies the volume.
-		// LESS_OR_EQUAL is load-bearing with the prepass in front: the prepass
-		// leaves the nearest ghost depth, and EQUAL lets exactly those
-		// fragments through.
+		// IMPORTANT: back-face culling kept on, unlike Flame/ExitGlow's flat
+		// billboards -- the ghost is a closed mesh with depthWriteEnable forced
+		// on, so drawing both faces would blend two unsorted layers.
+		// LESS_OR_EQUAL is load-bearing with the depth prepass in front: the
+		// prepass leaves the nearest ghost depth, and EQUAL lets exactly those fragments through.
 		Pspectral.setCompareOp(VK_COMPARE_OP_LESS_OR_EQUAL);
 
-		// The prepass. Matches Pspectral but for the shader and compare op.
-		// Transparency on: it emits alpha 0, so the blend returns dst and no
-		// colour is written.
+		// Prepass matches Pspectral but for shader/compare op. Transparency on:
+		// it emits alpha 0, so the blend returns dst and writes no colour.
 		PspectralDepth.init(this, &VD, "shaders/scene/PosNormUV.vert.spv",
 								   "shaders/spectral/SpectralDepth.frag.spv",
 								   {&DSLglobal, &DSLlocal});
 		PspectralDepth.setTransparency(true);
 
-		// The post passes. Two set layouts: one for the single-image passes,
-		// one for the composite (which mixes two). Note: Starter reuses
-		// `linkSize` as the INDEX into the image-info vector, not a byte size,
-		// so binding 1 reads image 0 and binding 2 reads image 1.
+		// Post passes: one set layout for single-image passes, one for the
+		// composite (mixes two). Starter reuses `linkSize` as the index into
+		// the image-info vector, not a byte size.
 		DSLpost1.init(this, {
 					{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_ALL_GRAPHICS,
 						sizeof(PostUniformBufferObject), 1},
@@ -2558,17 +1996,11 @@ class Castlescape : public BaseProject {
 		memcpy(Mpost->vertices.data(), postCorners, sizeof(postCorners));
 		Mpost->initMesh(this, &VDpost, false);
 
-		// The cube shadow pass's pipeline (torches). Same DSLlocal reuse
-		// idea as the main pass: set 0 is the SAME per-instance buffer the
-		// main pass's ubo.mMat comes from, reused here to read Wm again for a
-		// different projection. Set 1 is DSLshadowCubeCapture,
-		// one uniform buffer per torch cube slot (DSshadowCube[], mapped
-		// fresh every frame in updateUniformBuffer()) carrying the light's
-		// current view-projection matrices and world position -- NOT a push
-		// constant, see ShadowCube.vert's header for why that would silently
-		// freeze the held torch's shadow at whatever position it first
-		// rendered from. The push constant that remains only ever carries
-		// the face index, which genuinely is fixed at record time.
+		// Cube shadow pass's pipeline (torches). Set 0 reuses the main pass's
+		// per-instance buffer to read Wm again for a different projection. Set
+		// 1 is DSLshadowCubeCapture, one UBO per cube slot with that light's
+		// view-projections + world position (not a push constant -- see
+		// ShadowCubeUniformBufferObject's comment). Only the face index push constant is truly fixed at record time.
 		DSLshadowCubeCapture.init(this, {
 					{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 						VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -2581,22 +2013,16 @@ class Castlescape : public BaseProject {
 		PShadowCube.init(this, &VD, "shaders/shadow/ShadowCube.vert.spv",
 								"shaders/shadow/ShadowCube.frag.spv",
 								{&DSLlocal, &DSLshadowCubeCapture}, {shadowCubeFacePushConstant});
-		// FRONT faces culled, so each occluder records the side turned AWAY
-		// from the torch. Shadow acne is a surface comparing against its own
-		// record; every defence against it is slack, and slack is what
-		// detaches a shadow from its caster. Culling front faces removes the
-		// premise -- a lit surface isn't in the map -- so the depth slack in
-		// shadowFromCube() can be nothing but floating-point noise. The cost:
-		// an occluder now leaks light by its own THICKNESS (its far side is
-		// recorded), which every wall here dwarfs. Watch a single flat face,
-		// which has no far side.
+		// IMPORTANT: front faces culled, so each occluder records the side
+		// turned away from the torch -- a lit surface is never in the map, so
+		// shadow acne defence in shadowFromCube() needs only floating-point
+		// noise slack instead of the usual bias-vs-detachment tradeoff. Cost:
+		// an occluder leaks light by its own thickness (its far side is recorded).
 		PShadowCube.setCullMode(VK_CULL_MODE_FRONT_BIT);
-		// Against RPShadowCubeCompat -- see its member comment.
 		PShadowCube.create(&RPShadowCubeCompat);
 
-		// Descriptor pool size (before loading the scene). The four post sets:
-		// one block each, five textures between them. + NUM_SHADOW_CUBES for
-		// DSshadowCube[], one block/set per cube slot.
+		// Descriptor pool size: 4 post sets (one block each, 5 textures
+		// between them) + NUM_SHADOW_CUBES for DSshadowCube[].
 		DPSZs.uniformBlocksInPool = 2 + 4 + NUM_SHADOW_CUBES;
 		DPSZs.texturesInPool = 1 + 5;
 		DPSZs.setsInPool = 2 + 4 + NUM_SHADOW_CUBES;
@@ -2605,22 +2031,18 @@ class Castlescape : public BaseProject {
 		VDRs.resize(1);
 		VDRs[0].init("VDposNormUV",  &VD);
 
-		// DSLshadowSample: none of these are "fromInstance" -- the shadow maps
-		// are the same fixed images for every instance, not per-instance
-		// textures like DSLlocal's albedo map. pos is unused on a
-		// non-fromInstance entry. In a loop for the same reason the layout
-		// above is. Same order the binding list above and CookTorrance.frag's
-		// declarations use.
+		// DSLshadowSample textures: none are "fromInstance" -- the shadow maps
+		// are the same fixed images for every instance, unlike DSLlocal's
+		// per-instance albedo. Same order as the binding list above.
 		std::vector<TextureDefs> shadowMapDefs;
 		for(int i = 0; i < NUM_SHADOW_CUBES; i++) {
 			shadowMapDefs.push_back({false, 0,
 				{cubeShadowSampler.getSampler(), torchCube[i].cubeView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}});
 		}
 
-		// ORDER MATTERS: Scene walks techniques in registration order, so
-		// "Spectral" second puts every alpha-blended ghost after every opaque
-		// wall it's seen through. Drawn first, a ghost would composite against
-		// the clear colour and the dungeon would paint over it.
+		// IMPORTANT: order matters -- Scene walks techniques in registration
+		// order, so "Spectral" must come second, after every opaque wall a
+		// ghost could be seen through.
 		PRs.resize(2);
 		PRs[0].init("CookTorrance", {
 							{&P, {//Pipeline and DSL for the main pass
@@ -2633,17 +2055,12 @@ class Castlescape : public BaseProject {
 								}
 						  }, /*TotalNtextures*/1, &VD);
 
-		// Same two entries minus the shadow maps, matching Pspectral's two-set
-		// layout. DSLlocal takes the ghost's albedo at slot 0, which
-		// Spectral.frag reads as a density mask.
-		//
-		// The pipeline named here is the DEPTH PREPASS, not Pspectral: naming
-		// it (not nullptr) makes SC.init() build this technique's descriptor
-		// sets, which then serve both passes (shared DSLs). Right after
-		// SC.init() the pipeline is nulled so Scene skips it -- both prepass
-		// and colour pass are issued by hand in populateCommandBuffer(), with
-		// the flames between the dungeon and the prepass. Order: dungeon, then
-		// flames, then ghost prepass, then ghost colour.
+		// DSLlocal takes the ghost's albedo at slot 0 (Spectral.frag reads it
+		// as a density mask). IMPORTANT: the pipeline named here is the depth
+		// prepass, not Pspectral -- naming it makes SC.init() build this
+		// technique's descriptor sets (shared by both passes), then it's
+		// nulled below so Scene skips it; both passes are issued by hand in
+		// populateCommandBuffer() in order: dungeon, flames, ghost prepass, ghost colour.
 		PRs[1].init("Spectral", {
 							{&PspectralDepth, {
 							 /*DSLglobal*/{},
@@ -2659,47 +2076,29 @@ class Castlescape : public BaseProject {
 			exit(0);
 		}
 
-		// Unhook the ghost depth prepass from Scene's walk: the flames must be
-		// drawn BETWEEN the dungeon and the prepass, or a ghost writing its
-		// occluding depth first erases a flame poking into its body. Nulled
-		// here (Scene skips a null pipeline); populateCommandBuffer() issues it
-		// by hand after the flames. The descriptor sets Scene built stay valid.
+		// Unhook the ghost depth prepass from Scene's walk: flames must draw
+		// between the dungeon and the prepass, or a ghost's occluding depth
+		// would erase a flame poking into its body. Descriptor sets stay valid.
 		SC.TI[1].T->PT[0].P = nullptr;
 
-		// Cache the floor's top Y for the no-clip under-the-map clamp. Falls
-		// back to 0.0f (this scene's floor height) if there's no "floor".
+		// Cache the floor's top Y for the no-clip under-the-map clamp.
 		auto floorIt = SC.InstanceIds.find("floor");
 		if(floorIt != SC.InstanceIds.end() && SC.I[floorIt->second]->C != nullptr) {
 			worldFloorY = SC.I[floorIt->second]->C->getExtents().yMax;
 		}
 
-		// Gameplay collision list: scene.json's auto-fit boxes, plus the hand-authored
-		// geometry for the models an auto-fit box gets wrong (the gate's archway, the
-		// staircase's profile). See SceneColliders.hpp for why those live in their own
-		// data file instead of scene.json or here.
+		// Gameplay collision list: scene.json's auto-fit boxes, plus
+		// hand-authored geometry for models an auto-fit box gets wrong.
 		colliderSet.init(&SC, "assets/scenes/colliders.json");
 		allColliders = colliderSet.list();
 
-		// Interactable doors. Each door leaf instance's own origin sits at
-		// its hinge (see the Door struct comment above), so promptOffset is
-		// the doorway's *centre* in the leaf's local frame instead -- the
-		// point the in-range check should measure from, not the jamb it
-		// hinges on. Measured off the current SM_WallDoor_Hole_01 geometry by
-		// rasterizing its triangles, not eyeballed: the opening is ARCHED, not
-		// rectangular -- it spans local Z 2.42..4.77 and Y 0.18..4.10 as a
-		// rectangle, then curves in (1.91 wide at Y 4.25, 1.29 at Y 4.75) and
-		// closes at about Y 4.85. Re-measure and update this if the asset is
-		// regenerated again.
-		// openAngleDeg is how FAR the leaf swings open. Which way is no
-		// longer a scene decision: every door swings away from whoever
-		// opens it (see Door::swingSignAwayFrom), so the sign here only
-		// survives as the fallback for a pose that can't be read.
-		//
-		// lockKeyId is the padlock: leave it "" for a door that just opens,
-		// or name the keyId of the pickup that opens it (see addPickup
-		// below). lockLabel is what the prompt calls that key and defaults to
-		// the id itself. Locking a door is therefore one extra argument on
-		// the addDoor() line, not new plumbing -- same as adding the door was.
+		// Interactable doors. promptOffset is the doorway's centre in the
+		// leaf's local frame (the origin sits at the hinge), measured off the
+		// arched SM_WallDoor_Hole_01 geometry -- re-measure if that asset changes.
+		// openAngleDeg is how far the leaf swings; direction is decided at
+		// runtime by Door::swingSignAwayFrom, so the sign here is only a fallback.
+		// lockKeyId names the pickup that opens the padlock ("" = no lock);
+		// lockLabel is the prompt's name for it, defaulting to the id.
 		auto addDoor = [&](const char *id, glm::vec3 promptOffset, float openAngleDeg,
 						   const char *lockKeyId = "", const char *lockLabel = "") {
 			auto it = SC.InstanceIds.find(id);
@@ -2720,19 +2119,16 @@ class Castlescape : public BaseProject {
 			d.locked = !d.lockKeyId.empty();
 			doors.push_back(d);
 		};
-		// Finds a door by its instance id, for the two helpers below that
-		// decorate one after addDoor() has made it. Both could have been extra
-		// arguments on addDoor instead; they are not, because a door that needs
-		// neither -- which is every door but the bookcase -- should not have to
-		// read past them on its own line.
+		// Finds a door by instance id, for the helpers below that decorate one
+		// after addDoor() creates it (kept separate so ordinary doors don't
+		// need to read past unused arguments).
 		auto findDoor = [&](const char *id) -> Door * {
 			auto it = std::find_if(doors.begin(), doors.end(),
 								   [&](const Door &x) { return x.instanceId == id; });
 			return it == doors.end() ? nullptr : &*it;
 		};
-		// Replaces the generic padlock prompts and marks a door secret -- one
-		// call because it's one decision: a door with its own wording isn't a
-		// door, and must not wear the aura. `blocked` may be empty.
+		// Replaces the generic padlock prompts and marks a door secret.
+		// `blocked` may be empty.
 		auto setSecretDoor = [&](const char *id, const char *ready,
 								 const char *missing, const char *blocked = "") {
 			Door *d = findDoor(id);
@@ -2745,76 +2141,31 @@ class Castlescape : public BaseProject {
 			d->promptBlocked = blocked;
 			d->secret = true;
 		};
-		// The level's doors, west to east along the intended route. All leaves
-		// share the same asset, hinge geometry and doorway centre, so the same
-		// promptOffset/openAngleDeg apply to every one -- the only things that
-		// differ per door are which wall it stands in (its yaw, carried from
-		// scene.json) and what key, if any, it wants. See tools/build_scene.py
-		// for the layout these ids come from.
-		//
-		// iaDoorPanel -- the threshold between the intro corridor and the hub.
-		// Unlocked: it exists to be a door the player opens once (learning [E])
-		// before any lock is in play, the same teaching role the hall door's
-		// padlock used to have but without the dead end.
-		addDoor("iaDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f);
-		// hbDoorN -- hub north wall, gates branch 1 / room A (the book). Opened
-		// with the "iron" key that sits on the hub table.
-		addDoor("hbDoorNPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f, "iron", "iron key");
-		// hbDoorS -- hub south wall, gates branch 3 / room C (the final key).
-		// Opened with "bronze", found in the dark of room B once the player has
-		// the torch to see it by.
-		addDoor("hbDoorSPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f, "bronze", "bronze key");
-		// hbDoorE -- hub east wall, the way out. The only door that opens onto
-		// the outside and the last thing between the player and the win box
-		// (see gameplay.json's "exit", which does not check a key of its own --
-		// this door does). Its hole wall carries no yaw (it stands in an EAST
-		// wall), so the leaf's local +X points OUTWARD, unlike every other leaf
-		// here -- hence the flipped lock props below and the NEGATIVE open
-		// angle, which is what "swing away from the player, into the daylight"
-		// means for this mirrored frame. Opened with "gold", the reward for
-		// room C's jump puzzle.
+		// The level's doors, west to east. All leaves share the same asset,
+		// hinge geometry and doorway centre, so promptOffset/openAngleDeg is
+		// the same for each; only wall/yaw and key differ. See tools/build_scene.py.
+		addDoor("iaDoorPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f);	// intro corridor -> hub, unlocked teaching door
+		addDoor("hbDoorNPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f, "iron", "iron key");		// -> room A
+		addDoor("hbDoorSPanel", glm::vec3(0.0f, 2.52f, -1.231f), 100.0f, "bronze", "bronze key");	// -> room C
+		// The way out. IMPORTANT: this hole wall carries no yaw, so the leaf's
+		// local +X points outward (unlike every other leaf here) -- hence the
+		// flipped lock props and the negative open angle for this mirrored frame.
 		addDoor("hbDoorEPanel", glm::vec3(0.0f, 2.52f, -1.231f), -100.0f, "gold", "gold key");
-		// hbShelfPanel -- the secret passage: a bookcase standing in the hub's
-		// west wall (tile (0,0)), gating branch 2 / room B (the torch). It is a
-		// Door and nothing else -- same hinge convention, same swing, same
-		// padlock rule -- differing only in what pays it and what it says.
-		//
-		// tools/make_bookshelf.py builds SM_Bookshelf_01 in SM_Door_01's own
-		// local frame: origin on the hinge, panel hanging to local -Z, a
-		// silhouette that follows the hole wall's arch. It sits INSIDE the
-		// wall's thickness like every other leaf, which is what lets it swing
-		// either way. promptOffset X is 0.25, not 0: the range check should
-		// measure from the shelf FACE, not the hinge plane behind it.
-		//
-		// Locked with "book", which no other lock takes and which the exit
-		// does not accept (gameplay.json's exit.keyId is "gold"), so the one
-		// book in the level can only ever be spent here.
+		// Secret bookcase (-> room B). promptOffset X is 0.25, not 0, so the
+		// range check measures from the shelf face, not the hinge plane behind it.
 		addDoor("hbShelfPanel", glm::vec3(0.25f, 2.20f, -1.231f), 100.0f, "book", "old book");
-		// What the bookcase says, and only ever with the book in hand (see
-		// Door::secret): until then the shelf is furniture and does not glow,
-		// so "A book is missing from this shelf" agrees with the player once
-		// they have worked the gap out, it does not lead them to it. No blocked
-		// line: the far side is unreachable without having opened it, and it
-		// never re-locks within a run.
+		// Only glows/prompts with the book in hand; no blocked line, since the
+		// far side is unreachable before it's opened and it never re-locks.
 		setSecretDoor("hbShelfPanel",
 					  "[E] Slide the book into the gap",
 					  "A book is missing from this shelf");
-		// Hangs a scene instance on a door as lock hardware. Separate from
-		// addDoor() because a door can carry several -- the chains and padlock
-		// are two models with different textures.
-		//
-		// These instances DO carry a "collider" in scene.json: the hardware
-		// hangs 0.225 in front of the leaf face. Safe only because the prop
-		// loop in GameLogic() syncs that box off the prop's Wm.
-		//
-		// `flip` puts the hardware on the leaf's OTHER face. make_door_lock.py
-		// builds against one face only, so a door approached from the other
-		// side would show the bare leaf. A half turn about the leaf's vertical
-		// axis through the middle of its thickness and the doorway centre lands
-		// the pieces on the far face -- and since both models are symmetric
-		// about that z, the turned copy is the mirror the script would have
-		// exported. A rotation, not a mirror matrix: mirroring flips the
-		// winding and turns the piece inside out under backface culling.
+		// Hangs a scene instance on a door as lock hardware; separate from
+		// addDoor() since a door can carry several (chains + padlock).
+		// IMPORTANT: their scene.json colliders are synced off the prop's Wm
+		// by the prop loop in GameLogic(), not static.
+		// `flip` puts the hardware on the leaf's other face (make_door_lock.py
+		// only builds one face). A rotation, not a mirror matrix: mirroring
+		// flips the winding and turns the piece inside out under backface culling.
 		auto addLockProp = [&](const char *doorId, const char *propId, bool flip = false) {
 			auto d = std::find_if(doors.begin(), doors.end(),
 								  [&](const Door &x) { return x.instanceId == doorId; });
@@ -2833,16 +2184,11 @@ class Castlescape : public BaseProject {
 			}
 			d->lockProps.push_back({SC.I[it->second], local});
 
-			// Grow the auto-fit box outward so the player stops before the
-			// hardware is in the torch's reach. The tuck is already at its
-			// floor (HAND_TUCK_MIN_REACH), so distance is the only lever.
-			// xMax alone, in MODEL space: the hardware is modelled entirely on
-			// +X, and `local`'s half turn carries mesh and margin together.
-			// Inflating all six faces would push into the jambs.
+			// Grow the auto-fit box outward (xMax only, model space) so the
+			// player stops before the hardware is in the torch's reach.
 			Collider *propC = SC.I[it->second]->C;
 			if(propC != nullptr) {
-				// getExtents() is world-space; at identity it reads back the
-				// model box. initAABB resets Wm, which the prop loop rewrites.
+				// getExtents() is world-space; at identity it reads back the model box.
 				propC->setWorldMatrix(glm::mat4(1.0f));
 				AABBextents L = propC->getExtents();
 				propC->initAABB(L.xMin, L.yMin, L.zMin,
@@ -2853,17 +2199,8 @@ class Castlescape : public BaseProject {
 			// works from, so the prompt can't disagree with the screen.
 			d->lockFaceSign = flip ? -1.0f : 1.0f;
 		};
-		// Both instances carry the SAME translate/eulerAngles as the leaf in
-		// scene.json (build_scene.py places them there), which is all the
-		// placement they need: the models live in its local frame.
-		//
-		// All three locked leaves take flip=true. The hardware is exported on
-		// the leaf's local +X face, and for each of these the player stands on
-		// the OTHER side of that: hbDoorN (yaw 90) is approached from the hub
-		// to its south, hbDoorS (yaw 270) from the hub to its north, hbDoorE
-		// (yaw 0) from the hub to its west while its +X points outward. The
-		// half turn lands the chains and lock on the face the player actually
-		// sees, and sets the side [E] works from with them.
+		// All three locked leaves take flip=true: the hardware exports on the
+		// leaf's local +X face, and the player always stands on the other side of that.
 		addLockProp("hbDoorNPanel", "hbDoorNChains", true);
 		addLockProp("hbDoorNPanel", "hbDoorNPadlock", true);
 		addLockProp("hbDoorSPanel", "hbDoorSChains", true);
@@ -2883,22 +2220,14 @@ class Castlescape : public BaseProject {
 			std::cout << "Exit door 'hbDoorEPanel' not found: no daylight outside it\n";
 		}
 
-		// The key graph is strictly linear and every key opens exactly one
-		// lock: iron -> hbDoorN -> book -> hbShelfPanel -> bronze -> hbDoorS
-		// -> gold -> hbDoorE -> win. No spares, no soft-lock: each key is found
-		// in the room the previous lock opens onto.
+		// Key graph is strictly linear: iron -> hbDoorN -> book -> hbShelfPanel
+		// -> bronze -> hbDoorS -> gold -> hbDoorE -> win.
 
-		// World pickups. worldPos is read from the instance's own Wm, since
-		// each key's position already lives in scene.json and shouldn't be
-		// repeated here.
-		// Passing a keyId makes the pickup a key: it goes on the ring when
-		// collected and opens any Door whose lockKeyId matches (and the exit,
-		// if exit.keyId names it). It is spent on first use -- one lock per
-		// key, no take-backs.
-		// handTiltDeg/handOffset are how this item sits in the hand once
-		// carried. Both have defaults because the key is the item this pose was
-		// built for and three of the four calls below are keys -- see
-		// HAND_KEY_TILT_DEG and HAND_KEY_OFFSET.
+		// World pickups. worldPos is read from the instance's own Wm (already
+		// in scene.json). Passing a keyId makes the pickup a key: it goes on
+		// the ring when collected, opens any Door with a matching lockKeyId
+		// (or the exit), and is spent on first use. handTiltDeg/handOffset
+		// default to the key pose (HAND_KEY_TILT_DEG/HAND_KEY_OFFSET).
 		auto addPickup = [&](const char *id, const char *keyId = "",
 							 glm::vec3 handTiltDeg = HAND_KEY_TILT_DEG,
 							 glm::vec3 handOffset = HAND_KEY_OFFSET) {
@@ -2916,65 +2245,25 @@ class Castlescape : public BaseProject {
 			p.keyId = keyId;
 			p.handTiltDeg = handTiltDeg;
 			p.handOffset = handOffset;
-			// Uniform scale from column 0's length, so scene.json's "scale" is
-			// the one place it lives -- the held/dropped poses take it back
-			// from here.
+			// Uniform scale from column 0's length, so scene.json's "scale" stays the one source.
 			p.worldScale = glm::length(glm::vec3(p.inst->Wm[0]));
 			pickups.push_back(p);
 		};
-		// Three keys, three distinct ids -- iron, bronze, gold -- one per
-		// locked door, each found in the room the previous door opens onto.
-		// They are the same mesh but NOT interchangeable ids, because here the
-		// player always has exactly the key the next lock wants and never a
-		// choice of which to try: there is no spare to mismatch. The scarcity
-		// is the route, not the count.
 		addPickup("hbKeyIron", "iron");     // on the hub table
 		addPickup("rbKeyBronze", "bronze"); // dark NW corner of room B
 		addPickup("rcKeyGold", "gold");     // atop the barrels in room C
-		// The book on the hub table, which opens the bookcase and nothing
-		// else. It rides the SAME machinery as the
-		// keys (keyRing, findKeyInRing, consumeKey) on purpose -- "carry a
-		// thing to the lock that wants it, and spend it there" is already the
-		// rule of this level, and a second parallel system for one object would
-		// only be a second place for it to go wrong.
-		//
-		// The rule it does inherit and is worth knowing about: one free hand.
-		// Picking the book up while carrying a key puts that key on the floor
-		// at the player's feet (see the pickup branch in GameLogic), which is
-		// not a bug to fix here -- the torch owns the other hand, and a player
-		// juggling the ring is the cost of that decision, not of this book.
-		//
-		// The tilt is the book's own: its mesh lies FLAT in its local frame (x
-		// spine to fore-edge, z the height of the page, y the thickness, see
-		// make_bookshelf.py), so ~90 about X is what stands it up with the
-		// cover toward the camera, and the rest is the same eyeballed turn the
-		// key carries.
-		//
-		// The offset is HAND_KEY_OFFSET raised by 0.16. Not a taste decision
-		// about books: the key's origin sits near one end of its mesh so the
-		// key hangs UP out of the anchor, while the book's sits at the middle
-		// of its page height (local Z is -0.170..0.170, symmetric) so the book
-		// straddles it and half of it hangs below. Same number, lower object.
-		// The lift puts the two at roughly the same height on screen.
+		// The book: rides the same keyRing/findKeyInRing/consumeKey machinery
+		// as keys, opens the bookcase only. Tilt stands its flat mesh up
+		// cover-first; offset is HAND_KEY_OFFSET raised 0.16 since the book's
+		// origin (mesh centre) sits lower relative to its grip than a key's does.
 		addPickup("raBook", "book", glm::vec3(84.0f, -24.0f, 0.0f),
 				  HAND_KEY_OFFSET + glm::vec3(0.0f, 0.16f, 0.0f));
 
-		// Where the book ends up once spent: in the gap on the bookcase's
-		// third shelf, riding the leaf's local frame like the padlocks so it
-		// swings with the case. See Door::LockProp::whenUnlocked.
-		//
-		// The three numbers ALSO live in make_bookshelf.py's BOOK_SLOT_*,
-		// which leaves the gap in the row of books -- move one, move the other:
-		//   x 0.454  the surrounding spine plane minus the book's spine bulge
-		//   y 1.730  the shelf face plus half the book's height (mesh centred on Z)
-		//   z -1.266 the gap centre; on the case's centre line, so a wider gap
-		//            doesn't move it. The book doesn't fill the gap -- the case
-		//            swings open the moment it lands, so only the frame before
-		//            is ever read.
-		//
-		// The rotation stands a flat book spine-out on the shelf:
-		// rotY(180) * rotX(-90). A rotation, not a mirror (which would flip
-		// the winding).
+		// Where the book ends up once spent: the gap on the bookcase's third
+		// shelf, in the leaf's local frame (see Door::LockProp::whenUnlocked).
+		// IMPORTANT: these three numbers also live in make_bookshelf.py's
+		// BOOK_SLOT_* -- move one, move the other. rotY(180)*rotX(-90) stands
+		// the book up spine-out without mirroring its winding.
 		auto addSlotProp = [&](const char *doorId, const char *pickupId,
 							   const glm::mat4 &local) {
 			Door *d = findDoor(doorId);
@@ -3019,29 +2308,20 @@ class Castlescape : public BaseProject {
 		}
 		ghostColliderGrid.build(staticColliders);
 
-		// The player's spawn pose, captured before anything can move it. See
-		// spawnPos's declaration: this is what restartRun() puts them back to.
+		// Player's spawn pose, captured before anything can move it; restartRun() uses this.
 		spawnPos = camPos;
 		spawnYaw = camYaw;
 		spawnPitch = camPitch;
 
-		// The rules of the game: hunt timings, the win box, the ghost patrols.
-		// A data file for the same reason lights.json is -- every number is a
-		// tuning decision.
+		// The rules of the game: hunt timings, win box, ghost patrols.
 		{
 			std::ifstream ifs("assets/scenes/gameplay.json");
 			if(!ifs.is_open()) {
 				std::cout << "gameplay.json not found: default hunt timings, no ghosts\n";
-				// Still has to be armed: a default HuntCycle has a phase timer
-				// of 0 and would fall straight into a hunt.
+				// Still has to be armed, or a default HuntCycle's zero phase timer falls straight into a hunt.
 				huntCycle.init(nlohmann::json::object());
 			} else {
-				// ignore_comments, like every other scene file here.
 				nlohmann::json js = nlohmann::json::parse(ifs, nullptr, true, true);
-
-				// Unconditional, and with an empty object if the block is
-				// absent: init() treats every key as optional and finishes by
-				// arming the clock, which has to happen either way.
 				huntCycle.init(js.value("hunt", nlohmann::json::object()));
 
 				if(js.contains("exit")) {
@@ -3049,9 +2329,7 @@ class Castlescape : public BaseProject {
 					if(e.contains("box") && e["box"].size() == 6) {
 						glm::vec3 a(e["box"][0].get<float>(), e["box"][1].get<float>(), e["box"][2].get<float>());
 						glm::vec3 b(e["box"][3].get<float>(), e["box"][4].get<float>(), e["box"][5].get<float>());
-						// min/max rather than trusting the authored order, so
-						// writing the two corners the other way round still
-						// describes the same box instead of an empty one.
+						// min/max, not authored order, so swapped corners still describe the same box.
 						exitBoxMin = glm::min(a, b);
 						exitBoxMax = glm::max(a, b);
 						exitHasBox = true;
@@ -3084,34 +2362,25 @@ class Castlescape : public BaseProject {
 						}
 						gh.waypoints.push_back(glm::vec3(w[0].get<float>(), w[1].get<float>(), w[2].get<float>()));
 					}
-					// Two is the minimum that describes a path at all; one
-					// waypoint is a ghost standing still, which is almost
-					// certainly a typo rather than an intention.
+					// One waypoint is a ghost standing still, almost certainly a typo.
 					if(gh.waypoints.size() < 2) {
 						std::cout << "gameplay.json: ghost '" << id
 								  << "' needs at least 2 waypoints, skipped\n";
 						continue;
 					}
 					gh.pos = gh.waypoints[0];
-					// Staggered so identically-authored ghosts don't hover in
-					// lockstep, same trick as the torches' flicker phase.
-					gh.bobPhase = (float)ghosts.size() * 2.399963f;
+					gh.bobPhase = (float)ghosts.size() * 2.399963f;	// staggered so identical ghosts don't hover in lockstep
 					ghosts.push_back(gh);
 				}
 				std::cout << "gameplay.json: " << ghosts.size() << " ghosts loaded\n";
 
-				// Fit the ghost's collision size from the mesh, not a
-				// hand-measured constant. All ghosts share Ghost.gltf, so one
-				// fit covers them.
+				// Fit the ghost's collision size from the mesh (all ghosts share Ghost.gltf).
 				if(!ghosts.empty()) {
 					Collider fit;
 					fit.fitAABB(SC.M[ghosts[0].inst->Mid]);
 					AABBextents E = fit.getExtents();	// fit's Wm is identity: local space
 
-					// fitAABB reads the raw mesh, blind to scene.json's "scale".
-					// Column 0's length is the uniform scale factor, so
-					// multiplying it in makes shrinking a ghost shrink what it
-					// collides as.
+					// fitAABB is blind to scene.json's "scale"; multiply it back in.
 					float instScale = glm::length(glm::vec3(ghosts[0].inst->Wm[0]));
 
 					ghostBodyBottom = E.yMin * instScale;
@@ -3125,10 +2394,8 @@ class Castlescape : public BaseProject {
 							  << "): radius " << ghostRadius
 							  << ", vertical [" << ghostBodyBottom << ", " << ghostBodyTop << "]\n";
 
-					// Patrol legs are walked with no wall resolution, so a leg
-					// authored through a wall doesn't fail loudly -- the ghost
-					// glides through, and the next hunt wedges. Checked once
-					// here now the radius is known.
+					// Patrol legs have no wall resolution, so a leg authored
+					// through a wall doesn't fail loudly; warn here instead.
 					for(const Ghost &g : ghosts) {
 						int n = (int)g.waypoints.size();
 						for(int i = 0; i < n; i++) {
@@ -3149,9 +2416,8 @@ class Castlescape : public BaseProject {
 			}
 		}
 
-		// Held torch. Starts on the FLOOR at its authored pose; picked up with
-		// [E]. Only once handTorchCollected is set does GameLogic rebuild its
-		// Wm from the camera. The authored pose is captured here first.
+		// Held torch. Starts on the floor at its authored pose; picked up with
+		// [E], after which GameLogic rebuilds its Wm from the camera.
 		{
 			auto it = SC.InstanceIds.find("handTorch");
 			if(it == SC.InstanceIds.end()) {
@@ -3159,40 +2425,25 @@ class Castlescape : public BaseProject {
 			} else {
 				handTorchInst = SC.I[it->second];
 				handTorchSpawnWm = handTorchInst->Wm;
-				// Aim point for the floor pickup, lifted off the instance
-				// origin (which sits below the mesh once the torch is laid on
-				// its side) so the crosshair lands on the torch body itself.
+				// Lifted off the instance origin (below the mesh, torch lies
+				// on its side) so the crosshair lands on the torch body.
 				handTorchWorldPos = glm::vec3(handTorchInst->Wm[3]) +
 									glm::vec3(0.0f, 0.35f, 0.0f);
 			}
 		}
 
-		// Torch flames. DSglobal isn't populated yet (that happens in
-		// pipelinesAndDescriptorSetsInit(), after the descriptor pool
-		// exists), but its address is stable, so capturing a pointer to it
-		// now and reading through it later is safe -- same reasoning as
-		// handTorchInst above.
-		//
-		// maxInstances covers every torch AND candle mesh in the level (each
-		// dungeonCandle instance gets a TorchFlame too, burning or not -- see
-		// flames.json). The rebuilt level runs ~13 wall torches + the held
-		// torch + ~8 candles, so this is set well above that; spawn() past the
-		// cap fails silently (see addTorchFlame below), leaving a torch/candle
-		// with no fire and no light instead of an error. Still under MAX_LIGHTS
-		// (32) and NUM_SHADOW_CUBES (32), which the dynamic pool arbitrates.
+		// maxInstances covers every torch and candle mesh in the level, set
+		// comfortably above the ~13 wall torches + held torch + ~8 candles the
+		// level runs; spawn() past the cap fails silently (see addTorchFlame).
 		flame.init(this, &DSLglobal, &DSglobal, 28);
 
-		// No DSLglobal/DSglobal here: the daylight quads aren't shaded and read
-		// nothing the app-wide uniform carries, so they bind sets of their
-		// own. Two of them -- the upright wall of light and the ground it
-		// stands on. See ExitGlow.hpp, and EXIT_GLOW_CENTER for why the
-		// outward-swinging door makes the second one necessary.
+		// No DSLglobal/DSglobal here: the daylight quads are unshaded and bind
+		// sets of their own. Two quads (upright wall + ground); see
+		// EXIT_GLOW_CENTER for why the outward-swinging door needs both.
 		exitGlow.init(this, EXIT_GLOW_COUNT);
 
 		debugLines.init(this);
 
-		// seed just spreads each flame's sway/flicker phase: index * an
-		// irrational-ish constant, no RNG needed for one call.
 		auto addTorchFlame = [&](const char *id, glm::vec3 anchor, bool heldByCamera = false,
 								 glm::vec3 color = TORCH_LIGHT_COLOR, float sizeScale = 1.0f,
 								 float lightScale = 1.0f, bool isCandle = false,
@@ -3203,8 +2454,7 @@ class Castlescape : public BaseProject {
 				return;
 			}
 			Instance *inst = SC.I[it->second];
-			// Irrational-ish stride, so phases never land on a common multiple.
-			float seed = (float)torchFlames.size() * 2.3971f;
+			float seed = (float)torchFlames.size() * 2.3971f;	// irrational-ish stride avoids phase collisions
 			int flameId = flame.spawn(seed);
 			if(flameId < 0) {
 				return;
@@ -3221,24 +2471,15 @@ class Castlescape : public BaseProject {
 			tf.isCandle = isCandle;
 			tf.burning = burning;
 			tf.spawnBurning = burning;
-			// At rest for a burning flame (no catching-fire on load), 0 for
-			// unlit so it plays in full when lit.
-			tf.ignitionScale = burning ? 1.0f : 0.0f;
-			// Static flames only: the held torch's anchor moves every frame.
-			if(!heldByCamera) {
+			tf.ignitionScale = burning ? 1.0f : 0.0f;	// at rest if burning, 0 to play in full when lit
+			if(!heldByCamera) {	// held torch's anchor is recomputed every frame instead
 				tf.anchorWorld = glm::vec3(inst->Wm * glm::vec4(anchor, 1.0f));
 			}
-			// Automatic: every flame is the held torch or a static object, and
-			// every static one belongs in the pool.
 			tf.shadowCandidate = !heldByCamera;
 			if(tf.shadowCandidate) {
-				// Static, so its face matrices are computed once here, not
-				// every frame like the held torch.
-				tf.shadowFaceMatrices = cubeFaceMatricesFor(tf.anchorWorld);
+				tf.shadowFaceMatrices = cubeFaceMatricesFor(tf.anchorWorld);	// static: computed once, not per frame
 			}
-			// Into a different part of the CPU noise field. Scaled up because
-			// fireNoise hashes on the integer lattice.
-			tf.phase = seed * 37.0f;
+			tf.phase = seed * 37.0f;	// scaled up since fireNoise hashes on the integer lattice
 			torchFlames.push_back(tf);
 		};
 
@@ -3288,8 +2529,7 @@ class Castlescape : public BaseProject {
 					return def;
 				};
 
-				// Resolve each model NAME to its Mid once, so spawning is an
-				// O(1) lookup per instance.
+				// Resolve each model name to its Mid once, for O(1) lookup per instance.
 				std::unordered_map<int, FlameDef> byModel;
 				if(js.contains("models")) {
 					for(auto it = js["models"].begin(); it != js["models"].end(); ++it) {
@@ -3336,23 +2576,16 @@ class Castlescape : public BaseProject {
 		// SceneLights has read scene.json's world matrices.
 		computeShadowMatrices();
 
-		// Everything past lights.json's fixed slots and before the held torch's
-		// reserved last one is the dynamic pool. Captured once, not a literal,
-		// so it survives a change to lights.json's torch count.
+		// Dynamic pool: everything past lights.json's fixed slots and before the held torch's reserved last one.
 		dynamicShadowSlotBase = activeCubeShadows;
 		dynamicSlotOccupant.fill(-1);
-		// Nothing rendered yet: the first updateUniformBuffer() diff queues
-		// every slot for its one render.
-		lastRenderedOccupant.fill(SHADOW_SLOT_UNSET);
+		lastRenderedOccupant.fill(SHADOW_SLOT_UNSET);	// first frame's diff queues every slot for its one render
 		// The render loop walks [0, activeCubeShadows) every frame, so the
-		// dynamic pool must be counted even while empty -- a slot filled
-		// mid-game would otherwise never render.
+		// dynamic pool must be counted even while empty.
 		activeCubeShadows = std::max(activeCubeShadows, HAND_TORCH_SHADOW_INDEX);
 
-		// The held torch's slot isn't in lights.json, so
-		// computeShadowMatrices() never counts it. Its matrices are filled
-		// every frame by updateHandTorchShadow(), but the render loop still
-		// needs to know the slot is in play.
+		// Held torch's slot isn't in lights.json, so computeShadowMatrices()
+		// never counts it; its matrices come from updateHandTorchShadow() instead.
 		if(handTorchInst != nullptr) {
 			activeCubeShadows = std::max(activeCubeShadows, HAND_TORCH_SHADOW_INDEX + 1);
 		}
@@ -3361,9 +2594,7 @@ class Castlescape : public BaseProject {
 		txt.init(this, windowWidth, windowHeight);
 		// initializes the flat-quad background/highlight layer for the cheat HUD
 		uiQuad.init(this, windowWidth, windowHeight);
-		// The center-screen crosshair dot. Distinct submitOrder/buffer name
-		// from uiQuad, so the two don't collide over one named command buffer;
-		// same for the three below.
+		// Distinct submitOrder/buffer name from uiQuad so they don't collide; same for the three below.
 		crosshair.init(this, windowWidth, windowHeight, 9002, "crosshair");
 		setCrosshairQuad();
 		pauseQuad.init(this, windowWidth, windowHeight, 9003, "pause_quad");
@@ -3380,15 +2611,12 @@ class Castlescape : public BaseProject {
 		// version removed this while the launch screen was open.
 		txt.print(1.0f, 1.0f, "FPS:",1,"CO",false,false,true,TAL_RIGHT,TRH_RIGHT,TRV_BOTTOM,{1.0f,0.0f,0.0f,1.0f},{0.8f,0.8f,0.0f,1.0f});
 
-		// Wires the cheat HUD to the actual cheat flags.
 		hud.init(&txt, &uiQuad);
 		pauseMenu.init(&txt, &pauseQuad);
-		// windowTitle, reused so the launch screen's title lives in one place.
-		startScreen.init(&txt, &startScreenQuad, windowTitle);
+		startScreen.init(&txt, &startScreenQuad, windowTitle);	// reuses windowTitle, one source for the launch screen's title
 		startScreen.setOpen(true, windowWidth, windowHeight);
 		settingsMenu.init(&txt, &settingsQuad);
-		// The two sliders a normal player reaches. Same named methods as the
-		// cheat HUD's copies, so the two can't drift.
+		// Same named methods as the cheat HUD's copies below, so the two can't drift.
 		settingsMenu.addSlider("Render Scale", &renderScale, 0.4f, 1.0f, 0.05f,
 							   [this]() { applyRenderScaleChange(); },
 							   [this](float v) { return formatRenderScale(v); });
@@ -3398,16 +2626,12 @@ class Castlescape : public BaseProject {
 		hud.addToggle("Collision", &cheats.collisionEnabled);
 		hud.addToggle("Show Coordinates", &cheats.showCoordinates);
 
-		// Gameplay rows. "Hunt" forces and holds the hunt phase; "Ghosts Can
-		// Catch" lets you watch it longer than the first ghost takes to reach you.
 		hud.addToggle("Hunt", &huntCycle.forceHunt);
 		hud.addToggle("Ghosts Can Catch", &cheats.ghostsCanCatch);
 
-		// Lighting rows, in the order you'd reach for them: which sources are
-		// on, then how they're shaded. Spotlight/Ambient point into sceneLights
-		// (it owns them); Torches/Holding Torch into cheats (their lights never
-		// go through SceneLights); the rest into cheats -> gubo.debugFlags. No
-		// "Sun" row -- the scene has no direct light; add it back with the sun.
+		// Lighting rows: sources first, then shading. Spotlight/Ambient point
+		// into sceneLights (which owns them); Torches/Holding Torch into
+		// cheats (flame lights never go through SceneLights).
 		hud.addToggle("Torches", &cheats.roomTorchesEnabled);
 		hud.addToggle("Holding Torch", &cheats.handTorchEnabled);
 		hud.addToggle("Spotlight", &sceneLights.spotEnabled);
@@ -3427,8 +2651,6 @@ class Castlescape : public BaseProject {
 		hud.addToggle("Debug Camera", &cheats.debugCam);
 		hud.addToggle("Light Heatmap", &cheats.showLightHeatmap);
 
-		// Render Scale and MSAA, also on SettingsMenu with the same named
-		// methods so the two copies can't drift.
 		hud.addSlider("Render Scale", &renderScale, 0.4f, 1.0f, 0.05f,
 					  [this]() { applyRenderScaleChange(); },
 					  [this](float v) { return formatRenderScale(v); });
@@ -3437,11 +2659,9 @@ class Castlescape : public BaseProject {
 					  [this](float v) { return formatMsaaLevel(v); });
 	}
 
-	// Does slot t currently have a light in it (is anything sampling its cube
-	// map)? One definition, because "occupied" means three things: a
-	// lights.json slot by construction, a dynamic-pool one only while
-	// updateDynamicShadowSlots() has given it a flame, the held torch's only
-	// while the torch exists.
+	// Does slot t currently have a light in it? A lights.json slot is occupied
+	// by construction; a dynamic-pool slot only once given a flame; the held
+	// torch's only while the torch exists.
 	bool cubeSlotOccupied(int t) const {
 		if(t == HAND_TORCH_SHADOW_INDEX) {
 			return HAND_TORCH_SHADOW_INDEX < activeCubeShadows && cheats.torchShadowsEnabled;
@@ -3450,8 +2670,7 @@ class Castlescape : public BaseProject {
 	}
 
 	// The g (falloff reference distance) a flame's point light is uploaded
-	// with. One definition, called by the light-append loop and the
-	// shadow-reach computation, so the two can't drift.
+	// with; shared by the light-append loop and the shadow-reach computation.
 	static float flameLightG(bool isCandle, float intensity) {
 		return TORCH_LIGHT_G * (isCandle ? CANDLE_LIGHT_G_SCALE : 1.0f)
 			   * (0.88f + 0.12f * intensity);
@@ -3489,39 +2708,21 @@ class Castlescape : public BaseProject {
 		return out;
 	}
 
-	// Builds the view-projection matrix each of the shadow passes renders
-	// with, in LightData::shadowIndex order. Called once, from localInit()
-	// right after sceneLights.init(): the torches never move, so there is
-	// nothing here that needs recomputing per frame.
-	//
-	// Reads sceneLights.all() rather than scene.json/InstanceIds directly: a
-	// point light's world position is instance-plus-offset (see
-	// SceneLights::init), and re-deriving that here would be a second copy of
-	// logic that already lives in exactly one place.
+	// Builds the view-projection matrix each shadow pass renders with, in
+	// LightData::shadowIndex order. Called once from localInit(), since
+	// torches never move. Reads sceneLights.all() rather than re-deriving a
+	// point light's instance+offset world position here.
 	void computeShadowMatrices() {
-		// A torch's far plane (cubeFaceMatricesFor() -> TORCH_SHADOW_FAR_CONST):
-		// now sized to the dungeon's own footprint rather than "wherever the
-		// torch has faded to nothing", see that constant's own comment for
-		// why a falloff-sized far plane went wrong. createCubeShadowMaps()
-		// needs the same number for the color attachment's clear value,
-		// which is why it's a member and not a local here.
-
 		for(const LightData &L : sceneLights.all()) {
 			if(L.shadowIndex < 0) {
 				continue;
 			}
 
-			// A point light's cube map: six 90-degree perspective faces,
-			// axis-aligned on world X/Y/Z (CUBE_FACE_DIR/CUBE_FACE_UP,
-			// CubeShadowMap.hpp), covering the WHOLE sphere with no seam and
-			// no hand-tuned aim per torch -- unlike the old two-map
-			// front/back workaround, this needs no per-torch authoring at
-			// all, so it drops TORCH_SHADOW_DIR entirely.
-			//
-			// No Y-flip here: a cube map is sampled by direction
-			// (samplerCube), never rasterized to the screen, so there is no
-			// Vulkan-vs-GL NDC mismatch to correct for -- flipping would
-			// only mis-rotate which face's texels land where.
+			// Six 90-degree perspective faces, axis-aligned on world X/Y/Z,
+			// cover the whole sphere with no seam and no per-torch aim tuning.
+			// IMPORTANT: no Y-flip here -- a cube map is sampled by direction
+			// (samplerCube), never rasterized, so there's no Vulkan-vs-GL NDC
+			// mismatch to correct; flipping would mis-rotate which face's texels land where.
 			std::array<glm::mat4, 6> faces = cubeFaceMatricesFor(L.pos);
 			for(int face = 0; face < 6; face++) {
 				torchFaceMatrices[L.shadowIndex][face] = faces[face];
@@ -3546,17 +2747,14 @@ class Castlescape : public BaseProject {
 				shadowRelevantReach(flameLightG(false, 1.0f), TORCH_LIGHT_BETA);
 	}
 
-	// Priority-based reassignment for the dynamic shadow-cube pool, among every
-	// flame marked shadowCandidate. The empty-slot pass gives one to every
-	// candidate first, so in this scene (12 candidates, 31 slots) they all keep
-	// a permanent shadow; the contest logic only fires on a level with more
-	// shadow-worthy lights than slots.
-	//
-	// A plain "N nearest per tick" rule thrashes on the boundary between two
-	// candidates, and every flip forces a fresh render. SHADOW_SWAP_MARGIN
-	// (only swap if genuinely closer) and SHADOW_REASSIGN_INTERVAL (revisited a
-	// few times a second) fix that. `forward` only changes the ORDER candidates
-	// are considered in (facingBiasedDistSq()), never whether one gets a slot.
+	// Priority-based reassignment for the dynamic shadow-cube pool. Empty
+	// slots go to candidates first; the contest logic below only fires once
+	// there are more shadow-worthy lights than slots.
+	// IMPORTANT: a plain "N nearest per tick" rule thrashes at the boundary
+	// between two candidates, forcing a fresh render on every flip.
+	// SHADOW_SWAP_MARGIN (swap only if genuinely closer) and
+	// SHADOW_REASSIGN_INTERVAL fix that. `forward` only reorders candidates
+	// (facingBiasedDistSq()), never decides whether one gets a slot.
 	void updateDynamicShadowSlots(const glm::vec3 &eyePos, const glm::vec3 &forward) {
 		const int base = dynamicShadowSlotBase;
 		const int count = HAND_TORCH_SHADOW_INDEX - base;
@@ -3583,21 +2781,17 @@ class Castlescape : public BaseProject {
 														TORCH_LIGHT_BETA);
 		};
 
-		// The HUD's "Torch/Candle Shadows" toggles: a flame whose category is
-		// off is never a waiting candidate, and a slot it held is freed here so
-		// switching off drops its shadow this tick. A flame switched off
-		// entirely goes the same way (it isn't burning, so it casts nothing).
+		// Torch/Candle Shadows HUD toggles: a disabled category never
+		// candidates and drops any slot it held this tick.
 		auto categoryEnabled = [&](const TorchFlame &tf) {
 			if(!flameBurning(tf)) return false;
 			return tf.isCandle ? cheats.candleShadowsEnabled : cheats.torchShadowsEnabled;
 		};
 
-		// A torch whose light no longer reaches anything the frame draws (same
-		// test the light-append loop culls by) has no on-screen shadow to cast,
-		// so it gives its cube slot back. An existing occupant is judged with a
-		// reach margin (SHADOW_VIEW_KEEP_MARGIN) so a torch hovering on the cone
-		// boundary while the player turns doesn't re-render its cube every pass;
-		// a fresh candidate must clear the un-margined bar to claim one.
+		// A torch whose light reaches nothing drawn gives its slot back.
+		// Existing occupants get a margin (SHADOW_VIEW_KEEP_MARGIN) so hovering
+		// on the cone boundary doesn't re-render every pass; a fresh candidate
+		// must clear the un-margined bar.
 		auto lightsView = [&](const TorchFlame &tf, float reachMargin) {
 			if(tf.heldByCamera) return true;
 			glm::vec3 p = glm::vec3(tf.inst->Wm * glm::vec4(tf.anchor, 1.0f));
@@ -3627,8 +2821,7 @@ class Castlescape : public BaseProject {
 		std::sort(waiting.begin(), waiting.end(),
 				  [](const Cand &a, const Cand &b) { return a.distSq < b.distSq; });
 
-		// Empty slots first, unconditionally: an empty slot never "wins" over a
-		// candidate, it just has nothing in it yet.
+		// Empty slots first, unconditionally.
 		size_t wi = 0;
 		for(int s = base; s < base + count && wi < waiting.size(); s++) {
 			if(dynamicSlotOccupant[s] != -1) {
@@ -3639,8 +2832,7 @@ class Castlescape : public BaseProject {
 		}
 
 		// Occupied slots, farthest occupant first, contested against the best
-		// remaining waiter: once one pairing fails the margin, every later one
-		// does too, so this stops at the first miss.
+		// remaining waiter; stops at the first failed margin since every later pairing fails too.
 		std::vector<int> occupied;
 		for(int s = base; s < base + count; s++) {
 			if(dynamicSlotOccupant[s] != -1) {
@@ -3664,14 +2856,12 @@ class Castlescape : public BaseProject {
 		}
 	}
 
-	// Local-space bounding sphere per MODEL index (xyz centre, w radius),
-	// filled on first use (fitAABB() walks every vertex). w < 0 = not fitted.
-	// Feeds the per-face cull in recordCubeSlotFaces(): a sphere is the only
-	// bound cheap enough to test 6x per instance per slot, and the sphere
-	// AROUND the AABB errs safe (a loose cull costs a draw, a tight one a shadow).
+	// Local-space bounding sphere per model index (xyz centre, w radius),
+	// filled on first use. w < 0 = not fitted. Feeds recordCubeSlotFaces()'s
+	// per-face cull: cheap enough to test 6x per instance per slot, and a
+	// loose (sphere-around-AABB) cull only costs a draw, never a missing shadow.
 	std::vector<glm::vec4> modelSphereCache;
-	// Scratch for the same cull: one slot's shadow casters with their
-	// world-space spheres. A member so it reuses its allocation.
+	// Scratch for the same cull, a member so it reuses its allocation.
 	struct ShadowCaster {
 		Instance *inst;
 		glm::vec3 centre;
@@ -3700,10 +2890,8 @@ class Castlescape : public BaseProject {
 	}
 
 	// Is a world-space sphere inside one cube face's 90-degree frustum? `rel`
-	// is its centre relative to the light (the frustum apex). By hand, not
-	// plane extraction: the faces are axis-aligned and square at 90 degrees,
-	// so the test is a handful of component compares -- and it runs once per
-	// instance per face.
+	// is its centre relative to the light. By hand, not plane extraction: the
+	// faces are axis-aligned and square, so it's a handful of compares, run once per instance per face.
 	bool sphereInCubeFace(const glm::vec3 &rel, float radius, int face) const {
 		const glm::vec3 &d = CUBE_FACE_DIR[face];
 		const float along = glm::dot(rel, d);
@@ -3726,23 +2914,14 @@ class Castlescape : public BaseProject {
 		return true;
 	}
 
-	// One cube slot's six-face render. Every caller goes through
-	// submitCubeShadowCaptures(): the held torch each frame, others when their
-	// occupant changes or a mover invalidates them.
-	//
-	// ownerInst: the instance this slot's flame is anchored to, excluded from
-	// its own shadow pass.
-	//
-	// cullPerFace: drop instances outside the face being drawn -- a ~6x cut in
-	// draws, and what makes a per-frame re-capture affordable. Only sound for a
-	// buffer recorded and submitted the same frame (a replayed one would use a
-	// stale visible set), so it's a flag, not an assumption.
-	//
-	// faceMask: which faces to draw, bit f for face f. A face left out keeps
-	// its texels (the point, see pendingFaceMask) -- but must be in the mask
-	// AT LEAST ONCE before anything samples the cube, or it stays
-	// VK_IMAGE_LAYOUT_UNDEFINED and can't be bound. The occupant diff asks for
-	// ALL_CUBE_FACES the first time it sees each slot.
+	// One cube slot's six-face render, called via submitCubeShadowCaptures():
+	// the held torch every frame, others when their occupant changes or a mover invalidates them.
+	// ownerInst: excluded from its own shadow pass.
+	// cullPerFace: drop instances outside the face being drawn (~6x fewer
+	// draws); only sound for a buffer recorded and submitted the same frame.
+	// faceMask: bit f = draw face f; a face left out keeps its old texels, but
+	// IMPORTANT: must be set at least once per slot or the image stays
+	// VK_IMAGE_LAYOUT_UNDEFINED and can't be bound.
 	void recordCubeSlotFaces(VkCommandBuffer commandBuffer, int currentImage, int t,
 							 bool slotOccupied, Instance *ownerInst, bool cullPerFace = false,
 							 uint8_t faceMask = ALL_CUBE_FACES) {
@@ -3769,8 +2948,7 @@ class Castlescape : public BaseProject {
 				if(cullPerFace) {
 					const glm::vec4 &local = modelSphere(inst.Mid);
 					sc.centre = glm::vec3(inst.Wm * glm::vec4(glm::vec3(local), 1.0f));
-					// Largest column length: a non-uniform scale's sphere must
-					// take the biggest or it misses the stretched axis.
+					// Largest column length, so a non-uniform scale doesn't miss the stretched axis.
 					const float scale = std::max({glm::length(glm::vec3(inst.Wm[0])),
 												  glm::length(glm::vec3(inst.Wm[1])),
 												  glm::length(glm::vec3(inst.Wm[2]))});
@@ -3803,17 +2981,13 @@ class Castlescape : public BaseProject {
 			rpInfo.pClearValues = clearValues;
 			vkCmdBeginRenderPass(commandBuffer, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-			// The draw loop below is the real cost -- skipped for an
-			// unoccupied slot, but the begin/end above still runs to clear the
-			// image and transition it to SHADER_READ_ONLY_OPTIMAL, which the
-			// samplerCube array requires of every slot even when unsampled.
+			// Draw loop below is skipped for an unoccupied slot, but begin/end
+			// still runs to clear and transition the image: the samplerCube
+			// array requires every slot in SHADER_READ_ONLY_OPTIMAL even unsampled.
 			if(slotOccupied) {
 				PShadowCube.bind(commandBuffer);
-				// Set 1: this torch's current matrices/position, from the
-				// uniform buffer updateUniformBuffer() maps every frame --
-				// see ShadowCube.vert's header for why this can't be a push
-				// constant. Only the face INDEX is still one, since that
-				// genuinely never changes once recorded.
+				// Set 1: this torch's current matrices/position, mapped fresh
+				// every frame (not a push constant, see ShadowCubeUniformBufferObject).
 				DSshadowCube[t].bind(commandBuffer, PShadowCube, 1, currentImage);
 				ShadowCubeFacePushConstant facePc{};
 				facePc.face = face;
@@ -3837,21 +3011,13 @@ class Castlescape : public BaseProject {
 		}
 	}
 
-	// Marks, in pendingFaceMask, every cube FACE whose cached capture a MOVING
-	// occluder has invalidated -- the other half of the staleness question the
-	// lastRenderedOccupant diff answers. A face is marked when it holds a mover
-	// that has moved since it was last drawn, or held one last capture and
-	// doesn't now (its texels still have the ghost on them). "In range" is each
-	// light's OWN reach, measured against the mover's bounding sphere. No
-	// per-frame budget -- a shadow that lags its ghost is visible.
-	//
-	// Called from updateUniformBuffer() after the occupant diff, after
-	// GameLogic() has moved the ghosts and doors and
-	// updateDynamicShadowSlots() has settled torchLightPos[].
+	// Marks, in pendingFaceMask, every cube face a moving occluder has
+	// invalidated: one that holds a mover that moved since last drawn, or held
+	// one last capture and doesn't now. Range is each light's own reach vs.
+	// the mover's bounding sphere. Called from updateUniformBuffer() after the
+	// occupant diff, once GameLogic() and updateDynamicShadowSlots() have settled positions.
 	void queueMoverCubeSlotRenders() {
 		if(!moverListBuilt) {
-			// A non-occluder can't invalidate a capture. The ghosts are off in
-			// materials.json and never reach this list.
 			auto addMover = [&](Instance *inst) {
 				if(inst != nullptr && materials.forModel(inst->Mid).castsShadow) {
 					movingOccluders.push_back(inst);
@@ -3863,13 +3029,10 @@ class Castlescape : public BaseProject {
 			for(const Door &d : doors) {
 				addMover(d.inst);
 			}
-			// The held torch: static while on the floor, so this costs nothing
-			// until pickup jumps its Wm. That jump is what erases the stale
-			// floor-shadow from whichever torch captured it; once held it's not
-			// drawn as an occluder, so tracking it here only ever cleans up.
+			// Held torch: static on the floor until pickup jumps its Wm, which
+			// erases the stale floor-shadow it left in whichever torch captured it.
 			addMover(handTorchInst);
-			// Zero matrix, not identity: an authored-identity pose would read
-			// as "hasn't moved" on frame one and never get its first capture.
+			// Zero matrix, not identity, so an authored-identity pose still gets its first capture.
 			movingOccluderWm.assign(movingOccluders.size(), glm::mat4(0.0f));
 			moverListBuilt = true;
 		}
@@ -3882,11 +3045,8 @@ class Castlescape : public BaseProject {
 		for(size_t m = 0; m < movingOccluders.size(); m++) {
 			const glm::mat4 &wm = movingOccluders[m]->Wm;
 
-			// The held torch in hand: it jumps every frame but isn't drawn as
-			// an occluder, so letting it through would mark a face stale every
-			// frame for an identical redraw. Skipping it loses no cleanup --
-			// the pickup frame's Wm jump is handled by "held a mover last
-			// capture and doesn't now".
+			// Held torch in hand jumps every frame but isn't drawn as an
+			// occluder; skip it here, the pickup-frame jump is handled by "held a mover, now doesn't".
 			if(movingOccluders[m] == handTorchInst && handTorchCollected
 			   && cheats.handTorchEnabled && !cheats.handTorchModelCastsShadowWhenHeld) {
 				movingOccluderWm[m] = wm;
@@ -3894,9 +3054,8 @@ class Castlescape : public BaseProject {
 			}
 
 			const bool moved = (wm != movingOccluderWm[m]);
-			// World-space bounding sphere: the mover's extent must be in the
-			// range test, or a ghost whose ORIGIN is just outside a light's
-			// reach while its body crosses in would go untracked.
+			// World-space bounding sphere, so the mover's full extent (not just
+			// its origin) is what's checked against a light's reach.
 			const glm::vec4 &local = modelSphere(movingOccluders[m]->Mid);
 			const glm::vec3 p = glm::vec3(wm * glm::vec4(glm::vec3(local), 1.0f));
 			const float scale = std::max({glm::length(glm::vec3(wm[0])),
@@ -3904,8 +3063,7 @@ class Castlescape : public BaseProject {
 										  glm::length(glm::vec3(wm[2]))});
 			const float r = local.w * scale;
 
-			// The held torch's slot is included: a ghost walking into its beam
-			// while the player stands still has to mark it too.
+			// Held torch's slot is included too: a ghost walking into its beam has to mark it.
 			for(int t = 0; t <= HAND_TORCH_SHADOW_INDEX; t++) {
 				if(!cubeSlotOccupied(t)) {
 					continue;
@@ -3913,8 +3071,6 @@ class Castlescape : public BaseProject {
 				if(glm::distance(p, torchLightPos[t]) - r > torchShadowReach[t]) {
 					continue;
 				}
-				// Which of the six directions the mover sits in -- the same
-				// test the capture culls by.
 				const glm::vec3 rel = p - torchLightPos[t];
 				for(int face = 0; face < 6; face++) {
 					if(!sphereInCubeFace(rel, r, face)) {
@@ -3930,18 +3086,16 @@ class Castlescape : public BaseProject {
 		}
 
 		for(int t = 0; t <= HAND_TORCH_SHADOW_INDEX; t++) {
-			// Faces where something moved, plus faces a mover has just left
-			// (still drawn on them). ORed into what the occupant diff asked for.
+			// Faces where something moved, plus faces a mover just left, ORed
+			// into what the occupant diff already asked for.
 			pendingFaceMask[t] |= facesStale[t] | (uint8_t)(slotFaceHadMover[t] & ~facesNow[t]);
 			slotFaceHadMover[t] = facesNow[t];
 		}
 	}
 
-	// Allocates the per-frame shadow command buffers, their pool and their
-	// fences. Called from pipelinesAndDescriptorSetsInit(), which runs once at
-	// startup and again after every swapchain recreation -- hence sized off
-	// swapChainImages, and hence the matching destroy in
-	// pipelinesAndDescriptorSetsCleanup().
+	// Allocates the per-frame shadow command buffers, pool and fences.
+	// Sized off swapChainImages since this runs again after every swapchain
+	// recreation; matching destroy in pipelinesAndDescriptorSetsCleanup().
 	void createShadowCommandBuffers() {
 		destroyShadowCommandBuffers();
 
@@ -3949,8 +3103,7 @@ class Castlescape : public BaseProject {
 		VkCommandPoolCreateInfo poolInfo{};
 		poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
 		poolInfo.queueFamilyIndex = qfi.graphicsFamily.value();
-		// The whole reason for a pool of our own: without this bit the buffers
-		// below could be recorded exactly once each.
+		// IMPORTANT: without this bit the buffers below could be recorded exactly once each.
 		poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 		if(vkCreateCommandPool(device, &poolInfo, nullptr, &shadowCommandPool) != VK_SUCCESS) {
 			throw std::runtime_error("failed to create the shadow command pool!");
@@ -3967,8 +3120,7 @@ class Castlescape : public BaseProject {
 			throw std::runtime_error("failed to allocate the shadow command buffers!");
 		}
 
-		// Created signalled: the first frame waits on a fence nothing has
-		// submitted yet, and an unsignalled one would hang there forever.
+		// IMPORTANT: created signalled, or the first frame's wait on a fence nothing submitted yet hangs forever.
 		shadowCBFence.resize(count);
 		VkFenceCreateInfo fenceInfo{};
 		fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
@@ -3980,17 +3132,14 @@ class Castlescape : public BaseProject {
 		}
 	}
 
-	// Safe to call with nothing allocated (it is, once, from
-	// createShadowCommandBuffers()). Both call sites run with the device idle:
-	// recreateSwapChain() waits before cleaning up, and so does mainLoop()
-	// before cleanup().
+	// Safe to call with nothing allocated. Both call sites run with the device
+	// idle (recreateSwapChain() and mainLoop() before cleanup()).
 	void destroyShadowCommandBuffers() {
 		for(VkFence f : shadowCBFence) {
 			vkDestroyFence(device, f, nullptr);
 		}
 		shadowCBFence.clear();
-		// Destroying the pool frees every buffer allocated from it, so the
-		// buffers themselves need no separate free.
+		// Destroying the pool frees every buffer allocated from it.
 		if(shadowCommandPool != VK_NULL_HANDLE) {
 			vkDestroyCommandPool(device, shadowCommandPool, nullptr);
 			shadowCommandPool = VK_NULL_HANDLE;
@@ -3999,30 +3148,23 @@ class Castlescape : public BaseProject {
 	}
 
 	// Records and submits this frame's cube shadow captures: the held torch
-	// (never cacheable) plus every slot pendingFaceMask marks (light changed
-	// hands, or a ghost/door moved inside it).
-	//
-	// Called at the end of updateUniformBuffer(), after DSshadowCube[t] and
-	// every instance's DS[0][1] have this frame's matrices -- this pass binds
-	// the same per-instance set the main pass does.
-	//
-	// Its own submission, not part of the "main" buffer (recorded once and
-	// replayed, can't express "these slots this frame"). Correct because:
-	//  - it's submitted BEFORE the main buffer on the same queue, and the
-	//    barrier at the end orders its writes against every later command
-	//    including the main pass's sampling. Replaces a mid-frame vkQueueWaitIdle.
-	//  - each swapchain image has its own buffer and fence, waited on before
-	//    re-recording. In the steady state the wait returns immediately.
+	// (never cacheable) plus every slot pendingFaceMask marks. Called at the
+	// end of updateUniformBuffer(), after DSshadowCube[t] and every instance's
+	// DS[0][1] have this frame's matrices.
+	// IMPORTANT: its own submission, not part of "main" (recorded once and
+	// replayed, so it can't express "these slots this frame"). Correct
+	// because it's submitted before "main" on the same queue with a
+	// barrier ordering its writes against later sampling (replacing a
+	// mid-frame vkQueueWaitIdle), and each swapchain image has its own
+	// buffer/fence, waited on before re-recording (returns immediately in the steady state).
 	void submitCubeShadowCaptures(int currentImage) {
 		if(shadowCB.empty()) {
 			return;	// nothing allocated yet (first frames of a swapchain rebuild)
 		}
 
-		// The held torch's staleness, settled before recording so the "any
-		// work" test sees it. All six faces whenever its light MOVED (every
-		// face was shot from that position); otherwise only what a mover
-		// marked. Occupancy is in the comparison so switching torch shadows
-		// off clears the map.
+		// Held torch's staleness, settled before recording so "any work" sees
+		// it: all six faces if its light moved, otherwise only what a mover
+		// marked. Occupancy is compared too, so toggling torch shadows off clears the map.
 		const bool handOccupied = cubeSlotOccupied(HAND_TORCH_SHADOW_INDEX);
 		if(HAND_TORCH_SHADOW_INDEX < activeCubeShadows) {
 			const glm::vec3 &handPos = torchLightPos[HAND_TORCH_SHADOW_INDEX];
@@ -4035,8 +3177,7 @@ class Castlescape : public BaseProject {
 			pendingFaceMask[HAND_TORCH_SHADOW_INDEX] = 0;
 		}
 
-		// Nothing stale anywhere: no buffer, no submit, no fence traffic. This
-		// is the steady state whenever the player and the ghosts are both still.
+		// Nothing stale: no buffer, no submit, no fence traffic (steady state when player and ghosts are still).
 		bool anyWork = false;
 		for(int t = 0; t <= HAND_TORCH_SHADOW_INDEX && !anyWork; t++) {
 			anyWork = (pendingFaceMask[t] != 0);
@@ -4105,29 +3246,18 @@ class Castlescape : public BaseProject {
 	}
 
 	// Builds every torch's CubeShadowMap (colour cube image + face views +
-	// per-torch depth + the 36 face framebuffers), plus the one sampler they
-	// all share. Called from pipelinesAndDescriptorSetsInit(), right after
-	// RPShadowCubeCompat.create() -- these framebuffers are only valid once
-	// that render pass exists, since they're built against its .renderPass
-	// handle (see the RPShadowCubeCompat member comment for why that render
-	// pass is only used for this, never rendered into itself).
-	//
-	// Lives here rather than in CubeShadowMap.hpp because createImage/
-	// createImageView/findDepthFormat are PROTECTED members of BaseProject:
-	// only this class's own methods can call them (see CubeShadowMap.hpp's
-	// header comment), the same reason every other Vulkan resource in this
-	// file -- RP, the post chain -- is built in a method here
-	// rather than in a free-standing helper.
+	// per-torch depth + the 36 face framebuffers) plus the shared sampler.
+	// Called right after RPShadowCubeCompat.create(), since the framebuffers
+	// are built against its .renderPass handle. Lives here, not in
+	// CubeShadowMap.hpp, because createImage/createImageView/findDepthFormat
+	// are protected members of BaseProject.
 	void createCubeShadowMaps() {
-		// Shared by every torch: same resolution and format. No mipmaps (a
-		// shadow lookup always samples level 0).
-		//
-		// NEAREST, not LINEAR: these cubes store a DISTANCE, and averaging four
-		// distances across a silhouette returns one that belongs to neither
-		// surface -- an unoccluded fragment reads as shadowed, or vice versa.
-		// The error scales with the depth GAP (metres, not texels), which is
-		// what forced the old 0.35 grazing bias and let a torch light the
-		// chains through a closed door. One texel makes the comparison honest.
+		// Shared by every torch, no mipmaps (a shadow lookup always samples level 0).
+		// IMPORTANT: NEAREST, not LINEAR -- these cubes store a distance, and
+		// averaging four distances across a silhouette returns one that
+		// belongs to neither surface, causing false shadowing/unshadowing that
+		// used to be papered over with a 0.35 grazing bias (and let light leak
+		// through closed doors). Nearest keeps the comparison honest.
 		cubeShadowSampler.init(this, VK_FILTER_NEAREST, VK_FILTER_NEAREST,
 								VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
 								VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
@@ -4140,8 +3270,7 @@ class Castlescape : public BaseProject {
 		for(int i = 0; i < NUM_SHADOW_CUBES; i++) {
 			CubeShadowMap &c = torchCube[i];
 
-			// The 6-layer colour image. CUBE_COMPATIBLE_BIT lets the CUBE view
-			// below treat its 6 layers as faces, not an array.
+			// CUBE_COMPATIBLE_BIT lets the cube view below treat its 6 layers as faces, not an array.
 			createImage(SHADOW_MAP_RES, SHADOW_MAP_RES, 1, 6,
 						VK_SAMPLE_COUNT_1_BIT, colorFmt, VK_IMAGE_TILING_OPTIMAL,
 						VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -4149,14 +3278,12 @@ class Castlescape : public BaseProject {
 						VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 						c.colorImage, c.colorMemory);
 
-			// The one view CookTorrance.frag's samplerCube reads: all 6 layers,
-			// TYPE_CUBE.
+			// The one view CookTorrance.frag's samplerCube reads.
 			c.cubeView = createImageView(c.colorImage, colorFmt, VK_IMAGE_ASPECT_COLOR_BIT,
 										  1, VK_IMAGE_VIEW_TYPE_CUBE, 6);
 
 			// One 2D view per layer for the framebuffers: a cube view can't be
-			// a render target, and createImageView fixes baseArrayLayer at 0,
-			// so these need a raw vkCreateImageView.
+			// a render target, and createImageView fixes baseArrayLayer at 0.
 			for(int face = 0; face < 6; face++) {
 				VkImageViewCreateInfo faceInfo{};
 				faceInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -4175,8 +3302,7 @@ class Castlescape : public BaseProject {
 				}
 			}
 
-			// One depth image per torch, reused across its 6 faces (see the
-			// CubeShadowMap::depthImage comment). Never sampled, so plain 2D.
+			// One depth image per torch, reused across its 6 faces; never sampled, so plain 2D.
 			createImage(SHADOW_MAP_RES, SHADOW_MAP_RES, 1, 1,
 						VK_SAMPLE_COUNT_1_BIT, depthFmt, VK_IMAGE_TILING_OPTIMAL,
 						VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 0,
@@ -4226,10 +3352,8 @@ class Castlescape : public BaseProject {
 
 	// Here you create your pipelines and Descriptor Sets!
 	void pipelinesAndDescriptorSetsInit() {
-		// creates the render passes. All of them first: RenderPass::create()
-		// is what actually allocates each attachment's image and sampler, and
-		// the descriptor sets below have to point at those, so nothing may be
-		// bound until every pass exists.
+		// All render passes first: RenderPass::create() allocates each
+		// attachment's image/sampler, which the descriptor sets below point at.
 		RP.create();
 		RPbright.create();
 		RPblurH.create();
@@ -4237,8 +3361,7 @@ class Castlescape : public BaseProject {
 		RPcomposite.create();
 
 		P.create(&RP);
-		// Same pass as P: the ghosts draw inside the scene pass, sharing its
-		// depth buffer and HDR attachment (where bloom finds their rim).
+		// Ghosts draw inside the same scene pass, sharing its depth buffer and HDR attachment.
 		Pspectral.create(&RP);
 		PspectralDepth.create(&RP);
 		Pbright.create(&RPbright);
@@ -4251,9 +3374,9 @@ class Castlescape : public BaseProject {
 			DSshadowCube[i].init(this, &DSLshadowCubeCapture, {});
 		}
 
-		// Wire the chain together. Each pass reads the previous pass's colour
-		// attachment as a texture. RP's sampled output is its RESOLVE
-		// attachment (the colour one is multisampled and discarded).
+		// Wire the chain: each pass reads the previous pass's colour
+		// attachment as a texture. RP's sampled output is its resolve
+		// attachment (the multisampled one is discarded).
 		VkDescriptorImageInfo sceneTex = RP.attachments[RP.resolveAttIdx].getViewAndSampler();
 		VkDescriptorImageInfo brightTex = RPbright.attachments[0].getViewAndSampler();
 		VkDescriptorImageInfo blurHTex = RPblurH.attachments[0].getViewAndSampler();
@@ -4262,8 +3385,7 @@ class Castlescape : public BaseProject {
 		DSbright.init(this, &DSLpost1, {sceneTex});
 		DSblurH.init(this, &DSLpost1, {brightTex});
 		DSblurV.init(this, &DSLpost1, {blurHTex});
-		// The composite is the only pass that needs two: the scene at full
-		// brightness, and the blurred bloom to add on top of it.
+		// Composite is the only pass needing two textures: full-brightness scene plus blurred bloom.
 		DScomposite.init(this, &DSLpost2, {sceneTex, blurVTex});
 
 		// Here you define the data set
@@ -4277,23 +3399,18 @@ class Castlescape : public BaseProject {
 		pauseQuad.pipelinesAndDescriptorSetsInit();
 		startScreenQuad.pipelinesAndDescriptorSetsInit();
 		settingsQuad.pipelinesAndDescriptorSetsInit();
-		// Same RP as the scene: flame, exit glow and debug lines all draw
-		// inside it, sharing the depth buffer and writing over-1.0 colours into
-		// the HDR attachment where bloom finds them.
+		// Same RP as the scene: flame, exit glow and debug lines draw inside
+		// it too, sharing the depth buffer and writing over-1.0 colours for bloom.
 		flame.pipelinesAndDescriptorSetsInit(&RP);
 		exitGlow.pipelinesAndDescriptorSetsInit(&RP);
 		debugLines.pipelinesAndDescriptorSetsInit(&RP);
 
-		// One per swapchain image, so this has to be rebuilt whenever the
-		// swapchain is. See submitCubeShadowCaptures().
-		createShadowCommandBuffers();
+		createShadowCommandBuffers();	// one per swapchain image, rebuilt whenever the swapchain is
 	}
 
 	// Here you destroy your pipelines and Descriptor Sets!
 	void pipelinesAndDescriptorSetsCleanup() {
-		// Before anything else, and safe here because both paths into this
-		// (recreateSwapChain() and cleanup()) wait for the device to be idle
-		// first -- so nothing this frees is still in flight.
+		// Safe here: both call sites (recreateSwapChain(), cleanup()) wait for the device to be idle first.
 		destroyShadowCommandBuffers();
 
 		P.cleanup();
@@ -4370,8 +3487,7 @@ class Castlescape : public BaseProject {
 		RPblurV.destroy();
 		RPcomposite.destroy();
 
-		// Before SC.localCleanup(): that frees scene.json's colliders, which
-		// colliderSet also points at. Drop the shared list first.
+		// Before SC.localCleanup(), which frees scene.json's colliders that colliderSet also points at.
 		colliderSet.cleanup();
 		allColliders.clear();
 
@@ -4398,16 +3514,11 @@ class Castlescape : public BaseProject {
 		// The text and HUD passes are separate buffers submitted after, so
 		// they draw on top of the composited frame.
 
-		// No cube shadow pass here at all, the held torch's included: every one
-		// of them is recorded and submitted per frame by
-		// submitCubeShadowCaptures() instead, just before this buffer is
-		// submitted. This one is recorded once per swapchain image and replayed
-		// unmodified afterwards (see ShadowCubeUniformBufferObject's comment),
-		// which can express neither "only the slots that went stale this frame"
-		// nor the per-face culling that makes those re-captures affordable --
-		// a visible set decided at record time stops being true the moment the
-		// light or the occluders move, and the held torch's light moves with
-		// the camera every frame.
+		// IMPORTANT: no cube shadow pass here -- those are recorded/submitted
+		// per frame by submitCubeShadowCaptures() instead, since this buffer
+		// is recorded once per swapchain image and replayed unmodified, which
+		// can't express "only the slots that went stale this frame" or the
+		// per-face culling that makes re-captures affordable.
 		//
 		// 1. The scene, into the offscreen HDR target.
 		RP.begin(commandBuffer, currentImage);
@@ -4415,17 +3526,13 @@ class Castlescape : public BaseProject {
 		// walk in localInit() so the flames can slot in ahead of it.
 		SC.populateCommandBuffer(commandBuffer, 0, currentImage);
 
-		// Flames BEFORE the ghosts. They depth-test against the dungeon but
+		// Flames before the ghosts: they depth-test against the dungeon but
 		// land before any ghost depth, so a flame poking into a ghost's body
-		// isn't erased -- "the torch snuffs when you step inside a ghost" needs
-		// you to SEE it lit right up until it goes out. A ghost over a flame
-		// still blends in front; the flame just glows through the shell.
+		// isn't erased and stays visible right up until it snuffs.
 		flame.populateCommandBuffer(commandBuffer, currentImage);
 
-		// The ghost DEPTH PREPASS, by hand (see localInit()). Nearest
-		// ghost-surface depth only (LESS, no colour), so the colour pass keeps
-		// just that layer. SpectralDepth.frag's near-fade lets the flames and
-		// exit glow show through a ghost the player is standing in.
+		// Ghost depth prepass, by hand: nearest ghost-surface depth only
+		// (LESS, no colour), so the colour pass keeps just that layer.
 		PspectralDepth.bind(commandBuffer);
 		for(int i = 0; i < SC.TI[1].InstanceCount; i++) {
 			Instance &inst = SC.TI[1].I[i];
@@ -4437,10 +3544,8 @@ class Castlescape : public BaseProject {
 							 static_cast<uint32_t>(SC.M[inst.Mid]->indices.size()), 1, 0, 0, 0);
 		}
 
-		// The ghosts' COLOUR pass, by hand for the same reason. The same
-		// instances again through Pspectral; only the nearest layer per pixel
-		// survives LESS_OR_EQUAL, keeping the feet from glowing through the
-		// body. One pipeline bind covers all three ghosts.
+		// Ghosts' colour pass, by hand: same instances through Pspectral;
+		// LESS_OR_EQUAL against the prepass keeps only the nearest layer per pixel.
 		Pspectral.bind(commandBuffer);
 		for(int i = 0; i < SC.TI[1].InstanceCount; i++) {
 			Instance &inst = SC.TI[1].I[i];
@@ -4452,8 +3557,7 @@ class Castlescape : public BaseProject {
 							 static_cast<uint32_t>(SC.M[inst.Mid]->indices.size()), 1, 0, 0, 0);
 		}
 
-		// After the scene (so the castle depth masks this quad to the arch)
-		// and the flames (the only other thing it blends against).
+		// After the scene (so castle depth masks this quad to the arch) and the flames.
 		exitGlow.populateCommandBuffer(commandBuffer, currentImage);
 		debugLines.populateCommandBuffer(commandBuffer, currentImage);
 		RP.end(commandBuffer);
@@ -4481,10 +3585,9 @@ class Castlescape : public BaseProject {
 		static bool debounce = false;
 		static int curDebounce = 0;
 
-		// ESC opens/closes the pause menu (Quit is reached through it).
-		// Edge-triggered. Ignored while the HUD, launch screen or settings
-		// screen is open -- one modal at a time, and settingsMenu specifically
-		// closes PauseMenu, so ESC would otherwise reopen it underneath.
+		// ESC opens/closes the pause menu, edge-triggered. Ignored while
+		// another modal is open (settingsMenu closes PauseMenu, so ESC would
+		// otherwise reopen it underneath).
 		bool escPressed = glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS;
 		if(escPressed && !escKeyWasPressed && !hud.isOpen() && !startScreen.isOpen()
 		   && !settingsMenu.isOpen()) {
@@ -4495,43 +3598,37 @@ class Castlescape : public BaseProject {
 		// moves the view
 		float deltaT = GameLogic();
 
-		// Pause menu, launch screen and settings screen all mean "stop time":
-		// zeroing deltaT here freezes every deltaT-driven animation below
-		// (flicker, shadow reassignment, ...) at once. The cheat HUD does NOT
-		// zero it -- torches flickering while flipping a debug flag is fine.
+		// Zeroing deltaT freezes every deltaT-driven animation (flicker,
+		// shadow reassignment, ...) while a modal is open. The cheat HUD does
+		// not zero it -- torches flickering while flipping a debug flag is fine.
 		if(pauseMenu.isOpen() || startScreen.isOpen() || settingsMenu.isOpen()) {
 			deltaT = 0.0f;
 		}
 
-		// Free-running clock for shader-side animation (currently just the
-		// flame's UV scroll). Unlike elapsedT below this never resets.
+		// Free-running clock for shader-side animation; unlike elapsedT below this never resets.
 		static float simTime = 0.0f;
 		simTime += deltaT;
 
 		// defines the global parameters for the uniform
 		GlobalUniformBufferObject gubo{};
 
-		// Every light comes from lights.json, sun included. No intensity factor:
-		// with a BRDF returning [0,1] (L09 s.42) a white source is (1,1,1) and
-		// the tone map handles the range. Strength is g and beta instead.
+		// Every light comes from lights.json. No intensity factor: with a BRDF
+		// returning [0,1] a white source is (1,1,1); strength is g and beta instead.
 		const std::vector<LightData> &lights = sceneLights.update(deltaT);
 		gubo.lightCount = (int)lights.size();
 		for(int i = 0; i < gubo.lightCount; i++) {
 			gubo.lights[i] = lights[i];
 		}
 
-		// The camera's world position and look direction, used to cull torch
-		// lights by distance and to orient the flame billboards. `forward`
-		// biases the light cut and shadow pool toward what's in view -- a
-		// light behind the player lights nothing the frame renders.
+		// Camera world position/look direction, used to cull torch lights and
+		// orient flame billboards. `forward` biases the light/shadow pool toward what's in view.
 		const glm::mat4 camToWorld = glm::inverse(View);
 		const glm::vec3 eyePos = glm::vec3(camToWorld[3]);
 		const glm::vec3 forward = -glm::vec3(camToWorld[2]);
 
 		// Re-decides the dynamic cube-shadow pool's slots, at most every
-		// SHADOW_REASSIGN_INTERVAL. Before the light-append loop (reads
-		// tf.shadowSlot) and the DSshadowCube mapping loop (reads the changed
-		// slots' matrices).
+		// SHADOW_REASSIGN_INTERVAL, before the light-append loop and
+		// DSshadowCube mapping loop read the (possibly changed) slots.
 		shadowReassignTimer += deltaT;
 		if(shadowReassignTimer >= SHADOW_REASSIGN_INTERVAL) {
 			shadowReassignTimer = 0.0f;
@@ -4539,13 +3636,10 @@ class Castlescape : public BaseProject {
 		}
 
 		// Diffs every static cube slot's current occupant against the one it
-		// last rendered for and queues changes into pendingFaceMask. Cheap
-		// enough to run every frame; only finds work on the frame something
-		// changed. HAND_TORCH_SHADOW_INDEX is excluded (rendered fresh every
-		// frame, never cached).
+		// last rendered for, queuing changes into pendingFaceMask.
+		// HAND_TORCH_SHADOW_INDEX is excluded (rendered fresh every frame, never cached).
 		for(int t = 0; t < dynamicShadowSlotBase; t++) {
-			// A fixed lights.json slot's identity never changes, so using the
-			// slot index as the marker means this fires once, on frame one.
+			// A fixed lights.json slot's identity never changes, so this fires once, on frame one.
 			if(lastRenderedOccupant[t] != t) {
 				pendingFaceMask[t] = ALL_CUBE_FACES;
 				lastRenderedOccupant[t] = t;
@@ -4558,54 +3652,42 @@ class Castlescape : public BaseProject {
 			}
 		}
 
-		// The diff above only sees a slot whose LIGHT changed. This adds slots
-		// whose light stayed put while a ghost or door moved inside -- without
-		// it those movers cast a shadow frozen at capture time.
+		// The diff above only sees a slot whose light changed; this adds slots
+		// whose light stayed put while a ghost/door moved inside it.
 		queueMoverCubeSlotRenders();
 
-		// The cylindrical billboard basis every wall flame uses this frame,
-		// from the CAMERA's right axis, not each flame's eye->anchor direction.
-		// The textbook per-flame version behaves for a wall torch but breaks
-		// for the held one: its anchor is barely a unit away in CAMERA space,
-		// so pitching swings it around the eye, its horizontal offset shrinks
-		// to zero and flips sign, and the derived yaw whips through 180
-		// (visible flame spin). The camera's right axis is exactly horizontal
-		// at every pitch and turns only with yaw -- the one rotation a standing
-		// flame should follow.
+		// IMPORTANT: cylindrical billboard basis from the camera's right axis,
+		// not each flame's eye->anchor direction. The per-flame version breaks
+		// for the held torch: its anchor is barely a unit away in camera
+		// space, so pitching swings it around the eye and the derived yaw
+		// whips through 180 (visible spin). The camera's right axis stays
+		// horizontal at every pitch and turns only with yaw.
 		glm::vec3 bbRight = glm::vec3(camToWorld[0]);
 		bbRight.y = 0.0f;
 		if(glm::dot(bbRight, bbRight) > 1e-8f) {
 			bbRight = glm::normalize(bbRight);
 		} else {
 			// Unreachable while pitch is clamped, but a zero-length basis
-			// vector collapses the billboard to a line -- so, an arbitrary
-			// valid axis rather than a NaN.
+			// would collapse the billboard to a line.
 			bbRight = glm::vec3(1.0f, 0.0f, 0.0f);
 		}
 		const glm::vec3 bbUp = glm::vec3(0.0f, 1.0f, 0.0f);
-		// Points back toward the eye, so the flame's local +z is "toward camera".
-		const glm::vec3 bbFwd = glm::cross(bbRight, bbUp);
+		const glm::vec3 bbFwd = glm::cross(bbRight, bbUp);	// points back toward the eye
 
-		// A second basis for the HELD torch only: the camera's ACTUAL
-		// up/right/forward, pitch included, straight off camToWorld's columns.
-		// The held torch is welded to the camera and tilts with it; a
-		// world-vertical flame on a tilting shaft swings out of alignment past
-		// a small pitch. Tying it to the same basis the torch mesh rides keeps
-		// the two aligned, and reading it off the view matrix it can't
-		// degenerate.
+		// Second basis for the held torch only: the camera's actual
+		// up/right/forward (pitch included), since the torch is welded to the
+		// camera and a world-vertical flame would swing out of alignment as it tilts.
 		const glm::vec3 handBbRight = glm::normalize(glm::vec3(camToWorld[0]));
 		const glm::vec3 handBbUp    = glm::normalize(glm::vec3(camToWorld[1]));
 		const glm::vec3 handBbFwd   = glm::normalize(glm::vec3(camToWorld[2]));
 
 		animTime += deltaT;
 
-		// Advance every torch's fire state before anything reads it, so the
-		// flame, its sparks and its light are all driven by the same envelope
-		// within the same frame (see the TorchFlame struct).
+		// Advance every torch's fire state before anything reads it, so flame,
+		// sparks and light are all driven by the same envelope this frame.
 		for(TorchFlame &tf : torchFlames) {
-			// Flicker: a fast term (a quarter of the signal -- Flame.frag's
-			// per-pixel shimmer owns the fast twitch), a slow one so the flame
-			// breathes over seconds, a middle one so the two don't read apart.
+			// Fast term (a minor share -- Flame.frag's per-pixel shimmer owns
+			// the fast twitch), slow term for breathing over seconds, middle term to bridge them.
 			float t = animTime + tf.phase;
 			float fast   = fireFbm(t * FLAME_FLICKER_HZ);
 			float middle = fireFbm(t * 3.1f + 7.0f);
@@ -4631,48 +3713,32 @@ class Castlescape : public BaseProject {
 								- 2.0f * w0 * tf.intensityVel) * deltaT;
 			tf.intensity += tf.intensityVel * deltaT;
 
-			// The hunt cycle's colour, recomputed from the authored base every
-			// frame. One line: `color` is what both the light and the billboard
-			// read, so tinting it here turns the torch, its light, its shadows
-			// and its bloom violet together.
-			//
-			// The warning pulse and the hunt's dimming ride on the same value
-			// rather than on `intensity`, which is spring-driven state: a 4 Hz
-			// pulse written into a spring with a ~0.2 s response would be
-			// damped into nothing, and writing it into the spring's own value
-			// would corrupt the flicker it exists to produce.
+			// Hunt cycle's colour, recomputed from the authored base every
+			// frame: `color` feeds both light and billboard, so tinting it
+			// here turns torch, light, shadow and bloom violet together.
+			// IMPORTANT: rides this value, not `intensity` (spring-driven) --
+			// a 4Hz pulse written into a ~0.2s spring would be damped away.
 			tf.color = huntCycle.flameColor(tf.baseColor)
 					   * huntCycle.warningPulse() * huntCycle.lightScale();
 
-			// Combustion instability: a slow wander in hue on top of the
-			// brightness spring, so a guttering flame shifts warm/cool the way
-			// burning fuel does instead of only dimming. Scaled by `gutter` so
-			// a steady flame is untouched and the hunt-cycle tint stays clean.
+			// Slow hue wander on top of the brightness spring, so a guttering
+			// flame shifts warm/cool rather than only dimming. Scaled by
+			// `gutter` so a steady flame and the hunt-cycle tint stay clean.
 			float hueWander = fireFbm(t * 0.9f + 53.0f) - 0.5f;
 			tf.color.r *= 1.0f + hueWander * 0.10f * gutter;
 			tf.color.b *= 1.0f - hueWander * 0.12f * gutter;
 
-			// Height: the same signal, compressed into a narrower band and
-			// chased much more slowly -- see TorchFlame::heightScale.
 			float hTarget = 0.78f + 0.31f * (target - 0.30f) / 1.10f;	// ~0.78..1.09
 			tf.heightScale += (hTarget - tf.heightScale)
 							  * (1.0f - std::exp(-deltaT / FLAME_HEIGHT_TAU));
 
-			// Catching fire / going out: an underdamped spring toward 1 while
-			// lit, 0 while not -- see TorchFlame::ignitionScale and
-			// FLAME_IGNITION_OMEGA/ZETA. Advanced unconditionally (not just
-			// while flameBurning(tf)) so a flame just switched off relaxes
-			// back to 0 instead of freezing wherever it was.
-			//
-			// The underdamped ZETA is only wanted on the way UP -- the flare
-			// past resting size is what reads as "catching". On the way DOWN
-			// that same ring makes ignitionScale undershoot to 0 (clamped),
-			// bounce back to ~0.1, and sink again: the flame and its point
-			// light (L.color and the billboard size both scale by
-			// ignitionScale) visibly go out, flicker back, then out -- which
-			// is exactly the "off, on, off" seen when a ghost snuffs the held
-			// torch, the first thing in the game that flips `burning` false at
-			// runtime. Critically damp the extinguish so it eases out once.
+			// Catching fire / going out: spring toward 1 while lit, 0 while
+			// not. Advanced unconditionally (not gated on flameBurning) so a
+			// just-switched-off flame relaxes to 0 instead of freezing.
+			// IMPORTANT: underdamped ZETA only on the way up (the flare past
+			// resting size reads as "catching"); on the way down it would ring
+			// past 0, bounce, and sink again -- visible as off/on/off when a
+			// ghost snuffs the held torch. Critically damp the extinguish instead.
 			float wi = FLAME_IGNITION_OMEGA;
 			bool igniting = flameBurning(tf);
 			float ignitionTarget = igniting ? 1.0f : 0.0f;
@@ -4680,22 +3746,17 @@ class Castlescape : public BaseProject {
 			tf.ignitionVel += ((ignitionTarget - tf.ignitionScale) * wi * wi
 								- 2.0f * zi * wi * tf.ignitionVel) * deltaT;
 			tf.ignitionScale += tf.ignitionVel * deltaT;
-			// The overshoot is the point (the flare while catching), but it
-			// must not go negative -- a negative billboard size would flip
-			// the flame's quads inside out for a frame.
+			// Overshoot is the point (the catching flare), but must not go
+			// negative or a negative billboard size flips the quads inside out for a frame.
 			tf.ignitionScale = std::max(tf.ignitionScale, 0.0f);
 
-			// Lean. A flame is dragged by the air it moves through, so it
-			// leans AGAINST its own velocity: the world-space lean vector is
-			// just the smoothed velocity negated. Only the horizontal part --
-			// riding a lift up or down doesn't bend a flame sideways.
+			// A flame leans against its own velocity (dragged by the air it
+			// moves through); horizontal only, so a vertical lift doesn't bend it sideways.
 			glm::vec3 pos = glm::vec3(tf.inst->Wm * glm::vec4(tf.anchor, 1.0f));
-			// A flame that's currently switched off drops its velocity history
-			// instead of differencing against it. The held torch is parked
-			// 1000 units below the map while off (see GameLogic), so both the
-			// frame it goes away and the frame it comes back would otherwise
-			// read as an enormous velocity and bring the flame back folded
-			// over at its lean cap.
+			// IMPORTANT: a switched-off flame drops its velocity history rather
+			// than differencing against it -- the held torch is parked 1000
+			// units below the map while off, which would otherwise read as an
+			// enormous velocity on both the off and on frames.
 			if(!flameBurning(tf)) {
 				tf.velPrimed = false;
 				tf.smoothedVel = glm::vec3(0.0f);
@@ -4703,47 +3764,33 @@ class Castlescape : public BaseProject {
 				continue;
 			}
 			if(!tf.velPrimed) {
-				// First frame: no previous position to difference against, and
-				// the instance may still be sitting at its scene.json
-				// placeholder, which would read as an enormous velocity.
+				// First frame: no previous position, and the instance may
+				// still sit at its scene.json placeholder, so skip the jump.
 				tf.prevPos = pos;
 				tf.velPrimed = true;
 			}
 			glm::vec3 vel = (pos - tf.prevPos) / std::max(deltaT, 1e-4f);
 			tf.prevPos = pos;
 
-			// Exponential smoothing, framerate-independent: without it the
-			// flame would twitch on every single-frame jolt in the walking bob
-			// rather than swinging through it.
+			// Framerate-independent exponential smoothing, or the flame would
+			// twitch on every single-frame jolt in the walking bob.
 			float a = 1.0f - std::exp(-deltaT / TORCH_LEAN_TAU);
 			tf.smoothedVel += (vel - tf.smoothedVel) * a;
 
-			// Against its own motion: a flame is bent by the air it is being
-			// dragged through, so it trails behind the hand carrying it.
-			glm::vec3 leanWorld = -tf.smoothedVel;
+			glm::vec3 leanWorld = -tf.smoothedVel;	// trails behind the hand carrying it
 			leanWorld.y = 0.0f;
 
-			// Resolve into the billboard's own axes -- the SAME basis this
-			// torch's quads are actually built with below (cylindrical for a
-			// wall torch, camera-locked for the held one via heldByCamera),
-			// not a second per-flame copy. The lean is uploaded in
-			// billboard-local units, so resolving it against a different
-			// basis than the one the quads use would make it lean in the
-			// wrong direction.
+			// IMPORTANT: resolved into the same basis this torch's quads are
+			// actually built with below (not a second per-flame copy), or the
+			// lean would point in the wrong direction relative to the billboard.
 			const glm::vec3 &leanRight = tf.heldByCamera ? handBbRight : bbRight;
 			const glm::vec3 &leanFwd   = tf.heldByCamera ? handBbFwd   : bbFwd;
 
-			// Straight from speed to half-widths of tip offset.
-			//
-			// Deliberately does NOT divide by the flame's world half-width:
-			// the held torch's half-width is about 0.07 world units, so
-			// dividing by it would multiply every velocity by ~14 -- merely
-			// turning on the spot swings the torch through roughly 2 units/s,
-			// which saturates the lean to its cap and pins it there
-			// permanently folded over. It would also make the effect
-			// scale-dependent in the wrong direction: the small held torch
-			// would react three times harder than a full-size wall one, when
-			// they should behave identically.
+			// IMPORTANT: deliberately not divided by the flame's world
+			// half-width -- the held torch's is ~0.07 units, so dividing would
+			// multiply velocity ~14x and saturate the lean permanently from
+			// just turning on the spot. It would also make the small held
+			// torch react harder than a full-size wall one.
 			tf.lean = glm::vec2(glm::dot(leanWorld, leanRight), glm::dot(leanWorld, leanFwd))
 					  * TORCH_LEAN_PER_SPEED;
 			if(glm::length(tf.lean) > TORCH_LEAN_MAX) {
@@ -4752,24 +3799,18 @@ class Castlescape : public BaseProject {
 		}
 
 		// Torch flames' point lights, appended straight into gubo every frame
-		// from the same Wm the flame rides -- NOT through lights.json's
-		// "instance"+"offset" anchoring, which reads the Wm once at init time
-		// and would freeze the held torch's light at the origin.
-		//
-		// Culled by REAL distance (never by facing -- a torch you turned away
-		// from still lights the room behind you) and capped in count, in
-		// facingBiasedDistSq() order. Every gubo light costs a full BRDF per
-		// fragment per sample; TORCH_LIGHT_MAX_LIVE is above the scene's flame
-		// count, so the cap doesn't bite in practice.
+		// from the flame's live Wm -- not through lights.json's
+		// instance+offset anchoring, which reads Wm once at init and would
+		// freeze the held torch's light at the origin.
+		// Culled by real distance (never by facing) and capped in count, in
+		// facingBiasedDistSq() order; TORCH_LIGHT_MAX_LIVE is above the
+		// scene's flame count so the cap doesn't bite in practice.
 		{
 			std::vector<std::pair<float, const TorchFlame *>> nearest;
 			nearest.reserve(torchFlames.size());
 			const float cullSq = TORCH_LIGHT_CULL_DIST * TORCH_LIGHT_CULL_DIST;
 			for(const TorchFlame &tf : torchFlames) {
-				// Switched-off flames never even enter the contest: not culled
-				// late, just absent, so they can't take a live slot from a
-				// torch that IS burning either.
-				if(!flameBurning(tf)) {
+				if(!flameBurning(tf)) {	// switched-off flames never enter the contest at all
 					continue;
 				}
 				glm::vec3 worldPos = glm::vec3(tf.inst->Wm * glm::vec4(tf.anchor, 1.0f));
@@ -4778,10 +3819,9 @@ class Castlescape : public BaseProject {
 				if(dSq > cullSq) {
 					continue;
 				}
-				// View-cone cull: a wall torch whose whole lit sphere sits
-				// outside what the frame draws lights nothing on screen -- drop
-				// it before it takes a live slot or a BRDF eval. The held torch
-				// rides the camera, so it always reaches the view.
+				// View-cone cull: drop a torch whose whole lit sphere sits
+				// outside the frame before it costs a live slot or BRDF eval.
+				// Held torch rides the camera, so it always reaches the view.
 				if(!tf.heldByCamera
 				   && !lightReachesViewCone(worldPos, flameLightCullReach(tf), eyePos, forward)) {
 					continue;
@@ -4801,22 +3841,16 @@ class Castlescape : public BaseProject {
 				LightData L{};
 				L.pos = glm::vec3(tf.inst->Wm * glm::vec4(tf.anchor, 1.0f));
 				L.dir = glm::vec3(0.0f, -1.0f, 0.0f);	// unused for a point light
-				// The same envelope the flame is drawn with: brightness on
-				// colour, reach on g (both needed -- colour alone pulses in
-				// place, g alone grows without heating). tf.ignitionScale too,
-				// so the light brightens in step with a catching flame.
+				// Same envelope the flame is drawn with: brightness on colour,
+				// reach on g, and ignitionScale so light brightens with a catching flame.
 				L.color = tf.color * tf.intensity * tf.lightScale * tf.ignitionScale;
 				L.g = flameLightG(tf.isCandle, tf.intensity);
 				L.beta = TORCH_LIGHT_BETA;
 				L.cosIn = 1.0f;
 				L.cosOut = 0.0f;
 				L.type = LIGHT_POINT;
-				// The held torch gets HAND_TORCH_SHADOW_INDEX, recomputed for
-				// its current position here so this frame's cube pass renders
-				// it right. Every other candidate reads whatever slot
-				// updateDynamicShadowSlots() gave it, or -1 to skip the lookup.
-				// The explicit -1 for a non-candidate matters: 0 is the sun's
-				// map, and indoors that would read the light as fully shadowed.
+				// IMPORTANT: explicit -1 for a non-candidate matters -- slot 0
+				// would otherwise read as the sun's shadow map indoors.
 				if(tf.heldByCamera) {
 					if(cheats.torchShadowsEnabled) {
 						L.shadowIndex = HAND_TORCH_SHADOW_INDEX;
@@ -4835,19 +3869,14 @@ class Castlescape : public BaseProject {
 			}
 		}
 
-		// The light the open exit throws back into the room. Appended into gubo
-		// like the torch lights, and for the same reason: its brightness
-		// tracks the leaf's swing. The counterpart to the ExitGlow quad -- the
-		// quad is the daylight you LOOK at, this is the daylight on the stone;
-		// neither reads right alone. No shadow map (shadowIndex -1): the wall
-		// it shines through already shapes it, and a moving-door occluder would
-		// re-render every frame.
+		// Light the open exit throws back into the room, tracking the leaf's
+		// swing: the counterpart to the ExitGlow quad (which is the daylight
+		// you look at; this is the daylight on the stone). No shadow map: the
+		// wall already shapes it, and a moving-door occluder would re-render every frame.
 		if(exitOpenFrac > 0.001f && gubo.lightCount < MAX_LIGHTS) {
 			LightData L{};
 			L.pos = EXIT_SPILL_POS;
-			// Aimed back through the doorway, i.e. due west: the same axis the
-			// glow quad faces along.
-			L.dir = glm::vec3(-1.0f, 0.0f, 0.0f);
+			L.dir = glm::vec3(-1.0f, 0.0f, 0.0f);	// aimed due west, same axis the glow quad faces
 			L.color = EXIT_SPILL_COLOR * exitOpenFrac;
 			L.g = EXIT_SPILL_G;
 			L.beta = EXIT_SPILL_BETA;
@@ -4858,30 +3887,22 @@ class Castlescape : public BaseProject {
 			gubo.lights[gubo.lightCount++] = L;
 		}
 
-		// By value: with the Ambient Light cheat off there is no stored ambient
-		// to hand back a reference to. See SceneLights::ambient().
+		// By value: with the Ambient Light cheat off there's no stored ambient to reference.
 		const AmbientLight amb = sceneLights.ambient();
 		gubo.ambientUpper = amb.upper;
 		gubo.ambientLower = amb.lower;
 		gubo.ambientDir = amb.dir;
-		// Uploaded unswitched: the cheat is applied in the shader's
-		// ambientShare(), after the per-model override, not by zeroing this
-		// (a model with its own materials.json weight never reads this field).
-		// The cheat must zero the SHARE, not just black the colors -- under
-		// E17's blend the direct half is scaled by (1 - weight), so blacking
-		// the colors would DARKEN the scene instead of removing indirect light.
+		// IMPORTANT: the cheat zeroes the SHARE in the shader (ambientShare()),
+		// not the colours here -- under the blend the direct half is scaled by
+		// (1 - weight), so blacking the colours would darken the scene instead
+		// of removing indirect light.
 		gubo.ambientWeight = amb.weight;
-		// Same bucket, so the same gate covers it. See CookTorrance.frag's blend.
 		gubo.ambientBounce = amb.bounce;
 
 		// Distance fog density, derived from GEOM_CULL_CONE_DIST so the two
-		// can't drift. Solves exp(-(density*dist)^2) = FOG_RESIDUAL_AT_CULL_DIST
-		// for dist == GEOM_CULL_CONE_DIST * FOG_REFERENCE_DIST_SCALE, so fog
-		// reaches 1% brightness somewhat PAST where the cull stops drawing,
-		// not exactly at it. FOG_REFERENCE_DIST_SCALE is the knob: 1.0 reads
-		// dark well before the cull edge (an exponential drops fast early);
-		// 2.5 keeps the foreground near unfogged but lets a little pop peek
-		// through the cull edge (softened by the vignette and shared black).
+		// can't drift: solved so fog reaches 1% brightness somewhat past where
+		// the cull stops drawing. FOG_REFERENCE_DIST_SCALE is the knob (2.5
+		// keeps the foreground unfogged but lets a little pop peek through the cull edge).
 		constexpr float FOG_RESIDUAL_AT_CULL_DIST = 0.01f;
 		constexpr float FOG_REFERENCE_DIST_SCALE = 2.5f;
 		gubo.fogDensity = std::sqrt(-std::log(FOG_RESIDUAL_AT_CULL_DIST))
@@ -4952,14 +3973,10 @@ class Castlescape : public BaseProject {
 			glareSmoothed += (glareTarget - glareSmoothed) * (1.0f - std::exp(-deltaT / tau));
 		}
 
-		// The four post-processing passes. Each one's texelSize is that of the
-		// texture it READS, not the one it writes, since it is used to step
-		// from one source texel to the next.
+		// The four post-processing passes. Each one's texelSize is that of the texture it reads, not writes.
 		{
-			// RP.width/height, not swapChainExtent: the scene's resolve
-			// target (what the bright pass below actually reads) is sized to
-			// renderScale's scaled-down resolution, which can now differ
-			// from the swapchain/window's.
+			// RP.width/height, not swapChainExtent: the scene's resolve target
+			// is sized to renderScale's scaled-down resolution.
 			const glm::vec2 fullTexel = glm::vec2(1.0f / (float)RP.width,
 												  1.0f / (float)RP.height);
 			const glm::vec2 bloomTexel = glm::vec2(1.0f / (float)bloomWidth(),
@@ -4969,38 +3986,30 @@ class Castlescape : public BaseProject {
 			post.time = animTime;
 			post.threshold = BLOOM_THRESHOLD;
 			post.knee = BLOOM_KNEE;
-			// Stare-at glare rides the two post knobs: more bloom AND more
-			// exposure when the player looks into a flame. Smoothed
-			// asymmetrically upstream, so this never pumps.
+			// Stare-at glare rides both bloom and exposure; smoothed upstream so this never pumps.
 			post.bloomIntensity = BLOOM_INTENSITY * (1.0f + GLARE_BLOOM_GAIN * glareSmoothed);
 			post.exposure = SCENE_EXPOSURE * (1.0f + GLARE_EXPOSURE_GAIN * glareSmoothed);
-			// The escape whiteout, multiplied on top of the same two knobs so
-			// winning while staring into a torch gives one flash. Cubed: a
-			// linear exposure ramp reads as an even fade to white; weighting
-			// it to the end leaves the room there a moment before it's taken.
+			// Escape whiteout multiplies the same two knobs, cubed so the ramp
+			// weights toward the end rather than fading evenly.
 			if(escapeFlash > 0.0f) {
 				const float f = escapeFlash * escapeFlash * escapeFlash;
 				post.exposure *= 1.0f + ESCAPE_EXPOSURE_GAIN * f;
 				post.bloomIntensity *= 1.0f + ESCAPE_BLOOM_GAIN * f;
 			}
-			// The whiteout's own term, applied by Composite.frag after the
-			// tone map (see PostUniformBufferObject). Held back until the
-			// exposure ramp has had most of the flash, so the frame is already
-			// blowing out when the white arrives.
+			// Held back until the exposure ramp has had most of the flash, so
+			// the frame is already blowing out when the white arrives.
 			post.escapeFlash = glm::smoothstep(0.45f, 1.0f, escapeFlash);
 
-			// The spectral veil's ramp (SPECTRAL_VEIL_OUTER). Here, not in the
-			// ghost loop, which runs on the game clock -- pausing inside a
-			// ghost would freeze the wash. max() over the ghosts. Reads the
-			// drawn matrix so the bob counts.
+			// Spectral veil's ramp: here, not in the ghost loop (which runs on
+			// the game clock and would freeze while paused). max() over ghosts,
+			// reads the drawn matrix so the bob counts.
 			{
 				float veil = 0.0f;
 				for(const Ghost &g : ghosts) {
 					if(g.inst == nullptr) continue;
 					const glm::vec3 gp = glm::vec3(g.inst->Wm[3]);
 
-					// Vertical first: one subtraction rejects most ghosts, and
-					// the horizontal test costs a square root.
+					// Vertical first: rejects most ghosts cheaply before the horizontal square root.
 					const float dy = eyePos.y - gp.y;
 					const float below = ghostBodyBottom - SPECTRAL_VEIL_FADE_Y;
 					const float above = ghostBodyTop + SPECTRAL_VEIL_FADE_Y;
@@ -5037,34 +4046,24 @@ class Castlescape : public BaseProject {
 			post.blurDir = glm::vec2(0.0f, 1.0f);
 			DSblurV.map(currentImage, &post, 0);
 
-			// Composite: samples with plain UVs, so the texel size is unread.
-			// The tone map happens here, at the end of the chain, which is why
-			// debugFlags has to reach this pass.
+			// Composite: samples with plain UVs, texel size unread. Tone map
+			// happens here, hence debugFlags has to reach this pass.
 			post.texelSize = fullTexel;
 			post.blurDir = glm::vec2(0.0f);
 			DScomposite.map(currentImage, &post, 0);
 		}
 
-		// Each flame's render matrix is one of the two billboard bases,
-		// translated and scaled to its anchor. Wall torches get the
-		// CYLINDRICAL basis (faces the camera, stays upright at any pitch);
-		// the held torch gets the CAMERA-LOCKED one (tilts with the camera,
-		// like the shaft it burns on). What SHOULD respond to movement goes in
-		// deliberately as tf.lean.
-		//
-		// Shader local space: x +/-1 across the half-width, y 0 wick to 1 tip,
-		// z toward the camera (depth-layer separation only).
+		// Each flame's render matrix is one of two billboard bases translated
+		// and scaled to its anchor: cylindrical for wall torches (upright at
+		// any pitch), camera-locked for the held one. Shader local space: x
+		// +/-1 across half-width, y 0 wick to 1 tip, z toward camera.
 		for(const TorchFlame &tf : torchFlames) {
 			glm::vec3 anchorWorld = glm::vec3(tf.inst->Wm * glm::vec4(tf.anchor, 1.0f));
-			// Uniform scale, so any basis column's length IS the scale factor.
-			float instScale = glm::length(glm::vec3(tf.inst->Wm[0]));
+			float instScale = glm::length(glm::vec3(tf.inst->Wm[0]));	// uniform scale
 
-			// An off (or unlit) flame collapses to a point rather than being
-			// skipped: its descriptor set is recorded once and replayed, so
-			// there's no "don't draw this one". tf.ignitionScale already
-			// carries the on/off state (springs to 0/1), so no separate
-			// flameBurning() gate -- that would reintroduce the snap this
-			// animation replaces.
+			// An off/unlit flame collapses to a point rather than being
+			// skipped (its descriptor set is recorded once and replayed).
+			// ignitionScale already carries the on/off state, so no separate flameBurning() gate.
 			float sizeScale = tf.sizeScale * tf.ignitionScale;
 			float halfWidth = FLAME_HALF_WIDTH * instScale * sizeScale;
 			float height = FLAME_HEIGHT * instScale * sizeScale;
@@ -5084,18 +4083,14 @@ class Castlescape : public BaseProject {
 						 tf.lean, 1.0f + GLARE_FLAME_GAIN * tf.glare, tf.color, currentImage);
 		}
 
-		// The daylight outside the exit door. NOT billboards: fixed planes, so
+		// Daylight outside the exit door: fixed planes, not billboards, so
 		// their bases are world axes. Same column convention as Flame's
-		// billboard (in-plane axes scaled to the half-extents, normal, centre),
-		// so one mesh and pipeline serve both an upright quad and one flat --
-		// the difference is which world axes go in the first two columns.
+		// billboard, so one mesh/pipeline serves both the upright and flat quads.
 		{
-			// Squared, so the light builds late in the swing: a door barely
-			// ajar shows a crack, not half the glare.
+			// Squared so the light builds late in the swing: barely ajar shows a crack, not half the glare.
 			const float glow = EXIT_GLOW_INTENSITY * exitOpenFrac * exitOpenFrac;
 
-			// The wall of light, standing across the doorway past the leaf's
-			// reach: in-plane axes are world Z (across) and world Y (up).
+			// Wall of light across the doorway; in-plane axes world Z (across), world Y (up).
 			const glm::mat4 uprightBasis = glm::mat4(
 				glm::vec4(glm::vec3(0.0f, 0.0f, 1.0f) * EXIT_GLOW_HALF_WIDTH, 0.0f),
 				glm::vec4(glm::vec3(0.0f, 1.0f, 0.0f) * EXIT_GLOW_HALF_HEIGHT, 0.0f),
@@ -5105,10 +4100,8 @@ class Castlescape : public BaseProject {
 			exitGlow.update(EXIT_GLOW_UPRIGHT, ViewPrj * uprightBasis,
 							EXIT_GLOW_COLOR, glow, animTime, currentImage);
 
-			// The ground it stands on, covering the strip of open earth the
-			// upright quad leaves visible under the arch: in-plane axes are
-			// world X (out from the threshold) and world Z (across), normal
-			// straight up.
+			// Ground quad, covering the strip left visible under the arch;
+			// in-plane axes world X (out from threshold), world Z (across).
 			const glm::mat4 floorBasis = glm::mat4(
 				glm::vec4(glm::vec3(1.0f, 0.0f, 0.0f) * EXIT_GLOW_FLOOR_HALF_X, 0.0f),
 				glm::vec4(glm::vec3(0.0f, 0.0f, 1.0f) * EXIT_GLOW_FLOOR_HALF_Z, 0.0f),
@@ -5118,11 +4111,8 @@ class Castlescape : public BaseProject {
 			exitGlow.update(EXIT_GLOW_FLOOR, ViewPrj * floorBasis,
 							EXIT_GLOW_COLOR, glow, animTime, currentImage);
 
-			// The lid: the same plane as the floor quad, lifted over the top of
-			// the arch and turned to face down, so looking up from the
-			// threshold finds daylight rather than the skybox. Axes are the
-			// floor's, since the plane is the same one -- only the normal and
-			// the height differ.
+			// Lid: same plane as the floor quad, lifted above the arch and
+			// facing down, so looking up finds daylight instead of the skybox.
 			const glm::mat4 ceilingBasis = glm::mat4(
 				glm::vec4(glm::vec3(1.0f, 0.0f, 0.0f) * EXIT_GLOW_CEILING_HALF_X, 0.0f),
 				glm::vec4(glm::vec3(0.0f, 0.0f, 1.0f) * EXIT_GLOW_CEILING_HALF_Z, 0.0f),
@@ -5136,16 +4126,11 @@ class Castlescape : public BaseProject {
 		// defines the local parameters for the uniforms
 		UniformBufferObject ubo{};
 
-		// DSshadowCube[t] feeds the shadow CAPTURE pass
-		// (PShadowCube/ShadowCube.vert/frag) its matrices/position through a
-		// mapped uniform buffer instead of a push constant, precisely so the
-		// held torch's slot -- refreshed a few lines above in this same
-		// function, by updateHandTorchShadow() -- actually takes effect every
-		// frame instead of freezing at whatever the "main" command buffer's
-		// one-time recording saw. The six static torches don't strictly need
-		// the re-map (their matrices never change after computeShadowMatrices()
-		// runs once), but mapping all of them uniformly is simpler than
-		// special-casing the held one, and costs nothing worth avoiding.
+		// DSshadowCube[t] feeds the shadow capture pass via a mapped uniform
+		// buffer rather than a push constant, so the held torch's slot
+		// (refreshed above by updateHandTorchShadow()) takes effect every
+		// frame. Static torches don't strictly need the re-map, but mapping
+		// all of them uniformly is simpler and costs nothing worth avoiding.
 		for(int t = 0; t < activeCubeShadows; t++) {
 			ShadowCubeUniformBufferObject cubeUbo{};
 			for(int face = 0; face < 6; face++) {
@@ -5155,17 +4140,14 @@ class Castlescape : public BaseProject {
 			DSshadowCube[t].map(currentImage, &cubeUbo, 0);
 		}
 
-		// Debug overlay (DebugLines.hpp, cheat-gated): light-position gizmos
-		// and/or wireframe boxes at each torch's shadow-cube clip planes.
-		// Here, so gubo.lights[] and torchLightPos[] are current.
+		// Debug overlay (DebugLines.hpp, cheat-gated), placed here so gubo.lights[]/torchLightPos[] are current.
 		std::vector<glm::vec4> dbgPos, dbgColor;
 		if(cheats.showLightGizmos) {
 			for(int i = 0; i < gubo.lightCount; i++) {
 				const LightData &L = gubo.lights[i];
 				glm::vec4 color = glm::vec4(L.color, 1.0f);
 				if(L.type == LIGHT_DIRECT) {
-					// The sun has no position, so its gizmo is an arrow anchored
-					// near the player, not a cross at a point.
+					// The sun has no position, so its gizmo is an arrow near the player, not a cross.
 					glm::vec3 anchor = eyePos + glm::vec3(0.0f, 2.0f, 0.0f);
 					glm::vec3 tip = anchor + L.dir * 3.0f;
 					DebugLines::PushLine(anchor, tip, color, dbgPos, dbgColor);
@@ -5224,10 +4206,8 @@ class Castlescape : public BaseProject {
 									 glm::vec4(0.2f, 0.6f, 1.0f, 1.0f), dbgPos, dbgColor);
 			}
 		}
-		// Debug-camera companion overlay: the geometry cull's shape drawn in
-		// world space, so from the pulled-back spectator view you can see
-		// exactly which side of it an instance is on when it winks out. Same
-		// eyePos/forward the cull itself uses (GEOM_CULL_*).
+		// Debug-camera companion overlay: draws the geometry cull's shape in
+		// world space, so the spectator view shows exactly where an instance winks out.
 		if(cheats.debugCam) {
 			const glm::vec4 nearCol(0.2f, 0.9f, 1.0f, 1.0f);   // always-drawn bubble
 			const glm::vec4 coneCol(1.0f, 0.8f, 0.15f, 1.0f);  // view cone
@@ -5254,8 +4234,7 @@ class Castlescape : public BaseProject {
 			ring(eyePos, GEOM_CULL_RADIUS, rr, f, nearCol);
 			ring(eyePos, GEOM_CULL_RADIUS, uu, f, nearCol);
 
-			// View cone: half-angle straight from the cull's cosine, edge
-			// lines out to the cone distance plus a cap ring.
+			// View cone: half-angle from the cull's cosine, edges to the cone distance plus a cap ring.
 			float half = std::acos(GEOM_CULL_CONE_COS);
 			float capR = GEOM_CULL_CONE_DIST * std::tan(half);
 			glm::vec3 capC = eyePos + f * GEOM_CULL_CONE_DIST;
@@ -5266,11 +4245,8 @@ class Castlescape : public BaseProject {
 			}
 			ring(capC, capR, rr, uu, coneCol);
 
-			// Torch-light / shadow cull companion: a cross at every burning wall
-			// flame, green when its light survives lightReachesViewCone() and
-			// red when it's dropped (light out of gubo, cube slot freed). Same
-			// reach the cull feeds in, so the colour flips exactly on the
-			// boundary you see the surrounding geometry wink out at.
+			// Torch-light cull companion: cross at every burning wall flame,
+			// green if lightReachesViewCone() keeps it, red if dropped.
 			const glm::vec4 liveCol(0.3f, 1.0f, 0.35f, 1.0f);
 			const glm::vec4 deadCol(1.0f, 0.25f, 0.2f, 1.0f);
 			for(const TorchFlame &tf : torchFlames) {
@@ -5285,10 +4261,8 @@ class Castlescape : public BaseProject {
 
 		debugLines.update(currentImage, ViewPrj, dbgPos, dbgColor);
 
-		// The gazed door's chains/padlock (Door::LockProp) glow along with the
-		// leaf -- they read as part of the door. Built once here. Empty with
-		// the Focus Glow cheat off (the gaze itself is untouched; only the
-		// aura goes).
+		// The gazed door's chains/padlock glow along with the leaf. Empty with
+		// Focus Glow off (only the aura goes, gaze itself is untouched).
 		std::vector<Instance *> glowingInstances;
 		if(cheats.focusGlowEnabled && gazedInstance != nullptr) {
 			glowingInstances.push_back(gazedInstance);
@@ -5304,20 +4278,15 @@ class Castlescape : public BaseProject {
 			}
 		}
 
-		// Over every technique, not just the first: instances need the same
-		// per-object uniforms filled in regardless of which technique they
-		// belong to.
+		// Over every technique, not just the first, since all instances need the same per-object uniforms.
 		for(int techniqueId = 0; techniqueId < SC.TechniqueInstanceCount; techniqueId++) {
 			for(int instanceId = 0; instanceId < SC.TI[techniqueId].InstanceCount; instanceId++) {
 				glm::mat4 renderWm = SC.TI[techniqueId].I[instanceId].Wm;
-				// Geometry visibility cull (GEOM_CULL_*): an instance outside
-				// the radius+cone gets a stand-in render matrix and draws off
-				// the map -- an invertible translate, not a zero matrix (nMat
-				// below is its inverse-transpose). Only this render copy
-				// changes; the collider is left alone. Tested as a bounding
-				// SPHERE from the collider's extents (this pack isn't
-				// centre-pivoted, so a bare point clipped things still in
-				// view), else GEOM_CULL_FALLBACK_RADIUS.
+				// Geometry visibility cull: an instance outside radius+cone
+				// gets an invertible off-map translate (not a zero matrix,
+				// since nMat is its inverse-transpose); the collider is
+				// untouched. Tested as a bounding sphere from collider extents
+				// (this pack isn't centre-pivoted), else GEOM_CULL_FALLBACK_RADIUS.
 				Instance &cullInst = SC.TI[techniqueId].I[instanceId];
 				glm::vec3 instPos = glm::vec3(renderWm[3]);
 				float instRadius = GEOM_CULL_FALLBACK_RADIUS;
@@ -5354,9 +4323,8 @@ class Castlescape : public BaseProject {
 				ubo.time = simTime;
 
 				Instance &inst = SC.TI[techniqueId].I[instanceId];
-				// The gazed instance (plus its lock hardware) glows; other
-				// instances of the same model don't -- which is why this flag
-				// is per-instance and not in Material.
+				// Gazed instance (plus lock hardware) glows; other instances
+				// of the same model don't, hence per-instance not per-Material.
 				bool glow = false;
 				for(Instance *g : glowingInstances) {
 					if(g == &inst) {
@@ -5364,16 +4332,12 @@ class Castlescape : public BaseProject {
 						break;
 					}
 				}
-				// Sign = "would [E] do anything" (gazedInteractionDisabled),
-				// magnitude = which aura colour (GlowKind), packed into one
-				// scalar since the UBO's spare room is spent.
+				// Sign = "would [E] do anything", magnitude = aura colour (GlowKind), packed into one scalar.
 				float kindMag = static_cast<float>(gazedGlowKind);
 				ubo.glow = glow ? (gazedInteractionDisabled ? -kindMag : kindMag) : 0.0f;
 
-				// The ghosts' chase telegraph, riding F0 (Spectral computes no
-				// BRDF). After the material copy, which just wrote F0. A linear
-				// scan per instance: a flag on Instance is off-limits, and a
-				// map lookup costs more for three ghosts.
+				// Ghosts' chase telegraph rides F0 (Spectral computes no BRDF).
+				// Linear scan since a flag on Instance is off-limits and there are only three ghosts.
 				for(const Ghost &g : ghosts) {
 					if(g.inst == &inst) {
 						ubo.F0 = g.chaseBlend;
@@ -5383,28 +4347,20 @@ class Castlescape : public BaseProject {
 				// DS[1] = Pchar pass (main render): set0=DSLglobal, set1=DSLlocal
 				inst.DS[0][0]->map(currentImage, &gubo, 0); // global (light/camera)
 				inst.DS[0][1]->map(currentImage, &ubo, 0); // camera MVPs
-				// set2=DSLshadowSample, on techniques whose pipeline layout
-				// declares a third set, is never mapped here: it holds only
-				// fixed samplerCube bindings, set once at descriptor-set
-				// creation (shadowMapDefs in localInit()), with no per-frame
-				// host-visible buffer behind it.
+				// set2=DSLshadowSample is never mapped here: fixed samplerCube
+				// bindings, set once at descriptor-set creation, no per-frame buffer.
 			}
 		}
 
 		// Records and submits this frame's cube shadow captures, now that both
-		// DSshadowCube[t] and every instance's inst.DS[0][1] (mapped in the
-		// loop above) are current -- recording earlier would bake a stale Wm
-		// into the map. See submitCubeShadowCaptures().
+		// DSshadowCube[t] and every instance's DS[0][1] are current --
+		// recording earlier would bake a stale Wm into the map.
 		submitCubeShadowCaptures(currentImage);
 		pendingFaceMask.fill(0);
 
-		// The FPS counter, left visible even over the launch screen. Everything
-		// below it reads game state GameLogic() doesn't update while an overlay
-		// is open, and TextMaker draws above the backdrop, so those blocks are
-		// skipped rather than shown through it.
-		//
-		// Timed off glfwGetTime(), not deltaT: deltaT is forced to 0 while
-		// paused, but frames are still rendered, so this readout shouldn't freeze.
+		// FPS counter, left visible even over the launch screen. Timed off
+		// glfwGetTime(), not deltaT, since deltaT is forced to 0 while paused
+		// but frames still render.
 		static float elapsedT = 0.0f;
 		static int countedFrames = 0;
 		static double lastFpsTime = glfwGetTime();
@@ -5426,8 +4382,7 @@ class Castlescape : public BaseProject {
 		}
 
 		if(!startScreen.isOpen() && !settingsMenu.isOpen()) {
-			// Coordinates overlay (Show Coordinates cheat), above the FPS line.
-			// Throttled to 10Hz: print() always dirties the text buffer.
+			// Coordinates overlay, throttled to 10Hz since print() always dirties the text buffer.
 			static float coordsElapsedT = 0.0f;
 			static bool coordsShown = false;
 			coordsElapsedT += deltaT;
@@ -5452,21 +4407,16 @@ class Castlescape : public BaseProject {
 				coordsShown = false;
 			}
 
-			// The "[E] ..." prompt, shown while a door/pickup/candle/torch is in
-			// range. Re-prints whenever the text changes, not just on a
-			// show/hide toggle. The locked-exit line rides the same slot.
-			// Suppressed once a run ends -- GameLogic() stops updating the
-			// nearby* fields when it freezes.
+			// The "[E] ..." prompt, shown while a door/pickup/candle/torch is
+			// in range; suppressed once a run ends since GameLogic() freezes the nearby* fields.
 			static bool interactPromptShown = false;
 			static std::string interactPromptText;
 			bool showInteractPrompt = runState == RunState::Running &&
 									  (nearbyDoor >= 0 || nearbyPickup >= 0 ||
 									   nearbyCandle >= 0 || nearbyWallTorch >= 0 ||
 									   nearbyHandTorch || atLockedExit);
-			// Door prompts split four ways: a padlock the player can open, one
-			// they can't (name what to find, by lockLabel), one they're behind
-			// (name no key -- there's no padlock in sight from that side), and
-			// a plain door.
+			// Door prompts split four ways: openable padlock, unopenable
+			// (names the key by lockLabel), wrong side (no key visible), plain door.
 			std::string wantedPromptText;
 			if(atLockedExit) {
 				wantedPromptText = "The way out is locked - find the key";
@@ -5517,10 +4467,7 @@ class Castlescape : public BaseProject {
 				interactPromptShown = false;
 			}
 
-			// The hunt banner, high and centred: the words behind what the
-			// torches say in colour. Re-printed only when the text changes;
-			// the countdown is rounded to whole seconds so it changes once a
-			// second, not once a frame.
+			// Hunt banner, re-printed only when the text changes; countdown rounded to whole seconds.
 			static bool huntBannerShown = false;
 			static std::string huntBannerText;
 			std::string wantedHuntText;
@@ -5548,8 +4495,7 @@ class Castlescape : public BaseProject {
 				huntBannerShown = false;
 			}
 
-			// End of run. Static text, so unlike the banner above it's printed once
-			// on the transition and left alone until the run restarts.
+			// End of run: printed once on the transition, left alone until restart.
 			static bool endBannerShown = false;
 			static std::string endBannerText;
 			std::string wantedEndText;
@@ -5582,17 +4528,12 @@ class Castlescape : public BaseProject {
 	}
 	
 	// --- Ghost navigation ---------------------------------------------------
-	//
-	// The ghosts obey the same walls the player does: a threat that ignores
-	// geometry can't be played around. Not pathfinding -- a wall test, a
-	// push-out identical to the player's, and a fan of candidate headings,
-	// which is enough for rooms and corridors given the return trail.
+	// Ghosts obey the same walls the player does. Not pathfinding: a wall
+	// test, a push-out like the player's, and a fan of candidate headings,
+	// enough for rooms and corridors given the return trail.
 
-	// True if a ghost-sized cylinder at `p` overlaps a wall. No
-	// MAX_STEP_HEIGHT exemption: a ghost hovers over a low crate because the
-	// crate's yMax falls below the slab tested here. `radius` is a parameter
-	// so ghostPathClear/ghostSteer can ask with extra padding while
-	// ghostResolveWalls asks with the real body size (see ghostSteer).
+	// True if a ghost-sized cylinder at `p` overlaps a wall. `radius` is a
+	// parameter so ghostPathClear/ghostSteer can pad it while ghostResolveWalls uses the real body size.
 	bool ghostBlockedAt(const glm::vec3 &p, float radius) const {
 		bool blocked = false;
 		ghostForEachNearbyCollider(p, [&](const AABBextents &E) {
@@ -5610,16 +4551,11 @@ class Castlescape : public BaseProject {
 		return blocked;
 	}
 
-	// Pushes `p` horizontally out of anything it's inside. Same shape as the
-	// player's wall block -- move first, then push out along the shortest
+	// Pushes `p` horizontally out of anything it's inside, along the shortest
 	// escape, so the wall-parallel component survives (sliding for free).
 	void ghostResolveWalls(glm::vec3 &p) const {
-		// The 3x3 neighbourhood is computed once, from `p` as it is on entry,
-		// before any push below can move it -- exactly like the old
-		// all-colliders scan, which also decided once which colliders exist
-		// and then mutated p while walking that fixed list. A push here is at
-		// most ghostRadius, well inside the CELL_SIZE margin, so p never
-		// actually leaves the neighbourhood that was queried for it.
+		// 3x3 neighbourhood computed once from `p` on entry, before any push
+		// below moves it; a push is at most ghostRadius, well inside the CELL_SIZE margin.
 		ghostForEachNearbyCollider(p, [&](const AABBextents &E) {
 			if(E.yMax < p.y + ghostBodyBottom) return;
 			if(E.yMin > p.y + ghostBodyTop) return;
@@ -5651,8 +4587,7 @@ class Castlescape : public BaseProject {
 	}
 
 	// Whether a ghost at `from` could travel `dist` along `dir` unobstructed.
-	// Sampled, not swept: point tests spaced under the ghost's radius, so
-	// nothing thinner can slip between two.
+	// Sampled, not swept: point tests spaced under the ghost's radius so nothing thinner slips through.
 	bool ghostPathClear(const glm::vec3 &from, const glm::vec2 &dir, float dist, float radius) const {
 		const float step = ghostRadius * 0.8f;
 		int samples = std::max(1, (int)std::ceil(dist / step));
@@ -5666,9 +4601,8 @@ class Castlescape : public BaseProject {
 		return true;
 	}
 
-	// True if `p` sits inside any collider's box, testing the real Y of `p`
-	// (not a slab off another height) -- what a sightline needs, so a table
-	// only blocks the ray if the line is actually low enough to clip it.
+	// True if `p` sits inside any collider's box, testing the real Y of `p` --
+	// a table only blocks a sightline if the line is actually low enough to clip it.
 	bool ghostPointBlocked(const glm::vec3 &p) const {
 		bool blocked = false;
 		ghostForEachNearbyCollider(p, [&](const AABBextents &E) {
@@ -5681,15 +4615,12 @@ class Castlescape : public BaseProject {
 		return blocked;
 	}
 
-	// Roughly where a ghost's "eyes" are, relative to its hover pivot --
-	// nearer the top of the body than the centre. Only used for the sightline
-	// below; the movement/collision code has no use for it.
+	// Ghost "eye" height above its hover pivot, used only for the sightline below.
 	static constexpr float GHOST_EYE_OFFSET = 0.5f;
 
 	// Whether a ghost at `from` can see the player at `eyeTarget`. A 3D ray,
-	// not ghostPathClear's flat XZ probe: a hovering ghost looking down clears
-	// a waist-high table, while walls and closed doors (floor-to-ceiling
-	// boxes) still block.
+	// not ghostPathClear's flat XZ probe, so a hovering ghost clears a table
+	// but walls/closed doors still block.
 	bool ghostHasLineOfSight(const glm::vec3 &from, const glm::vec3 &eyeTarget) const {
 		glm::vec3 eyeFrom = from + glm::vec3(0.0f, GHOST_EYE_OFFSET, 0.0f);
 		glm::vec3 delta = eyeTarget - eyeFrom;
@@ -5708,34 +4639,22 @@ class Castlescape : public BaseProject {
 		return true;
 	}
 
-	// Picks the heading a chasing ghost takes, given where it WANTS to go
-	// (straight at the player). Fans out from `desired` in widening steps and
-	// takes the first with a clear probe ahead -- along a wall that's the
-	// direction that slides down it, at a corner the one that turns it.
-	// Backwards is valid too (giving up on a dead end).
-	//
-	// g.turnBias stops it dithering: without it a ghost facing a pillar swaps
-	// left/right every frame as the geometry shifts by centimetres. The bias
-	// remembers the chosen side and re-tries it first, re-examined only once
-	// the ghost has a clear straight line again.
-	//
-	// Zero vector = boxed in, which the caller reads as "don't move".
+	// Picks the heading a chasing ghost takes toward `desired`. Fans out in
+	// widening steps and takes the first with a clear probe ahead.
+	// IMPORTANT: g.turnBias prevents dithering -- without it a ghost facing a
+	// pillar swaps left/right every frame as geometry shifts by centimetres;
+	// the bias remembers the chosen side and re-tries it first.
+	// Zero vector = boxed in, read by the caller as "don't move".
 	glm::vec2 ghostSteer(Ghost &g, const glm::vec2 &desired) const {
-		// Probed with a little more than the ghost's radius: a choke point a
-		// hair wider than the body flips "clear?" every frame, which reads as a
-		// ghost snapping between headings. The padding makes it a threshold the
-		// ghost commits to early, at the cost of refusing a gap slightly sooner.
+		// Probed with a little more than the ghost's radius, so a choke point
+		// only slightly wider than the body doesn't flip "clear?" every frame.
 		const float steerRadius = ghostRadius * ghostSteerMargin;
 
-		// Straight there. Also the point at which the ghost stops having an
-		// opinion about which way it went round the last obstacle.
 		if(ghostPathClear(g.pos, desired, GHOST_PROBE_DIST, steerRadius)) {
 			return desired;
 		}
 
-		// Deviations in degrees, shallowest first. Stops just short of 180: a
-		// dead straight retreat is what the last pair already covers, and it
-		// would be reached only when literally every other heading is blocked.
+		// Deviations shallowest first, stopping just short of 180 (a dead straight retreat).
 		static constexpr float FAN[] = {25.0f, 50.0f, 75.0f, 100.0f, 125.0f, 150.0f};
 		for(float deg : FAN) {
 			// The remembered side first, then the other one.
@@ -5789,9 +4708,7 @@ class Castlescape : public BaseProject {
 			d.open = false;
 			d.angle = 0.0f;
 			d.swingSign = d.openAngleDeg < 0.0f ? -1.0f : 1.0f;
-			// Padlocks come back with the run -- the spent key is back on its
-			// table below, or the level would get easier every restart.
-			d.locked = !d.lockKeyId.empty();
+			d.locked = !d.lockKeyId.empty();	// padlocks come back with the run, or it gets easier each restart
 			d.inst->Wm = d.baseWm;
 			if(d.inst->C != nullptr) {
 				d.inst->C->setWorldMatrix(d.inst->Wm);
@@ -5805,19 +4722,13 @@ class Castlescape : public BaseProject {
 			p.inst->Wm = p.spawnWm;
 		}
 		keyRing.clear();
-		// A key mid-fall would keep being drawn off the camera, then parked
-		// below the map a few frames in, right after the loop put it back.
-		keyLowerIdx = -1;
+		keyLowerIdx = -1;	// else a key mid-fall keeps drawing off camera before being parked
 
-		// The torch goes back on the floor and every lit candle goes back out
-		// -- same reason the doors re-lock: the player earns the light. Its Wm
-		// is restored next frame once handTorchCollected is false.
+		// Torch back on the floor, every lit candle back out; Wm restored next frame.
 		handTorchCollected = false;
 		for(TorchFlame &tf : torchFlames) {
 			tf.burning = tf.spawnBurning;
-			// Snap to rest, not mid-spring: a re-lit flame plays its
-			// catching-fire animation from a clean 0.
-			tf.ignitionScale = tf.spawnBurning ? 1.0f : 0.0f;
+			tf.ignitionScale = tf.spawnBurning ? 1.0f : 0.0f;	// snap to rest, not mid-spring
 			tf.ignitionVel = 0.0f;
 		}
 
@@ -5828,18 +4739,14 @@ class Castlescape : public BaseProject {
 		nearbyHandTorch = false;
 		gazedInstance = nullptr;
 		atLockedExit = false;
-		// The way out closes with the rest of the doors, so its daylight and
-		// the whiteout go too.
-		exitOpenFrac = 0.0f;
+		exitOpenFrac = 0.0f;	// the way out closes with the rest of the doors, taking its daylight/whiteout
 		escapeFlash = 0.0f;
 
 		runState = RunState::Running;
 	}
 
-	// Called once on the frame the hunt phase changes. Everything the change
-	// DOES is polled from huntCycle where needed, so this is just the
-	// announcement -- its own function because it's the one place a music
-	// track would be swapped. No audio backend yet, so it prints.
+	// Called once on the frame the hunt phase changes; just the announcement
+	// (the one place a music track would be swapped). No audio backend yet, so it prints.
 	void onHuntPhaseChanged() {
 		switch(huntCycle.phase()) {
 			case HuntPhase::Calm:
@@ -5915,9 +4822,7 @@ class Castlescape : public BaseProject {
 			startScreen.setOpen(false, windowWidth, windowHeight);
 		}
 		if(startScreen.settingsClicked()) {
-			// Reached Settings from the launch screen (before/after a run):
-			// close this, open settingsMenu, remember to come back HERE
-			// (not to PauseMenu) when its Back is pressed.
+			// Remember to come back HERE (not PauseMenu) when Back is pressed.
 			startScreen.setOpen(false, windowWidth, windowHeight);
 			settingsFromPause = false;
 			settingsMenu.setOpen(true, windowWidth, windowHeight);
@@ -5931,15 +4836,13 @@ class Castlescape : public BaseProject {
 			pauseMenu.setOpen(false, windowWidth, windowHeight);
 		}
 		if(pauseMenu.settingsClicked()) {
-			// Same as StartScreen's above, but remembering to come back to
-			// PauseMenu (mid-run) instead.
+			// Same as StartScreen's above, but remembers to return to PauseMenu instead.
 			pauseMenu.setOpen(false, windowWidth, windowHeight);
 			settingsFromPause = true;
 			settingsMenu.setOpen(true, windowWidth, windowHeight);
 		}
 		if(pauseMenu.quitClicked()) {
-			// Abandon the run and drop back to the launch screen. restartRun()
-			// resets every piece of world state, so the next Play starts clean.
+			// Abandon the run and drop back to the launch screen; restartRun() resets all world state.
 			pauseMenu.setOpen(false, windowWidth, windowHeight);
 			restartRun();
 			startScreen.setOpen(true, windowWidth, windowHeight);
@@ -5947,9 +4850,7 @@ class Castlescape : public BaseProject {
 
 		settingsMenu.update(window, windowWidth, windowHeight);
 		if(settingsMenu.backClicked()) {
-			// Reopen whichever of PauseMenu/StartScreen sent the player here
-			// -- settingsFromPause, set at the two settingsClicked() sites
-			// above, is the only thing that remembers which.
+			// Reopen whichever menu sent the player here (settingsFromPause tracks which).
 			settingsMenu.setOpen(false, windowWidth, windowHeight);
 			if(settingsFromPause) {
 				pauseMenu.setOpen(true, windowWidth, windowHeight);
@@ -5960,11 +4861,9 @@ class Castlescape : public BaseProject {
 
 		getSixAxis(deltaT, m, r, fire);
 
-		// Clamped after getSixAxis (input timing untouched), before physics.
-		// Gravity is plain Euler integration; on a stalled frame a deltaT spike
-		// overshoots every collider and the player falls through the floor.
-		// 1/20s caps one frame's fall -- the game briefly slows instead of
-		// skipping physics, the standard fix for Euler on a variable timestep.
+		// Clamped after getSixAxis, before physics: Euler integration on a
+		// stalled frame's deltaT spike would overshoot colliders and fall
+		// through the floor. 1/20s caps it, the standard fix for a variable timestep.
 		const float MAX_DELTA_T = 1.0f / 20.0f;
 		if(deltaT > MAX_DELTA_T) {
 			deltaT = MAX_DELTA_T;
@@ -6006,18 +4905,15 @@ class Castlescape : public BaseProject {
 		glm::vec3 right = glm::normalize(glm::cross(front, worldUp));
 		glm::vec3 up = glm::normalize(glm::cross(right, front));
 
-		// Restart. Only offered once a run has ended, so R is free to mean
-		// something else during play, and edge-triggered like every other key
-		// here so holding it doesn't restart every frame.
+		// Restart: only offered once a run has ended, edge-triggered so holding it doesn't restart every frame.
 		bool restartKey = glfwGetKey(window, GLFW_KEY_R);
 		if(runState != RunState::Running && restartKey && !restartKeyWasPressed && !overlayOpen()) {
 			restartRun();
 		}
 		restartKeyWasPressed = restartKey;
 
-		// The whiteout, ramped here not in the frozen-movement block: it has to
-		// keep running after the run ends (RunState::Escaped starts it). Held
-		// still while an overlay is open, so pausing mid-flash doesn't skip it.
+		// Whiteout ramped here, not in the frozen-movement block, since it
+		// must keep running after the run ends. Held while an overlay is open.
 		if(!overlayOpen()) {
 			float flashTarget = (runState == RunState::Escaped) ? 1.0f : 0.0f;
 			if(flashTarget > escapeFlash) {
@@ -6041,9 +4937,8 @@ class Castlescape : public BaseProject {
 		// ended, so the last frame the player saw is the one they keep looking
 		// at.
 		if(!overlayOpen() && runState == RunState::Running) {
-			// Sprint: Ctrl multiplies move speed. Polled directly (Starter.hpp
-			// doesn't wire Ctrl). Started only while grounded, stopped
-			// immediately on release, air or not.
+			// Sprint: Ctrl multiplies move speed, polled directly (Starter.hpp
+			// doesn't wire it). Starts only while grounded, stops immediately on release.
 			bool ctrlHeld = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) || glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL);
 			if(!ctrlHeld) {
 				sprinting = false;
@@ -6055,34 +4950,28 @@ class Castlescape : public BaseProject {
 				moveSpeed *= movement.sprintMultiplier;
 			}
 
-			// WASD: m.x strafe, m.z -forward. The Starter's m.y (R/F fly) is
-			// dropped -- vertical movement only comes from jumping and gravity.
-			// Flattened to yaw only, not the pitched `front`, so looking up and
-			// pressing W doesn't push you up or down through the floor.
+			// WASD: m.y (fly) dropped, vertical movement only from jump/gravity.
+			// Flattened to yaw only (not pitched `front`), so looking up while pressing W doesn't push through the floor.
 			glm::vec3 frontFlat = glm::normalize(glm::vec3(front.x, 0.0f, front.z));
 			camPos += (right * m.x - frontFlat * m.z) * moveSpeed * deltaT;
 
-			// Wall collision: push the camera out of any collider that counts
-			// as a wall -- too tall to step onto AND low enough for the body to
-			// reach it. Everything else is left to the ground pass, which lifts
-			// the player on top; that split makes steps and crates walkable.
+			// Wall collision: push out of any collider too tall to step onto
+			// and low enough for the body to reach. The ground pass handles
+			// the rest, which is what makes steps and crates walkable.
 			if(cheats.collisionEnabled) {
 				const float EYE_HEIGHT = 1.8f;
 				const float PLAYER_HEIGHT = 1.8f;
 				const float PLAYER_RADIUS = 0.3f;
-				// So grazing the gate lintel's underside doesn't count as being inside it.
-				const float VERTICAL_MARGIN = 0.1f;
+				const float VERTICAL_MARGIN = 0.1f;	// so grazing the gate lintel's underside isn't "inside" it
 				float feetY = camPos.y - EYE_HEIGHT;
 				float headY = feetY + PLAYER_HEIGHT;
 				for(Collider *C : allColliders) {
 					AABBextents E = C->getExtents();
 
-					// Low enough to step onto: not a wall (the ground pass lifts
-					// the player onto it). Also covers floors and anything below.
+					// Low enough to step onto: not a wall, the ground pass lifts the player onto it.
 					if(E.yMax <= feetY + MAX_STEP_HEIGHT) continue;
 
-					// A wall, but only for the part the body reaches: the gate
-					// lintel's underside is above head height, so walk under it.
+					// A wall only where the body reaches it: walk under a lintel above head height.
 					if(headY <= E.yMin + VERTICAL_MARGIN) continue;
 
 					// Closest point on the collider's XZ footprint to the camera
@@ -6115,19 +5004,14 @@ class Castlescape : public BaseProject {
 
 			}
 
-			// Jump: spacebar (Starter's "fire"). Edge-triggered, only while
-			// grounded.
+			// Jump: spacebar (Starter's "fire"), edge-triggered, only while grounded.
 			if(fire && !jumpKeyWasPressed && grounded) {
 				camVerticalVelocity = movement.jumpSpeed;
-				// Drop leftover step smoothing, or a jump right after a step-up
-				// starts from a trailing view.
-				eyeStepOffset = 0.0f;
+				eyeStepOffset = 0.0f;	// drop leftover step smoothing, or a jump after a step-up trails the view
 			}
 			jumpKeyWasPressed = fire;
 
-			// Interaction: findGazedDoor picks the target, DOOR_INTERACT_RADIUS
-			// gates whether it's reachable, so a far door down a hall doesn't
-			// light up early.
+			// findGazedDoor picks the target; DOOR_INTERACT_RADIUS gates reachability.
 			nearbyDoor = -1;
 			{
 				int gazed = findGazedDoor(front);
@@ -6136,8 +5020,7 @@ class Castlescape : public BaseProject {
 				}
 			}
 
-			// Pickups: same gaze-then-proximity check. A pickup wins over a
-			// door via the E-key handling's priority order.
+			// Pickups: same gaze-then-proximity check; wins over a door via E-key priority order.
 			nearbyPickup = -1;
 			{
 				int gazed = findGazedPickup(front);
@@ -6153,10 +5036,8 @@ class Castlescape : public BaseProject {
 				}
 			}
 
-			// Candles: an unlit one aimed at within reach is lit by [E] off the
-			// held torch. Whether the player HAS fire isn't checked here -- the
-			// candle still targets, so the disabled glow and prompt can explain
-			// why nothing happens.
+			// Candles: an unlit one aimed at within reach is lit by [E]. Not
+			// gated on having fire here, so the disabled glow/prompt can explain why.
 			nearbyCandle = -1;
 			{
 				int gazed = findGazedCandle(front);
@@ -6172,10 +5053,8 @@ class Castlescape : public BaseProject {
 				}
 			}
 
-			// Wall torches: a burning one within reach, aimed at, lights the
-			// unlit torch in the player's hand ([E]). The mirror of the candle
-			// block above. findGazedWallTorch already returns -1 once the held
-			// torch is burning, so this quietly stops offering a target then.
+			// Wall torches: mirror of the candle block. findGazedWallTorch
+			// already returns -1 once the held torch is burning.
 			nearbyWallTorch = -1;
 			{
 				int gazed = findGazedWallTorch(front);
@@ -6191,8 +5070,7 @@ class Castlescape : public BaseProject {
 				}
 			}
 
-			// The floor torch: aimed at, within reach, not yet picked up.
-			// Ordinary pickup tolerances -- it's a small floor object.
+			// The floor torch: ordinary pickup tolerances, it's a small floor object.
 			nearbyHandTorch = false;
 			if(findGazedHandTorch(front)) {
 				float dx = camPos.x - handTorchWorldPos.x;
@@ -6203,10 +5081,8 @@ class Castlescape : public BaseProject {
 				}
 			}
 
-			// The single targeted instance for the focus glow (ubo.glow), in
-			// E-key priority order: floor torch and pickup, then wall torch,
-			// candle, door. The smaller, nearer thing wins -- a candle usually
-			// stands in front of a wall.
+			// Single targeted instance for the focus glow, in E-key priority
+			// order: floor torch/pickup, wall torch, candle, door.
 			gazedInstance = nullptr;
 			gazedInteractionDisabled = false;
 			if(nearbyHandTorch) {
@@ -6221,16 +5097,12 @@ class Castlescape : public BaseProject {
 			} else if(nearbyCandle >= 0) {
 				gazedInstance = torchFlames[nearbyCandle].inst;
 				gazedGlowKind = GlowKind::Candle;
-				// Nothing to light it with: red aura, and the prompt (see
-				// updateUniformBuffer) says what's missing.
-				gazedInteractionDisabled = !hasBurningTorch();
+				gazedInteractionDisabled = !hasBurningTorch();	// nothing to light it with: red aura
 			} else if(nearbyDoor >= 0) {
 				const Door &d = doors[nearbyDoor];
 				gazedInstance = d.inst;
 				gazedGlowKind = GlowKind::Door;
-				// Same condition the locked-door prompt text above already
-				// checks: wrong side of the padlock, or no matching key on
-				// the ring -- either way [E] would do nothing right now.
+				// Wrong side of the padlock, or no matching key: [E] would do nothing.
 				gazedInteractionDisabled =
 					d.locked && (!d.onLockSide(camPos) || findKeyInRing(d.lockKeyId) < 0);
 			}
@@ -6238,20 +5110,17 @@ class Castlescape : public BaseProject {
 			bool interactKey = glfwGetKey(window, GLFW_KEY_E);
 			if(interactKey && !interactKeyWasPressed) {
 				if(nearbyHandTorch) {
-					// Into the hand, still unlit. From next frame
-					// updateUniformBuffer() rebuilds its Wm off the camera.
+					// Into the hand, still unlit; next frame's updateUniformBuffer() rebuilds Wm off the camera.
 					handTorchCollected = true;
 					torchRaiseElapsed = 0.0f;	// restart the raise
 					std::cout << "[torch] picked up hand torch\n";
 					nearbyHandTorch = false;
 					gazedInstance = nullptr;
 
-					// The floor pose is about to vanish, and any shadow it was
-					// baked into. queueMoverCubeSlotRenders() only tracks a
-					// mover within its light's reach, and a pickup at a torch's
-					// dim edge can be inside its cube face but outside the
-					// cutoff. So this one-time reach-free sweep marks every
-					// occupied-slot face the floor pose falls in.
+					// The floor pose is about to vanish along with any shadow it
+					// was baked into. queueMoverCubeSlotRenders() only tracks
+					// movers within reach, which can miss a pickup at a torch's
+					// dim edge, so sweep every occupied-slot face the floor pose falls in, once.
 					{
 						const glm::vec4 &local = modelSphere(handTorchInst->Mid);
 						const glm::vec3 centre = glm::vec3(handTorchSpawnWm * glm::vec4(glm::vec3(local), 1.0f));
@@ -6274,15 +5143,12 @@ class Castlescape : public BaseProject {
 				} else if(nearbyPickup >= 0) {
 					Pickup &p = pickups[nearbyPickup];
 					p.collected = true;
-					// No per-instance visibility flag, so "removed from the
-					// world" means parked below the map. A key is redrawn in
-					// the hand from here on; a plain pickup stays parked.
+					// No visibility flag, so "removed" means parked below the
+					// map; a key is redrawn in hand from here on.
 					p.inst->Wm = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
 					if(!p.keyId.empty()) {
-						// One free hand: a key already in it goes back on the
-						// floor (an unheld key on the ring would hang in
-						// mid-air). Dropped short (0.5, not G's 1.0) so it
-						// lands underfoot.
+						// One free hand: a key already held goes back on the
+						// floor, dropped short (0.5, not G's 1.0) to land underfoot.
 						if(!keyRing.empty()) {
 							dropKeyFromRing((int)keyRing.size() - 1, camPos, front, 0.5f);
 						}
@@ -6326,24 +5192,19 @@ class Castlescape : public BaseProject {
 							consumeKey(slot);
 							// If this item is a whenUnlocked prop of this door,
 							// cancel the sink consumeKey() just queued -- the
-							// prop loop takes it onto the shelf this same frame,
-							// so "hand to gap" is one motion.
+							// prop loop puts it onto the shelf this same frame.
 							for(const Door::LockProp &prop : d.lockProps) {
 								if(prop.whenUnlocked && prop.inst == spent) {
 									keyLowerIdx = -1;
 								}
 							}
 							d.locked = false;
-							// Pick the swing before opening, same as the unlocked
-							// case below -- a locked door is by definition still
-							// fully closed here.
-							d.swingSign = d.swingSignAwayFrom(camPos);
+							d.swingSign = d.swingSignAwayFrom(camPos);	// a locked door is always fully closed here
 							d.open = true;
 						}
 					} else {
-						// Only a fully-closed leaf is free to pick a side.
-						// Reversing one still swinging shut would drag the panel
-						// back through the doorway and the player.
+						// Only a fully-closed leaf picks a side; reversing one
+						// still swinging shut would drag the panel through the player.
 						if(!d.open && d.angle == 0.0f) {
 							d.swingSign = d.swingSignAwayFrom(camPos);
 						}
@@ -6353,8 +5214,7 @@ class Castlescape : public BaseProject {
 			}
 			interactKeyWasPressed = interactKey;
 
-			// Drop key (G): puts the key in hand (the newest) down at arm's
-			// length. Pressing G repeatedly drops the ring in reverse order.
+			// Drop key (G): puts the newest key down at arm's length; repeated presses drop the ring in reverse order.
 			bool dropKey = glfwGetKey(window, GLFW_KEY_G);
 			if(heldKeyIdx() >= 0 && dropKey && !dropKeyWasPressed) {
 				dropKeyFromRing((int)keyRing.size() - 1, camPos, front, 1.0f);
@@ -6362,27 +5222,22 @@ class Castlescape : public BaseProject {
 			dropKeyWasPressed = dropKey;
 
 			for(Door &d : doors) {
-				// Magnitude from the scene, direction from whoever opened it
-				// (swingSign, set on the press): the leaf always travels away
-				// from the player rather than into them.
+				// Magnitude from the scene, direction from whoever opened it (swingSign).
 				float target = d.open ? std::abs(d.openAngleDeg) * d.swingSign : 0.0f;
 				float maxStep = DOOR_OPEN_SPEED * deltaT;
 				if(d.angle < target) d.angle = std::min(d.angle + maxStep, target);
 				else if(d.angle > target) d.angle = std::max(d.angle - maxStep, target);
 
-				// The leaf's local origin IS its hinge, so opening it is one
-				// more rotation on the closed-door transform.
+				// The leaf's local origin is its hinge, so opening it is one more rotation on the closed transform.
 				d.inst->Wm = d.baseWm * glm::rotate(glm::mat4(1.0f), glm::radians(d.angle), glm::vec3(0.0f, 1.0f, 0.0f));
 				if(d.inst->C != nullptr) {
 					d.inst->C->setWorldMatrix(d.inst->Wm);
 				}
 
-				// Chains and padlock: the leaf's matrix while locked (they're
-				// in its local frame), parked below the map once not. Driven
-				// every frame, so restartRun() re-locking brings them back for
-				// free. A whenUnlocked prop is the mirror: it appears when the
-				// lock comes off, and while locked it's left ALONE (it's still
-				// a Pickup on its table).
+				// Chains/padlock ride the leaf's matrix while locked, parked
+				// below the map once not; driven every frame so restartRun()
+				// re-locking brings them back for free. A whenUnlocked prop is
+				// the mirror: appears once unlocked, left alone (still a Pickup) while locked.
 				for(const Door::LockProp &prop : d.lockProps) {
 					if(prop.whenUnlocked) {
 						if(!d.locked) prop.inst->Wm = d.inst->Wm * prop.local;
@@ -6390,9 +5245,7 @@ class Castlescape : public BaseProject {
 						prop.inst->Wm = d.locked ? d.inst->Wm * prop.local
 												 : glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
 					}
-					// The hardware's collider, off the same matrix -- one left
-					// behind would seal the doorway. Null for a whenUnlocked
-					// prop (Pickup instances carry no collider).
+					// Collider follows the same matrix (Pickup instances have none).
 					if(prop.inst->C != nullptr) {
 						prop.inst->C->setWorldMatrix(prop.inst->Wm);
 					}
@@ -6400,11 +5253,8 @@ class Castlescape : public BaseProject {
 			}
 
 			// How far the way out has swung, off the same animated angle the
-			// leaf is drawn with, so the light outside can't disagree with the
-			// door on screen. Read by updateUniformBuffer() for the daylight
-			// quad and spill light. Smoothstepped so the light builds through
-			// the swing and settles. Frozen at its last value once the run
-			// ends -- an open door should keep lighting the escape banner.
+			// leaf draws with. Smoothstepped so the light builds through the
+			// swing; frozen once the run ends so an open door keeps lighting the escape banner.
 			if(exitDoorIndex >= 0) {
 				const Door &exitDoor = doors[exitDoorIndex];
 				float span = std::abs(exitDoor.openAngleDeg);
@@ -6413,67 +5263,53 @@ class Castlescape : public BaseProject {
 					: 0.0f;
 			}
 
-			// Ghosts. See the Ghost struct for the three modes. Common to all:
-			// the mode gives a direction and speed, and the bob, facing and
-			// world matrix are shared. The bob is added on top of `pos` at the
-			// end, so it never feeds back into steering or collision.
+			// Ghosts: see the Ghost struct for the three modes. Bob is added on
+			// top of `pos` at the end, so it never feeds back into steering/collision.
 			bool ghostsHunting = huntCycle.hunting();
 			for(Ghost &g : ghosts) {
 				if(g.inst == nullptr || g.waypoints.size() < 2) continue;
 
-				// Line of sight, every frame a hunt is on regardless of mode:
-				// a Patrol or Return ghost that spots the player needs to start
-				// a chase.
+				// Checked every frame a hunt is on, regardless of mode: a
+				// Patrol/Return ghost that spots the player starts a chase.
 				if(ghostsHunting && ghostHasLineOfSight(g.pos, camPos)) {
 					g.lastKnownPlayerPos = camPos;
 					g.hasLastKnown = true;
 				}
 
-				// Mode transitions. Starting a chase needs g.hasLastKnown, not
-				// just the Hunt phase: a ghost that never saw the player has
-				// nothing to walk toward and stays on patrol.
+				// A ghost that never saw the player stays on patrol even during a hunt.
 				if(ghostsHunting && g.hasLastKnown && g.mode != GhostMode::Chase) {
 					if(g.mode == GhostMode::Patrol) {
-						// Remember where on the loop we're leaving, start a
-						// fresh trail there.
+						// Remember where on the loop we're leaving, start a fresh trail there.
 						g.resumeIdx = g.targetIdx;
 						g.resumeDist = g.distAlongSegment;
 						g.trail.clear();
 						g.trail.push_back(g.pos);
 					}
-					// Out of Return, the existing trail is still the way home.
-					g.mode = GhostMode::Chase;
+					g.mode = GhostMode::Chase;	// out of Return, the existing trail is still the way home
 					g.stuckCheckPos = g.pos;
 					g.stuckTimer = 0.0f;
 				} else if(!ghostsHunting && g.mode == GhostMode::Chase) {
-					// Empty trail = the chase never went anywhere.
-					g.mode = g.trail.empty() ? GhostMode::Patrol : GhostMode::Return;
+					g.mode = g.trail.empty() ? GhostMode::Patrol : GhostMode::Return;	// empty trail = chase never went anywhere
 				}
 
-				// Move, per mode. Each branch leaves a `moveDir` for the facing
-				// code below.
+				// Move, per mode; each branch leaves a `moveDir` for facing below.
 				glm::vec2 moveDir(0.0f);
 
 				if(g.mode == GhostMode::Chase) {
-					// Toward the last place the player was SEEN, not their live
-					// position.
+					// Toward the last place the player was seen, not their live position.
 					glm::vec2 toPlayer(g.lastKnownPlayerPos.x - g.pos.x, g.lastKnownPlayerPos.z - g.pos.z);
 					float d = glm::length(toPlayer);
 					if(d > 1e-4f) {
 						moveDir = ghostSteer(g, toPlayer / d);
 						if(moveDir != glm::vec2(0.0f)) {
-							// min(step, d): stops the ghost overshooting
-							// straight past a player it has already reached
-							float step = std::min(g.chaseSpeed * deltaT, d);
+							float step = std::min(g.chaseSpeed * deltaT, d);	// min(step, d): don't overshoot a reached player
 							g.pos.x += moveDir.x * step;
 							g.pos.z += moveDir.y * step;
 						}
-						// Out of the loop to avoid getting stuck in objects when hunt starts
 						ghostResolveWalls(g.pos);
 					}
 
-					// Giving up: a ghost pinned against a closed wall or on the lastKnownPlayerPos
-					// will return to normal patrol after a timer
+					// Giving up: pinned against a wall or a stale target returns to patrol after a timer.
 					float moved = glm::length(glm::vec2(g.pos.x - g.stuckCheckPos.x, g.pos.z - g.stuckCheckPos.z));
 					if(moved >= GHOST_STUCK_EPS) {
 						g.stuckCheckPos = g.pos;
@@ -6486,14 +5322,13 @@ class Castlescape : public BaseProject {
 						}
 					}
 
-					// Breadcrumb. Dropped by distance travelled, not by time, (trail density not dependant on frame rate)
+					// Breadcrumb dropped by distance travelled, not time, so trail density doesn't depend on frame rate.
 					if(g.trail.empty()) {
 						g.trail.push_back(g.pos);
 					} else if(glm::length(glm::vec2(g.pos.x - g.trail.back().x,
 													g.pos.z - g.trail.back().z)) >= GHOST_TRAIL_SPACING) {
-						// Loop check: if this point revisits an earlier crumb, drop
-						// everything after it (oldest match = biggest loop cut).
-						// Skip last 2 crumbs, always within prune radius.
+						// Loop check: revisiting an earlier crumb drops everything
+						// after it (oldest match = biggest cut). Last 2 crumbs skipped, always within prune radius.
 						int cut = -1;
 						for(int i = 0; i + 2 < (int)g.trail.size(); i++) {
 							glm::vec2 delta(g.pos.x - g.trail[i].x, g.pos.z - g.trail[i].z);
@@ -6503,31 +5338,26 @@ class Castlescape : public BaseProject {
 							}
 						}
 						if(cut >= 0) {
-							// No new crumb: we're standing on trail[cut]
-							// already, near enough for it to be the head.
-							g.trail.resize((size_t)cut + 1);
+							g.trail.resize((size_t)cut + 1);	// no new crumb: near enough to trail[cut] already
 						} else {
 							g.trail.push_back(g.pos);
 						}
 					}
 				} else if(g.mode == GhostMode::Return) {
-					// Walk the breadcrumbs backwards, popping each as reached.
-					// Faster than the chase -- dead time for the player.
+					// Walk the breadcrumbs backwards, popping each as reached (faster than chase, dead time for the player).
 					glm::vec3 target = g.trail.back();
 					glm::vec2 delta(target.x - g.pos.x, target.z - g.pos.z);
 					float d = glm::length(delta);
 					float step = GHOST_RETURN_SPEED * deltaT;
 					if(d <= step) {
-						// Reached: land exactly on it (a known-walkable point)
-						// and drop it.
+						// Reached: land exactly on it (a known-walkable point) and drop it.
 						g.pos.x = target.x;
 						g.pos.z = target.z;
 						g.pos.y = target.y;
 						if(d > 1e-4f) moveDir = delta / d;
 						g.trail.pop_back();
 						if(g.trail.empty()) {
-							// Home. Restoring the saved leg and distance resumes
-							// the loop mid-stride, not at the nearest waypoint.
+							// Home: restoring the saved leg/distance resumes the loop mid-stride.
 							g.mode = GhostMode::Patrol;
 							g.targetIdx = g.resumeIdx;
 							g.distAlongSegment = g.resumeDist;
@@ -6539,8 +5369,7 @@ class Castlescape : public BaseProject {
 						ghostResolveWalls(g.pos);
 					}
 				} else {
-					// Patrol: walks the waypoint loop at constant speed
-					// (distance-based, so `speed` is a real units/s figure).
+					// Patrol: walks the waypoint loop at constant speed (distance-based, so `speed` is real units/s).
 					int n = (int)g.waypoints.size();
 					glm::vec3 from = g.waypoints[g.targetIdx == 0 ? n - 1 : g.targetIdx - 1];
 					glm::vec3 to = g.waypoints[g.targetIdx];
@@ -6556,17 +5385,15 @@ class Castlescape : public BaseProject {
 					}
 
 					float t = segLen > 0.0f ? g.distAlongSegment / segLen : 0.0f;
-					// Authored, not steered: drives `pos` directly with no wall
-					// resolution, so a nearby collider can't shove a ghost off
-					// its loop.
+					// Authored, not steered: no wall resolution, so a nearby collider can't shove a ghost off its loop.
 					g.pos = glm::mix(from, to, t);
 					if(segLen > 0.0f) {
 						moveDir = glm::normalize(glm::vec2(to.x - from.x, to.z - from.z));
 					}
 				}
 
-				// Facing, eased toward travel. A stationary ghost keeps its
-				// yaw. +M_PI: the mesh's front faces -Z, not atan2's +Z.
+				// Facing, eased toward travel; stationary ghost keeps its yaw.
+				// +M_PI: the mesh's front faces -Z, not atan2's +Z.
 				if(moveDir != glm::vec2(0.0f)) {
 					float targetYaw = std::atan2(moveDir.x, moveDir.y) + (float)M_PI;
 					// Shortest way round, or easing +179 -> -179 spins the ghost.
@@ -6608,13 +5435,11 @@ class Castlescape : public BaseProject {
 					}
 				}
 
-				// Non-hunt encounter: walking through a non-hunting ghost
-				// doesn't end the run but snuffs the held torch. `burning` =
-				// false is all it takes -- the ignition spring plays in reverse,
-				// so it shrinks out rather than snapping dark. Triggered by the
-				// spectral veil's own ramp (evaluated as updateUniformBuffer()
-				// does), not GHOST_CATCH_RADIUS, so it fires when "inside the
-				// ghost" first reads rather than at dead centre.
+				// Non-hunt encounter: walking through a ghost doesn't end the
+				// run but snuffs the held torch (setting `burning` false plays
+				// the ignition spring in reverse). Triggered by the spectral
+				// veil's own ramp, not GHOST_CATCH_RADIUS, so it fires when
+				// "inside the ghost" first reads, not at dead centre.
 				if(!ghostsHunting && handTorchCollected && handFlameIdx >= 0 &&
 				   torchFlames[handFlameIdx].burning) {
 					const float dyv = camPos.y - drawPos.y;
@@ -6637,9 +5462,8 @@ class Castlescape : public BaseProject {
 				}
 			}
 
-			// The way out. Standing in the exit box wins -- unless it's locked
-			// and the key isn't in hand (atLockedExit flags it). Checked after
-			// the ghosts, so a catch on the threshold beats reaching it.
+			// Standing in the exit box wins unless locked without the key.
+			// Checked after the ghosts, so a catch on the threshold beats reaching it.
 			atLockedExit = false;
 			if(exitHasBox && runState == RunState::Running) {
 				bool inside = camPos.x >= exitBoxMin.x && camPos.x <= exitBoxMax.x &&
@@ -6655,16 +5479,11 @@ class Castlescape : public BaseProject {
 				}
 			}
 
-			// Gravity: constant downward acceleration integrated into a
-			// velocity, resolved against the ground below (which zeroes it on
-			// landing).
 			camVerticalVelocity += movement.gravity * deltaT;
 			camPos.y += camVerticalVelocity * deltaT;
 
-			// Floor collision: the tallest surface under the player's XZ that
-			// sits within MAX_STEP_HEIGHT of the feet is the standing height.
-			// The step limit lets hole-shaped models (gates, doors) be walked
-			// through.
+			// Floor collision: the tallest surface under the player's XZ
+			// within MAX_STEP_HEIGHT of the feet is the standing height (lets hole-shaped models be walked through).
 			if(cheats.collisionEnabled) {
 				const float EYE_HEIGHT = 1.8f;
 				float feetY = camPos.y - EYE_HEIGHT;
@@ -6680,9 +5499,7 @@ class Castlescape : public BaseProject {
 					}
 				}
 
-				// Ramps (the staircase): same MAX_STEP_HEIGHT rule, but the
-				// reported height varies continuously along the slope instead
-				// of jumping a riser at a time.
+				// Ramps: same MAX_STEP_HEIGHT rule, but height varies continuously along the slope.
 				float rampY;
 				for(const GroundVolume &G : colliderSet.ramps()) {
 					if(G.groundAt(camPos, rampY) &&
@@ -6693,29 +5510,23 @@ class Castlescape : public BaseProject {
 				// Clamp height if clipping through the highest surface found
 				if(feetY < groundY) {
 					feetY = groundY;
-					// Landed: stop falling instead of accumulating velocity forever
 					if(camVerticalVelocity < 0.0f) {
-						camVerticalVelocity = 0.0f;
+						camVerticalVelocity = 0.0f;	// landed: stop falling
 					}
 				}
-				// Ground-contact for jumping. A little tolerance so an
-				// irregular floor lifting the player slightly still counts.
-				const float GROUND_EPSILON = 0.05f;
+				const float GROUND_EPSILON = 0.05f;	// tolerance so an irregular floor still counts as grounded
 				grounded = feetY <= groundY + GROUND_EPSILON;
-				// Set camera position to the new one + player height
 				float preClampY = camPos.y;
 				camPos.y = feetY + EYE_HEIGHT;
 
-				// Whatever the clamp just pushed us up by is a snap: hand it to the
-				// view smoothing below. Only upward, so landings and falls stay as
-				// sharp as gravity made them.
+				// Only an upward clamp is handed to the view smoothing below, so
+				// landings/falls stay as sharp as gravity made them.
 				float lifted = camPos.y - preClampY;
 				if(lifted > 0.0f) {
 					eyeStepOffset = std::min(eyeStepOffset + lifted, MAX_EYE_STEP_OFFSET);
 				}
 			} else {
-				// No-clip: walls are ignored, but the world floor still holds,
-				// so you can walk through walls without falling out the bottom.
+				// No-clip: walls ignored, but the world floor still holds so you can't fall out the bottom.
 				const float EYE_HEIGHT = 1.8f;
 				if(camPos.y - EYE_HEIGHT < worldFloorY) {
 					camPos.y = worldFloorY + EYE_HEIGHT;
@@ -6727,13 +5538,11 @@ class Castlescape : public BaseProject {
 			}
 		}
 
-		// Decay the vertical view smoothing. Exponential: never overshoots, no
-		// "still stepping" state -- a continuous climb settles at a small lag.
+		// Exponential decay: never overshoots, no "still stepping" state.
 		eyeStepOffset *= std::exp(-deltaT / EYE_SMOOTH_TAU);
 
-		// Walk-bob signal shared by the camera and both hands: one phase, eased
-		// in/out by walkBobBlend so a start/stop doesn't snap the sway. Only
-		// how each reads the phase differs.
+		// Walk-bob signal shared by camera and both hands: one phase, eased by
+		// walkBobBlend so start/stop doesn't snap the sway.
 		bool isWalking = grounded && (std::abs(m.x) > 0.01f || std::abs(m.z) > 0.01f);
 		float bobTarget = isWalking ? 1.0f : 0.0f;
 		walkBobBlend += (bobTarget - walkBobBlend) * (1.0f - std::exp(-deltaT / WALK_BOB_BLEND_TAU));
@@ -6741,22 +5550,19 @@ class Castlescape : public BaseProject {
 			walkBobPhase += WALK_BOB_SPEED * (sprinting ? 1.4f : 1.0f) * deltaT;
 		}
 
-		// View: rendered from the smoothed eye height; camPos is untouched so
-		// collisions and gravity work on the exact position. A small head-bob
-		// on the double-frequency signal, well under the hand's, so the world
-		// barely nods. Presentation only, like eyeStepOffset.
+		// Rendered from the smoothed eye height; camPos stays exact for
+		// collisions/gravity. Small head-bob, well under the hand's, presentation only.
 		float camBob = std::sin(walkBobPhase * 2.0f) * CAM_BOB_VERTICAL * walkBobBlend;
 		glm::vec3 eyePos = camPos - glm::vec3(0.0f, eyeStepOffset - camBob, 0.0f);
 		View = glm::lookAt(eyePos, eyePos + front, up);
 
-		// View stays the true first-person one -- billboards, held items and
-		// the light/geometry culls all read it (via inverse(View)) and must
-		// not follow the spectator. Only ViewPrj, what the frame is actually
-		// rasterised with, is rebased onto the pulled-back debug camera.
+		// IMPORTANT: View stays the true first-person one -- billboards, held
+		// items and the light/geometry culls read it via inverse(View) and
+		// must not follow the spectator. Only ViewPrj (what's actually
+		// rasterised) is rebased onto the debug camera.
 		if(cheats.debugCam) {
-			// On the frame it turns on, snap the orbit behind the player's
-			// facing; after that IJKL/UO own it. camYaw 0 faces +X and the
-			// orbit yaw is measured the same way, so +180 sits it behind.
+			// Snap the orbit behind the player's facing on the frame it turns
+			// on; camYaw 0 faces +X, so +180 sits the orbit behind.
 			if(!dbgCamWasOn) {
 				dbgOrbitYaw = camYaw + 180.0f;
 				dbgOrbitPitch = DEBUG_CAM_PITCH0;
@@ -6777,8 +5583,7 @@ class Castlescape : public BaseProject {
 				if(glfwGetKey(window, GLFW_KEY_O))
 					dbgOrbitDist += DEBUG_CAM_DOLLY_SPEED * deltaT;
 			}
-			// Clamp shy of straight up/down (lookAt gimbal) and keep the
-			// dolly range sane.
+			// Clamp shy of straight up/down (lookAt gimbal) and keep dolly range sane.
 			dbgOrbitPitch = glm::clamp(dbgOrbitPitch, -85.0f, 85.0f);
 			dbgOrbitDist = glm::clamp(dbgOrbitDist, 3.0f, 90.0f);
 
@@ -6788,12 +5593,8 @@ class Castlescape : public BaseProject {
 										   std::sin(op),
 										   std::sin(oy) * std::cos(op)) * dbgOrbitDist;
 			glm::vec3 dbgEye = eyePos + dbgOffset;
-			// The spectator sits outside the room, so the wall and ceiling
-			// between it and the player would fill the frame. Push its near
-			// plane out to just short of the player: everything nearer is
-			// clipped, leaving exactly the shell the real camera renders
-			// from the inside. DEBUG_CAM_CLIP_MARGIN keeps a little air
-			// around the player.
+			// Push the near plane out to just short of the player, clipping
+			// away the wall/ceiling shell between the spectator and the room's interior.
 			float dbgNear = glm::max(0.2f,
 				glm::length(dbgEye - eyePos) - DEBUG_CAM_CLIP_MARGIN);
 			glm::mat4 dbgPrj = glm::perspective(FOVy, Ar, dbgNear, farPlane);
@@ -6827,9 +5628,7 @@ class Castlescape : public BaseProject {
 			}
 			advanceReach(handTorchReach, torchTarget, deltaT);
 
-			// Whichever key is drawn in the left hand: the held one, or the one
-			// sinking after a lock took it. One factor for both -- same hand,
-			// never both in frame.
+			// Whichever key is drawn in the left hand: held, or sinking after a lock took it (never both in frame).
 			int tuckKeyIdx = heldKeyIdx() >= 0 ? heldKeyIdx() : keyLowerIdx;
 			float keyTarget = 1.0f;
 			if(tuckActive && tuckKeyIdx >= 0) {
@@ -6838,13 +5637,10 @@ class Castlescape : public BaseProject {
 			advanceReach(handKeyReach, keyTarget, deltaT);
 		}
 
-		// Held torch: a fixed camera-local offset, but only once picked up.
-		// Before that it lies at its authored floor pose. With "Holding Torch"
-		// off it's parked below the map. Flame and light drop via flameBurning().
+		// Held torch: fixed camera-local offset once picked up; before that,
+		// its authored floor pose. With "Holding Torch" off it's parked below the map.
 		bool torchInHand = handTorchCollected && cheats.handTorchEnabled;
 		if(handTorchInst != nullptr && !torchInHand) {
-			// Floor pose if not yet picked up and not cheat-disabled; parked
-			// below the map otherwise.
 			handTorchInst->Wm = (!handTorchCollected && cheats.handTorchEnabled)
 				? handTorchSpawnWm
 				: glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
@@ -6853,19 +5649,16 @@ class Castlescape : public BaseProject {
 			float bobVertical = sinf(walkBobPhase * 2.0f) * WALK_BOB_VERTICAL * walkBobBlend;
 			float bobRollDeg = bobLateral * 90.0f;
 
-			// Wall tuck first, walk bob on top -- folded into a copy of the
-			// constants, not the finished matrix, so the two compose. This is
-			// also the fix for the held torch's light: the flame anchor rides
-			// this Wm, so pulling the model out of the wall pulls the light out
-			// too.
+			// Wall tuck first, walk bob on top, folded into a copy of the
+			// constants so the two compose. Also fixes the held torch's light,
+			// since the flame anchor rides this same Wm.
 			glm::vec3 tuckedOffset = HAND_TORCH_OFFSET;
 			glm::vec3 tuckedTilt = HAND_TORCH_TILT_DEG;
 			applyTuck(handTorchReach, tuckedOffset, tuckedTilt);
 
 			glm::mat4 grip = handGrip(tuckedTilt, bobRollDeg);
 
-			// Pick-up rise, cubic ease-out like the key's: only the Y offset
-			// moves, so it composes with the tuck and bob.
+			// Pick-up rise, cubic ease-out: only Y moves, so it composes with the tuck and bob.
 			torchRaiseElapsed = std::min(torchRaiseElapsed + deltaT, TORCH_RAISE_DURATION);
 			float torchT = torchRaiseElapsed / TORCH_RAISE_DURATION;
 			float torchEased = 1.0f - (1.0f - torchT) * (1.0f - torchT) * (1.0f - torchT);
@@ -6879,30 +5672,23 @@ class Castlescape : public BaseProject {
 				* glm::scale(glm::mat4(1.0f), glm::vec3(HAND_TORCH_SCALE));
 		}
 
-		// Held key: same camera-anchored placement as the torch, live only once
-		// picked up. Reuses the world instance -- pointing its Wm at the camera
-		// every frame is the whole "in your hand" effect. Same bob phase and
-		// sign as the torch (both hands swing together). Only the newest key on
-		// the ring is drawn.
+		// Held key: same camera-anchored placement as the torch, live once
+		// picked up. Reuses the world instance; pointing its Wm at the camera
+		// every frame is the whole "in your hand" effect. Only the newest key on the ring is drawn.
 		if(heldKeyIdx() >= 0) {
 			Pickup &held = pickups[heldKeyIdx()];
 			float bobLateral = sinf(walkBobPhase) * WALK_BOB_LATERAL * walkBobBlend;
 			float bobVertical = sinf(walkBobPhase * 2.0f) * WALK_BOB_VERTICAL * walkBobBlend;
 			float bobRollDeg = bobLateral * 90.0f;
 
-			// Tilt and offset off the item itself: the ring can hold a key or a
-			// book, two shapes with their origins in different places. Same
-			// wall tuck the torch gets; applyTuck reads the offset's sign for
-			// which way "inward" is.
+			// Tilt/offset off the item itself: the ring can hold a key or a book, different origins.
 			glm::vec3 tuckedOffset = held.handOffset;
 			glm::vec3 tuckedTilt = held.handTiltDeg;
 			applyTuck(handKeyReach, tuckedOffset, tuckedTilt);
 
 			glm::mat4 grip = handGrip(tuckedTilt, bobRollDeg);
 
-			// Pick-up rise: only the Y offset moves, so the key slides up into
-			// the pose it would have snapped to. Cubic ease-out, not linear
-			// (which stops dead and reads mechanical). Clamped to 0 once over.
+			// Pick-up rise: only Y moves. Cubic ease-out, not linear (reads mechanical).
 			keyRaiseElapsed = std::min(keyRaiseElapsed + deltaT, KEY_RAISE_DURATION);
 			float t = keyRaiseElapsed / KEY_RAISE_DURATION;
 			float eased = 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t);
@@ -6916,10 +5702,8 @@ class Castlescape : public BaseProject {
 				* glm::scale(glm::mat4(1.0f), glm::vec3(held.worldScale));
 		}
 
-		// Key spent on a lock: the mirror of the rise, played downward, cubic
-		// ease-IN. Drawn from here, not the held-key block, because the key is
-		// already off the ring. When the fall ends the instance goes below the
-		// map.
+		// Key spent on a lock: mirror of the rise, played downward, cubic
+		// ease-in. Drawn here since the key is already off the ring; parked below the map when the fall ends.
 		if(keyLowerIdx >= 0) {
 			keyLowerElapsed = std::min(keyLowerElapsed + deltaT, KEY_RAISE_DURATION);
 			float t = keyLowerElapsed / KEY_RAISE_DURATION;
@@ -6932,9 +5716,8 @@ class Castlescape : public BaseProject {
 
 			Pickup &sinking = pickups[keyLowerIdx];
 
-			// Tucked too, off the same handKeyReach: without it the key snaps
-			// out to the extended pose on the frame the lock takes it, through
-			// the door it was just used on.
+			// Tucked too, off the same handKeyReach, or it snaps to the
+			// extended pose through the door it was just used on.
 			glm::vec3 tuckedOffset = sinking.handOffset;
 			glm::vec3 tuckedTilt = sinking.handTiltDeg;
 			applyTuck(handKeyReach, tuckedOffset, tuckedTilt);
