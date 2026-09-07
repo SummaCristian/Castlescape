@@ -4734,9 +4734,13 @@ class Castlescape : public BaseProject {
 				if(endBannerShown) txt.removeText(5);
 				float sx, sy;
 				txt.pixelToScr((float)windowWidth / 2.0f, (float)windowHeight / 2.0f, sx, sy);
+				// Gold final text
+				glm::vec4 fill = (runState == RunState::Escaped)
+								? glm::vec4(0.72f, 0.53f, 0.09f, 1.0f)
+								: glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
 				txt.print(sx, sy, wantedEndText, 5, "CO", false, true, false,
 						  TAL_CENTER, TRH_CENTER, TRV_MIDDLE,
-						  {1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f});
+						  fill, {0.0f, 0.0f, 0.0f, 1.0f});
 				endBannerShown = true;
 				endBannerText = wantedEndText;
 			} else if(wantedEndText.empty() && endBannerShown) {
