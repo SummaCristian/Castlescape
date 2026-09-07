@@ -223,7 +223,7 @@
 			{"id": "rcW_2_7_S", "model": "dungeonWall", "texture": ["dungeonWallTex"], "translate": [21.6, 0.02, 57.6], "eulerAngles": [0.0, 270.0, 0.0]},
 			{"id": "raW_3_-4_E", "model": "dungeonWall", "texture": ["dungeonWallTex"], "translate": [28.8, 0.02, -28.8], "eulerAngles": [0.0, 0.0, 0.0]},
 			{"id": "rcW_3_6_E", "model": "dungeonWall", "texture": ["dungeonWallTex"], "translate": [28.8, 0.02, 43.2], "eulerAngles": [0.0, 0.0, 0.0]},
-			{"id": "handTorch", "model": "dungeonTorchHeld", "texture": ["dungeonTorchTex"], "translate": [-28.8, -0.12, 0.0], "eulerAngles": [0.0, 35.0, -90.0], "scale": [1.0, 1.0, 1.0]},
+			{"id": "handTorch", "model": "dungeonTorchHeld", "texture": ["dungeonTorchTex"], "translate": [-18.5, -0.12, 18.0], "eulerAngles": [0.0, 35.0, -90.0], "scale": [1.0, 1.0, 1.0]},
 			{"id": "iaJump", "model": "dungeonBarrel", "texture": ["dungeonBarrelTex"], "translate": [-14.4, 0.02, 18.0], "scale": [0.48, 0.48, 0.48]},
 			{"id": "rcStep1", "model": "dungeonBarrel", "texture": ["dungeonBarrelTex"], "translate": [10.8, 0.02, 43.2], "scale": [0.48, 0.48, 0.48]},
 			{"id": "rcStep2", "model": "dungeonBarrel", "texture": ["dungeonBarrelTex"], "translate": [14.4, 0.02, 44.8], "scale": [0.48, 0.48, 0.48]},

@@ -314,7 +314,8 @@ BANNERS = [
 
 # camera di spawn: estremita' ovest dell'alley, guarda +X lungo il corridoio
 SPAWN = (TS * -3 + 1.4, 1.8, TS * 2 + 3.6)      # (-20.2, 1.8, 18.0)
-HAND_TORCH = ("handTorch", (-28.8, -0.12, 0.0), [0.0, 35.0, -90.0])
+# nell'alley di spawn (ia), poco davanti alla camera di partenza, prima del barile iaJump
+HAND_TORCH = ("handTorch", (-18.5, -0.12, 18.0), [0.0, 35.0, -90.0])
 
 
 def wall_mount(id, key, i, j, side, along, y, embed, rot_add=0, scale=None):
