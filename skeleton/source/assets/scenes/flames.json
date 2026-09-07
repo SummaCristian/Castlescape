@@ -1,30 +1,3 @@
-// Which SCENE INSTANCES get a Flame.hpp billboard + point light (and,
-// unless they're the held torch, a slot in main.cpp's dynamic shadow-cube
-// pool -- see updateDynamicShadowSlots() there), and with what parameters.
-//
-// Keyed by MODEL, not by instance id: any level reusing the standard torch/
-// candle meshes below gets flames automatically, with no main.cpp changes
-// and no per-instance authoring. "overrides" is for the rare one-off that
-// can't be derived from the mesh alone -- an instance wanting a different
-// color, size or burning state from its model's -- applied on top of the
-// matching model's defaults, keyed by instance id. Empty right now: it used
-// to hold the dl room's four coloured demo torches (red/green/blue/purple),
-// removed because four saturated sources on one wall give every prop in the
-// room four overlapping shadows tinted by whichever lights still reach it.
-// A single ordinary torch stands there now, see scene.json's "dlTorch".
-//
-// The held torch is the one thing NOT listed here even though it uses the
-// "dungeonTorchHeld" model below: main.cpp spawns it by literal id
-// ("handTorch") before this file is even read, since it's a gameplay
-// singleton (there is only ever one), not level dressing, and it needs
-// heldByCamera=true wiring no other flame does.
-//
-// anchor is in the MODEL's own local space (see main.cpp's TORCH_FLAME_ANCHOR/
-// CANDLE_FLAME_ANCHOR comments for how these two were derived by walking each
-// mesh's own vertex accessor). sizeScale/lightScale default to 1.0 if omitted.
-// isCandle (default false) marks a model as a candle rather than a torch --
-// the only thing the debug HUD's separate "Torch Shadows"/"Candle Shadows"
-// toggles look at (see TorchFlame::isCandle in main.cpp).
 {
 	"models": {
 		"dungeonTorch": {
@@ -33,33 +6,6 @@
 		"dungeonTorchHeld": {
 			"anchor": [-0.384, 0.30, 0.0]
 		},
-		// anchor: SM_Candle_01's POSITION accessor is centred on X/Z
-		// (X -0.148..0.145, Z -0.146..0.145), so no lateral offset is
-		// needed, unlike the torch's off-centre cup. Y took a closer look:
-		// walking the accessor shows a wide flat wax-pool cap (radius up to
-		// 0.145) closing off at Y=0.618..0.638, then EMPTY space (the thin
-		// wick's side wall isn't modelled at all), then the wick's own tip
-		// caps at Y=0.731..0.734. An anchor placed in the middle of that gap
-		// (0.70) put the flame's base only ~0.03 world units above the wide
-		// disc -- close enough for the billboard's base to z-fight against
-		// it every frame. Sitting right at the wick tip instead clears the
-		// disc by the whole gap and still reads as the flame emerging from
-		// the wick, not floating above it.
-		//
-		// sizeScale: a candle flame is a fraction of a torch flame's size
-		// (main.cpp's FLAME_HEIGHT/FLAME_HALF_WIDTH are tuned for the
-		// torch).
-		//
-		// lightScale: a candle's light should be a faint, local pool, not a
-		// torch-strength source that merely came out of a smaller flame --
-		// scaled well below sizeScale, independently of it.
-		//
-		// burning: false means the candle starts DARK and the player lights it
-		// with [E] while holding the torch (see nearbyCandle in main.cpp's
-		// GameLogic). Authored here rather than per instance because every
-		// candle in the castle starts out unlit -- an already-burning one
-		// would just be scenery. An individual candle can still be shipped
-		// alight with an "overrides" entry setting "burning": true.
 		"dungeonCandle": {
 			"anchor": [0.0, 0.73, 0.0],
 			"sizeScale": 0.40,
@@ -68,11 +14,6 @@
 			"burning": false
 		}
 	},
-
-	// The hub is the lived-in centre of the level, so its candles are already
-	// burning when the player arrives -- they light the banquet table and the
-	// corner clutter that would otherwise be lost in the dark. Every other
-	// candle in the castle stays unlit for the player to light with the torch.
 	"overrides": {
 		"hbCandleC":  {"burning": true},
 		"hbT2Cndl":   {"burning": true},
