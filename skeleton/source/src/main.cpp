@@ -262,11 +262,16 @@ class Castlescape : public BaseProject {
 	// a wedge out of a torch's cube map that the per-face sphere test in
 	// queueMoverCubeSlotRenders() can miss (the leaf sweeps through faces its
 	// resting bounding sphere doesn't touch), so a door forces every face of
-	// every torch in reach instead of trusting that test -- it moves rarely
-	// enough that the extra re-render is free. A ghost still uses the per-face
-	// test, since it moves every frame and re-rendering every face of every
-	// nearby torch for that would not be free.
+	// every torch in reach ONCE, on the frame it stops moving, instead of
+	// trusting that test for its final resting state. Forcing all six faces
+	// every frame of the swing too (not just the settle frame) is what used
+	// to make opening a door near several torches stutter -- the settle-frame
+	// force is a one-off per open/close, so it costs nothing repeatable.
 	std::vector<bool> movingOccluderIsDoor;
+	// Parallel to movingOccluders: whether that mover was moving last frame,
+	// so a door's settle frame (moving -> still) can be told apart from every
+	// other still frame and get its one-off full-face force.
+	std::vector<bool> movingOccluderWasMoving;
 	// Wm each occluder had at its last capture, so a stationary mover is one
 	// mat4 compare and no draws.
 	std::vector<glm::mat4> movingOccluderWm;
@@ -3053,6 +3058,9 @@ class Castlescape : public BaseProject {
 			addMover(handTorchInst, false);
 			// Zero matrix, not identity, so an authored-identity pose still gets its first capture.
 			movingOccluderWm.assign(movingOccluders.size(), glm::mat4(0.0f));
+			// First tick reads as "was moving" for everyone, so a door that is
+			// somehow already at rest on frame one still gets its settle force.
+			movingOccluderWasMoving.assign(movingOccluders.size(), true);
 			moverListBuilt = true;
 		}
 
@@ -3069,10 +3077,17 @@ class Castlescape : public BaseProject {
 			if(movingOccluders[m] == handTorchInst && handTorchCollected
 			   && cheats.handTorchEnabled && !cheats.handTorchModelCastsShadowWhenHeld) {
 				movingOccluderWm[m] = wm;
+				movingOccluderWasMoving[m] = false;
 				continue;
 			}
 
 			const bool moved = (wm != movingOccluderWm[m]);
+			// A door's settle frame: it was moving last frame and has just
+			// stopped. That is the one frame worth paying for every face,
+			// since it's the frame where the leaf's final resting silhouette
+			// has to replace whatever the swing's per-face test left behind.
+			const bool justSettled = movingOccluderIsDoor[m] && !moved && movingOccluderWasMoving[m];
+			movingOccluderWasMoving[m] = moved;
 			// World-space bounding sphere, so the mover's full extent (not just
 			// its origin) is what's checked against a light's reach.
 			const glm::vec4 &local = modelSphere(movingOccluders[m]->Mid);
@@ -3098,14 +3113,17 @@ class Castlescape : public BaseProject {
 					}
 				}
 				facesNow[t] |= moverFaces;
-				if(moved) {
-					// A door leaf sweeps through faces its resting bounding
-					// sphere never touches (sphereInCubeFace tests the CURRENT
-					// sphere, not the swept volume), which can leave a face
-					// holding the leaf's pre-swing silhouette forever. Doors
-					// move rarely, so paying for every face is free; a ghost
-					// moves every frame and keeps the precise per-face test.
-					facesStale[t] |= movingOccluderIsDoor[m] ? ALL_CUBE_FACES : moverFaces;
+				if(justSettled) {
+					// The swing itself used the cheap per-face test above and
+					// that is fine mid-swing (a face lagging by one frame for
+					// a fraction of a second isn't visible); but that test
+					// checks the CURRENT sphere, not the swept volume, so it
+					// can leave a face holding the leaf's pre-swing silhouette
+					// forever once the door stops. Pay for all six faces this
+					// one settle frame to guarantee the final state is right.
+					facesStale[t] |= ALL_CUBE_FACES;
+				} else if(moved) {
+					facesStale[t] |= moverFaces;
 				}
 			}
 			movingOccluderWm[m] = wm;
