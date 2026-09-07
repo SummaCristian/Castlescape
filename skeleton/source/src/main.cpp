@@ -74,9 +74,8 @@ struct GlobalUniformBufferObject {
 };
 
 // One torch's cube shadow capture data (ShadowCube.vert/frag, PShadowCube, set 1).
-// IMPORTANT: a UBO, not a push constant -- the command buffer is recorded once
-// per swapchain image and reused, so a push constant would freeze at record time,
-// which breaks the held torch since it moves every frame.
+// IMPORTANT: UBO, not a push constant: command buffer is recorded once and reused,
+// a push constant would freeze the moving held torch.
 struct ShadowCubeUniformBufferObject {
 	alignas(16) glm::mat4 lightViewProj[6];
 	alignas(16) glm::vec4 lightPos;	// xyz used, w is padding
@@ -106,8 +105,8 @@ struct PostUniformBufferObject {
 	float exposure;			// composite
 	int debugFlags;			// composite: LIGHT_DEBUG_NO_TONEMAP
 	float time;
-	// composite: ramps 0->1 as the player escapes, blends frame to white.
-	// Separate from exposure because the tonemap only approaches 1 asymptotically.
+	// composite: 0->1 white flash on escape, applied after tonemapping.
+	// Can't just crank exposure: tonemap approaches white but never fully reaches it.
 	float escapeFlash;
 	float spectralVeil;		// composite: ramps 0->1 as camera sinks into a ghost, see SPECTRAL_VEIL_OUTER
 };
@@ -117,9 +116,8 @@ struct PostVertex {
 	glm::vec2 pos;
 };
 
-// Cheap 1D value noise for the torch fire envelope, computed on the CPU since
-// flame, sparks and point light all need the same flicker. Integer hash, not
-// fract(sin(x)*...): that one decorrelates badly at small inputs.
+// Cheap 1D noise for the torch flicker, computed on CPU so flame, sparks
+// and light all share the same value. // Integer hash, not fract(sin(x)*...): that trick gives poor randomness for small x.
 static float fireHash(int32_t n) {
 	uint32_t h = (uint32_t)n;
 	h = (h ^ 61u) ^ (h >> 16);
@@ -148,8 +146,9 @@ static float fireFbm(float x) {
 		 + fireNoise(x * 4.9f + 53.0f) * 0.15f;
 }
 
-// MAIN !
-
+/////////////////////////////////////////////////////////////////////////////////////////////////////////
+// MAIN
+/////////////////////////////////////////////////////////////////////////////////////////////////////////
 class Castlescape : public BaseProject {
 	protected:
 	// Here you list all the Vulkan objects you need:
@@ -177,12 +176,12 @@ class Castlescape : public BaseProject {
 	// Shadow mapping, cube branch (the torches): a real 6-face cube map per
 	// point light (CubeShadowMap.hpp: linear-distance storage, one flat bias).
 	//
-	// IMPORTANT: RPShadowCubeCompat exists only to mint a VkRenderPass compatible
-	// with the per-face framebuffers -- createRenderPass() is private, so a full
-	// RenderPass builds one and we read .renderPass back out; its own attachment
-	// is never used. The per-face framebuffers are built by hand in
-	// createCubeShadowMaps() since FrameBufferAttachment can't attach a
-	// single-layer view into a 6-layer cube image.
+	// IMPORTANT: // // RPShadowCubeCompat: hack to get a valid VkRenderPass for the per-face framebuffers.
+	// - createRenderPass() is private -> can't call it directly
+	// - so we build a full RenderPass via .init()/.create() and just keep .renderPass
+	// - its own attachment/image is never actually used
+	// Framebuffers themselves: built by hand in createCubeShadowMaps(), since the
+	// engine's framebuffer helper can't target a single face of a cube image.
 	RenderPass RPShadowCubeCompat;
 	Pipeline PShadowCube;
 	CubeShadowMap torchCube[NUM_SHADOW_CUBES];
