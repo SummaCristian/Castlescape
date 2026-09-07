@@ -258,6 +258,15 @@ class Castlescape : public BaseProject {
 	// Candidates are ghosts and door leaves (materials.json castsShadow), not
 	// every moving instance, to avoid re-rendering on every spinning pickup.
 	std::vector<Instance *> movingOccluders;
+	// Parallel to movingOccluders: true for a door leaf. A door's swing carves
+	// a wedge out of a torch's cube map that the per-face sphere test in
+	// queueMoverCubeSlotRenders() can miss (the leaf sweeps through faces its
+	// resting bounding sphere doesn't touch), so a door forces every face of
+	// every torch in reach instead of trusting that test -- it moves rarely
+	// enough that the extra re-render is free. A ghost still uses the per-face
+	// test, since it moves every frame and re-rendering every face of every
+	// nearby torch for that would not be free.
+	std::vector<bool> movingOccluderIsDoor;
 	// Wm each occluder had at its last capture, so a stationary mover is one
 	// mat4 compare and no draws.
 	std::vector<glm::mat4> movingOccluderWm;
@@ -549,6 +558,11 @@ class Castlescape : public BaseProject {
 		// first-person eye, so the cull boundary becomes visible from outside.
 		bool debugCam = false;
 		bool showLightHeatmap = false;  // recolor surfaces by incoming light intensity
+		// False-color cube-shadow diagnostic (LIGHT_DEBUG_SHADOW_GAP): green
+		// means the map says a fragment is unoccluded yet it read as shadowed
+		// upstream (stale/wrong cube data), blue means a tap genuinely found
+		// an occluder there. See LightConstants.glsl for the full legend.
+		bool showShadowGap = false;
 	} cheats;
 
 	// Numeric tuning for the movement cheats -- "how strong", not "on/off", so
@@ -2653,6 +2667,7 @@ class Castlescape : public BaseProject {
 		hud.addToggle("Show Colliders", &cheats.showColliders);
 		hud.addToggle("Debug Camera", &cheats.debugCam);
 		hud.addToggle("Light Heatmap", &cheats.showLightHeatmap);
+		hud.addToggle("Shadow Gap", &cheats.showShadowGap);
 
 		hud.addSlider("Render Scale", &renderScale, 0.4f, 1.0f, 0.05f,
 					  [this]() { applyRenderScaleChange(); },
@@ -3021,20 +3036,21 @@ class Castlescape : public BaseProject {
 	// occupant diff, once GameLogic() and updateDynamicShadowSlots() have settled positions.
 	void queueMoverCubeSlotRenders() {
 		if(!moverListBuilt) {
-			auto addMover = [&](Instance *inst) {
+			auto addMover = [&](Instance *inst, bool isDoor) {
 				if(inst != nullptr && materials.forModel(inst->Mid).castsShadow) {
 					movingOccluders.push_back(inst);
+					movingOccluderIsDoor.push_back(isDoor);
 				}
 			};
 			for(const Ghost &g : ghosts) {
-				addMover(g.inst);
+				addMover(g.inst, false);
 			}
 			for(const Door &d : doors) {
-				addMover(d.inst);
+				addMover(d.inst, true);
 			}
 			// Held torch: static on the floor until pickup jumps its Wm, which
 			// erases the stale floor-shadow it left in whichever torch captured it.
-			addMover(handTorchInst);
+			addMover(handTorchInst, false);
 			// Zero matrix, not identity, so an authored-identity pose still gets its first capture.
 			movingOccluderWm.assign(movingOccluders.size(), glm::mat4(0.0f));
 			moverListBuilt = true;
@@ -3075,14 +3091,21 @@ class Castlescape : public BaseProject {
 					continue;
 				}
 				const glm::vec3 rel = p - torchLightPos[t];
+				uint8_t moverFaces = 0;
 				for(int face = 0; face < 6; face++) {
-					if(!sphereInCubeFace(rel, r, face)) {
-						continue;
+					if(sphereInCubeFace(rel, r, face)) {
+						moverFaces |= (uint8_t)(1u << face);
 					}
-					facesNow[t] |= (uint8_t)(1u << face);
-					if(moved) {
-						facesStale[t] |= (uint8_t)(1u << face);
-					}
+				}
+				facesNow[t] |= moverFaces;
+				if(moved) {
+					// A door leaf sweeps through faces its resting bounding
+					// sphere never touches (sphereInCubeFace tests the CURRENT
+					// sphere, not the swept volume), which can leave a face
+					// holding the leaf's pre-swing silhouette forever. Doors
+					// move rarely, so paying for every face is free; a ghost
+					// moves every frame and keeps the precise per-face test.
+					facesStale[t] |= movingOccluderIsDoor[m] ? ALL_CUBE_FACES : moverFaces;
 				}
 			}
 			movingOccluderWm[m] = wm;
@@ -3920,6 +3943,7 @@ class Castlescape : public BaseProject {
 		if(!cheats.toneMapEnabled)  gubo.debugFlags |= LIGHT_DEBUG_NO_TONEMAP;
 		if(!cheats.shadowsEnabled)  gubo.debugFlags |= LIGHT_DEBUG_NO_SHADOWS;
 		if(cheats.showLightHeatmap) gubo.debugFlags |= LIGHT_DEBUG_HEATMAP;
+		if(cheats.showShadowGap)    gubo.debugFlags |= LIGHT_DEBUG_SHADOW_GAP;
 		if(!sceneLights.bounceEnabled)  gubo.debugFlags |= LIGHT_DEBUG_NO_BOUNCE;
 
 		// Both computed further up, before the torch fire state that needs them.
