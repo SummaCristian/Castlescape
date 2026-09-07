@@ -2635,7 +2635,7 @@ class Castlescape : public BaseProject {
 		hud.addToggle("Torches", &cheats.roomTorchesEnabled);
 		hud.addToggle("Holding Torch", &cheats.handTorchEnabled);
 		hud.addToggle("Spotlight", &sceneLights.spotEnabled);
-		hud.addToggle("Ambient Light", &sceneLights.ambientEnabled);
+		hud.addToggle("Torch Bounce", &sceneLights.bounceEnabled);
 		hud.addToggle("Shadows", &cheats.shadowsEnabled);
 		hud.addToggle("Torch Shadows", &cheats.torchShadowsEnabled);
 		hud.addToggle("Candle Shadows", &cheats.candleShadowsEnabled);
@@ -3887,15 +3887,15 @@ class Castlescape : public BaseProject {
 			gubo.lights[gubo.lightCount++] = L;
 		}
 
-		// By value: with the Ambient Light cheat off there's no stored ambient to reference.
+		// Always as authored -- the Torch Bounce cheat zeroes the term in the
+		// shader instead (LIGHT_DEBUG_NO_BOUNCE below), not the colours here:
+		// under the blend the direct half is scaled by (1 - weight), so
+		// blacking the colours would darken the scene instead of removing
+		// indirect light.
 		const AmbientLight amb = sceneLights.ambient();
 		gubo.ambientUpper = amb.upper;
 		gubo.ambientLower = amb.lower;
 		gubo.ambientDir = amb.dir;
-		// IMPORTANT: the cheat zeroes the SHARE in the shader (ambientShare()),
-		// not the colours here -- under the blend the direct half is scaled by
-		// (1 - weight), so blacking the colours would darken the scene instead
-		// of removing indirect light.
 		gubo.ambientWeight = amb.weight;
 		gubo.ambientBounce = amb.bounce;
 
@@ -3918,7 +3918,7 @@ class Castlescape : public BaseProject {
 		if(!cheats.toneMapEnabled)  gubo.debugFlags |= LIGHT_DEBUG_NO_TONEMAP;
 		if(!cheats.shadowsEnabled)  gubo.debugFlags |= LIGHT_DEBUG_NO_SHADOWS;
 		if(cheats.showLightHeatmap) gubo.debugFlags |= LIGHT_DEBUG_HEATMAP;
-		if(!sceneLights.ambientEnabled) gubo.debugFlags |= LIGHT_DEBUG_NO_AMBIENT;
+		if(!sceneLights.bounceEnabled)  gubo.debugFlags |= LIGHT_DEBUG_NO_BOUNCE;
 
 		// Both computed further up, before the torch fire state that needs them.
 		gubo.eyePos = eyePos;
