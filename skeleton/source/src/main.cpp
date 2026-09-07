@@ -2804,12 +2804,11 @@ class Castlescape : public BaseProject {
 		hud.addToggle("Hunt", &huntCycle.forceHunt);
 		hud.addToggle("Ghosts Can Catch", &cheats.ghostsCanCatch);
 
-		// Lighting rows: sources first, then shading. Spotlight/Ambient point
-		// into sceneLights (which owns them); Torches/Holding Torch into
-		// cheats (flame lights never go through SceneLights).
+		// Lighting rows: sources first, then shading. Ambient points into
+		// sceneLights (which owns it); Torches/Holding Torch into cheats
+		// (flame lights never go through SceneLights).
 		hud.addToggle("Torches", &cheats.roomTorchesEnabled);
 		hud.addToggle("Holding Torch", &cheats.handTorchEnabled);
-		hud.addToggle("Spotlight", &sceneLights.spotEnabled);
 		hud.addToggle("Torch Bounce", &sceneLights.bounceEnabled);
 		hud.addToggle("Shadows", &cheats.shadowsEnabled);
 		hud.addToggle("Torch Shadows", &cheats.torchShadowsEnabled);
