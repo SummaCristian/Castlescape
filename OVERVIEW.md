@@ -116,16 +116,17 @@ i descriptor set layout, il culling, il depth test, il blending, il numero di
 sample MSAA. Cambiare anche una sola di queste cose vuol dire creare una
 pipeline nuova.
 
-Per questo il progetto ha otto pipeline: `P` (la scena), <mark>`PShadow`,</mark>
-`PShadowCube`, `Pbright`, `PblurH`, `PblurV`, `Pcomposite`, più quelle di
-fiamma, ExitGlow, UiQuad, testo. Non è ridondanza: sono davvero configurazioni
-diverse.
+Per questo il progetto ha sette pipeline: `P` (la scena), `PShadowCube`,
+`Pbright`, `PblurH`, `PblurV`, `Pcomposite`, più quelle di fiamma, ExitGlow,
+UiQuad, testo. Non è ridondanza: sono davvero configurazioni diverse. (Ne
+esisteva anche un'ottava, `PShadow`, per lo shadow pass 2D del sole — rimossa
+insieme al sole, §5.2.)
 
 Una pipeline si crea contro un **render pass**, e vale la regola di
 **compatibilità**: una pipeline creata contro un render pass funziona con
 qualunque altro render pass che abbia la stessa configurazione di attachment. È
-il motivo per cui abbiamo *una* `PShadow` condivisa da tutti gli shadow pass 2D
-invece di una per pass.
+il motivo per cui abbiamo *una* `PShadowCube` condivisa da tutti gli slot
+cubemap invece di una per slot.
 
 ## 0.5 Render pass, attachment, framebuffer
 
@@ -256,13 +257,12 @@ Un frame intero, dall'inizio alla fine. Tutto ciò che segue è registrato
 nell'unico command buffer "main" (`populateCommandBuffer()`, main.cpp:4130),
 in quest'ordine:
 
-1. **Shadow pass 2D** — un render pass depth-only per ogni luce con shadow map 2D (`NUM_SHADOW_MAPS_2D = 2`, oggi la usa solo il sole). Pipeline `PShadow` (`Shadow.vert` + `Shadow.frag`).
-2. **Shadow pass cubemap della torcia in mano** — 6 facce, pipeline `PShadowCube` (`ShadowCube.vert` + `ShadowCube.frag`). Solo questa torcia: tutte le altre cubemap sono renderizzate fuori dal command buffer, vedi §5.5.
-3. **Scene pass** (`RP`) — verso un attachment **HDR offscreen RGBA16F**, non verso lo schermo. Dentro, nell'ordine: geometria opaca e depth prepass dei fantasmi (`Scene::populateCommandBuffer`), colore dei fantasmi (emesso a mano, §3.14), fiamme + scintille, ExitGlow, LightDebug.
-4. **Bright pass** (`RPbright`, a un quarto di risoluzione) — soglia + downsample, `BloomBright.frag`.
-5. **Blur H** (`RPblurH`) — gaussiana 1D orizzontale, `BloomBlur.frag`.
-6. **Blur V** (`RPblurV`) — la stessa shader, con `blurDir` = (0,1).
-7. **Composite** (`RPcomposite`) — verso la swapchain: scena + bloom, esposizione, tone map, whiteout finale. `Composite.frag`.
+1. **Shadow pass cubemap della torcia in mano** — 6 facce, pipeline `PShadowCube` (`ShadowCube.vert` + `ShadowCube.frag`). Solo questa torcia: tutte le altre cubemap sono renderizzate fuori dal command buffer, vedi §5.5. Non c'è più uno shadow pass 2D: il sole e la sua shadow map ortografica sono stati rimossi dal progetto (§5.2), quindi ogni ombra oggi passa da qui.
+2. **Scene pass** (`RP`) — verso un attachment **HDR offscreen RGBA16F**, non verso lo schermo. Dentro, nell'ordine: geometria opaca e depth prepass dei fantasmi (`Scene::populateCommandBuffer`), colore dei fantasmi (emesso a mano, §3.14), fiamme + scintille, ExitGlow, LightDebug.
+3. **Bright pass** (`RPbright`, a un quarto di risoluzione) — soglia + downsample, `BloomBright.frag`.
+4. **Blur H** (`RPblurH`) — gaussiana 1D orizzontale, `BloomBlur.frag`.
+5. **Blur V** (`RPblurV`) — la stessa shader, con `blurDir` = (0,1).
+6. **Composite** (`RPcomposite`) — verso la swapchain: scena + bloom, esposizione, tone map, whiteout finale. `Composite.frag`.
 
 Il testo (`TextMaker`) e la HUD (`UiQuad`) sono command buffer separati,
 submittati dopo (submit order 10000 e 9000 contro lo 0 del main), quindi
@@ -367,7 +367,7 @@ sempre, quel valore è **congelato al momento della registrazione**.
 
 Quindi:
 
-- **Va bene come push constant** tutto ciò che è determinato da *dove* sta il draw dentro il buffer registrato, non da quando viene eseguito. Due esempi nel progetto: la faccia della cubemap (`ShadowCubeFacePushConstant` — quella iterazione del loop è sempre la faccia 0, poi sempre la 1, ecc.) e la view-projection del sole in `Shadow.vert` (il sole non si muove mai).
+- **Va bene come push constant** tutto ciò che è determinato da *dove* sta il draw dentro il buffer registrato, non da quando viene eseguito. Esempio nel progetto: la faccia della cubemap (`ShadowCubeFacePushConstant` — quella iterazione del loop è sempre la faccia 0, poi sempre la 1, ecc.). Il progetto ne aveva un secondo, la view-projection del sole in `Shadow.vert` (giustificata dal fatto che il sole non si muoveva mai), sparito insieme al sole (§5.2).
 - **Non va bene** niente che cambi frame per frame: la posizione della torcia in mano, le matrici delle cubemap dinamiche. Quelle stanno in un uniform buffer ri-mappato ogni frame in `updateUniformBuffer()`.
 
 Il punto sottile: il *contenuto* di un uniform buffer viene letto fresco al
@@ -378,8 +378,9 @@ sopravvive all'essere ri-mappata ogni frame senza ri-registrare niente.
 **Corollario meno ovvio:** anche gli UBO che non cambiano mai vengono ri-mappati
 ogni frame. `map()` scrive nello slot del buffer corrispondente all'**immagine
 corrente della swapchain**; mappare solo lo slot 0 lascerebbe gli altri con
-quello che c'era in memoria all'allocazione. Il sole non si muove, ma
-`ShadowUniformBufferObject` viene comunque riscritto ogni frame per questo.
+quello che c'era in memoria all'allocazione. Una torcia statica non si muove,
+ma il suo `ShadowCubeUniformBufferObject` viene comunque riscritto ogni frame
+per questo (§2.6).
 
 ## 2.2 std140: le regole di allineamento
 
@@ -414,10 +415,11 @@ byte in più.
 
 ## 2.3 `UniformBufferObject` — set 1, per-istanza (240 byte)
 
-Definito a main.cpp:50. È il blocco più importante, ed è letto da **quattro
-shader diversi**: `PosNormUV.vert` e `CookTorrance.frag` (a set 1), `Shadow.vert`
-e `ShadowCube.vert` (a set 0, perché quelle pipeline non hanno il `DSLglobal`
-davanti e quindi la numerazione dei set scala di uno).
+Definito a main.cpp:50. È il blocco più importante, ed è letto da **tre shader
+diversi**: `PosNormUV.vert` e `CookTorrance.frag` (a set 1), `ShadowCube.vert`
+(a set 0, perché quella pipeline non ha il `DSLglobal` davanti e quindi la
+numerazione dei set scala di uno). Prima della rimozione del sole (§5.2) era
+letto anche da `Shadow.vert`, per la stessa ragione.
 
 Che i quattro condividano lo stesso buffer non è un dettaglio estetico: è quello
 che fa sì che un occlusore in movimento (una porta che si apre, un fantasma)
@@ -445,36 +447,40 @@ Il colore base (`mD`, l'albedo) **non è qui**: viene dalla texture, per pixel.
 Note sui singoli campi:
 
 - `flatNormals` — le mesh MGCG mediano le normali dei vertici anche sugli spigoli vivi. Una faccia piatta esce quindi con un gradiente di illuminazione invece che con un valore costante (E06 s.3-16: un solido a spigoli vivi vorrebbe i vertici duplicati per faccia, e queste mesh non li hanno). Con questo flag il fragment shader si ricava la normale della faccia da solo, con `cross(dFdx(fragPos), dFdy(fragPos))`: le derivate della posizione di mondo lungo il triangolo sono due vettori nel suo piano, quindi il loro prodotto vettoriale è perpendicolare al piano. Il segno dipende dall'ordine di avvolgimento, quindi viene orientato contro la normale interpolata.
-- `interiorAmbient` — blocca il blend dell'ambient emisferico a 0.5, cioè al valore che avrebbe una parete verticale, invece di ricavarlo dalla normale. <mark>In interni "cielo" e "terra" non esistono.</mark> Prendere alla lettera l'estremo "terra" faceva raccogliere a un soffitto di dungeon solo `ambientLower`: 1.80 volte più scuro delle pareti che tocca, e marrone dove quelle sono fredde.
+- `interiorAmbient` — oggi non ha più niente a che fare con un blend emisferico (quel modello è stato rimosso, vedi §2.4): il campo esiste ancora nella struct ma è stato ripurposato per **gating del grime procedurale sui metalli d'interno** in `CookTorrance.frag` (`g = (metal && ubo.interiorAmbient == 1) ? g : 0.0`, §3.3), così le lanterne esterne non lo ricevono.
 - `time` — secondi dall'avvio. Viaggia qui invece che nel global UBO per non spostare l'offset di `lights[]`. Lo leggono solo le shader delle fiamme e il blocco del focus glow; gli altri lo dichiarano e lo ignorano, perché le due pipeline condividono `DSLlocal` e quindi questa unica struct.
 - `glow` — <mark>0..1 impostato **per istanza** (non per modello)</mark> nel loop di `updateUniformBuffer()`, confrontando con `gazedInstance`. Tutti gli altri campi qui sopra sono per-modello (arrivano da `materials.json`, che è chiavato per modello); questo no, perché di dieci porte identiche solo quella inquadrata deve brillare. Codifica due cose in uno scalare: la magnitudine arrotondata sceglie il colore (1 porta/oro, 2 pickup/viola, 3 candela/arancio), il segno negativo lo forza a rosso (interazione al momento non disponibile).
 - `metallic` — forza `k = 0` (un conduttore non ha diffuso: gli elettroni liberi assorbono la luce che entra invece di ri-emetterla) e sostituisce l'ambient diffuso con `metalAmbient()`. Il flag porta l'intera definizione di "questo è un metallo" in un posto solo, così nessuna voce di `materials.json` può restarsi dietro un `k` diffuso per sbaglio.
 
 ## 2.4 `GlobalUniformBufferObject` — set 0, per-frame
 
-Definito a main.cpp:107. La divisione rispetto al precedente è per **frequenza
+Definito a main.cpp:59. La divisione rispetto al precedente è per **frequenza
 di scrittura**: questo viene scritto una volta per frame, quello ~23 volte.
 
-Layout std140, offset per offset:
+**Non c'è più un modello di ambient emisferico cielo/terra.** `ambientUpper`,
+`ambientLower` e `ambientDir` sono stati rimossi insieme al sole (§5.2): non
+esiste più né un cielo né un terreno da cui mescolare un colore. L'unica luce
+indiretta rimasta in scena è il **bounce di torce e candele** — vedi "Il
+termine ambient" più sotto.
+
+Layout std140, offset per offset, oggi:
 
 - offset 0: `vec3 eyePos`, offset 12: `int lightCount`
-- offset 16: `vec3 ambientUpper` (colore del cielo)
-- offset 32: `vec3 ambientLower` (colore del terreno)
-- offset 48: `vec3 ambientDir`, offset 60: `int debugFlags`
-- offset 64: `float time`, offset 68: `float ambientWeight`
-- offset 80: `LightData lights[MAX_LIGHTS]`, con `MAX_LIGHTS = 32`
+- offset 16: `int debugFlags`
+- offset 20: `float time`
+- offset 24: `float ambientWeight` — quota di default di luce indiretta, 0..1, da `lights.json`
+- offset 28: `float ambientBounce` — quota della radianza di ogni point/spot che torna come luce indiretta (vedi `AmbientLight::bounce`)
+- offset 32: `float fogDensity` — nebbia a distanza esponenziale, `exp(-(fogDensity*dist)^2)`
+- offset 48: `LightData lights[MAX_LIGHTS]`, con `MAX_LIGHTS = 32`
 
-`debugFlags`, `time` e `ambientWeight` viaggiano nel padding che precede
-comunque l'array, che partirebbe a un multiplo di 16 in ogni caso.
+`debugFlags`, `time`, `ambientWeight`, `ambientBounce` e `fogDensity` viaggiano
+nel padding che precede comunque l'array, che partirebbe a un multiplo di 16 in
+ogni caso. Aggiungere un altro scalare qui sposta l'offset di `lights[]` e va
+rifatto identico in ogni shader che dichiara questa struct.
 
 L'array è a **dimensione fissa con un contatore separato** perché un uniform
 block richiede una dimensione nota a tempo di compilazione: non esistono array a
 lunghezza variabile. `lightCount` dice quanto dell'array è reale.
-
-Nota per onestà: il commento in main.cpp:116 dice che l'array parte a 64.
-Contando gli offset std140 parte a 80. Non è un bug — C++ e GLSL concordano
-comunque, perché `LightData` ha `alignas(16)` da entrambi i lati — ma il numero
-scritto nel commento è vecchio.
 
 `LightData` (SceneLights.hpp:41) è **64 byte esatti**, con lo stesso trucco
 scalare-dopo-vec3 ripetuto tre volte:
@@ -485,9 +491,11 @@ scalare-dopo-vec3 ripetuto tre volte:
 - `float cosOut`, `int type`, `int shadowIndex`, + 4 byte di padding
 
 `shadowIndex` = -1 significa "non proietta ombra"; altrimenti è un indice
-nell'array di shadow map 2D (se la luce è direct o spot) oppure nell'array di
-cubemap (se è point). Sta lì perché quei 4 byte erano già sprecati: `cosOut` +
-`type` occupavano 8 byte di uno slot da 16 che l'array padda comunque.
+nell'array di cubemap. Da quando la shadow map 2D del sole è stata rimossa
+(§5.2), solo le point light possono proiettare ombra: direct e spot non hanno
+più modo di farlo, quindi `shadowIndex` per loro è sempre -1. Il campo resta a
+4 byte perché `cosOut` + `type` occupavano già 8 byte di uno slot da 16 che
+l'array padda comunque.
 
 **Riuso del set 0 da parte delle fiamme.** `Flame.vert`, `Flame.frag` e
 `Spark.vert` bindano **lo stesso identico descriptor set** (`DSglobal`) come set
@@ -498,29 +506,24 @@ che precede un campo che legge. Alle fiamme serve solo `time`, e riusare il set
 esistente evita di tenere in sync una seconda copia di `eyePos`, `lightCount`
 eccetera.
 
-## 2.5 `ShadowUniformBufferObject` — set 2, campionamento delle ombre
+## 2.5 Set 2 — campionamento delle ombre (solo cubemap)
 
-Un solo campo: `mat4 lightSpace[NUM_SHADOW_MAPS_2D]`, cioè la stessa
-view-projection con cui ogni shadow pass 2D ha renderizzato la sua mappa. Serve
-a `shadowFromMap2D()` in `CookTorrance.frag` per portare il frammento nello
-spazio di quella mappa e confrontare la profondità.
+Non esiste più uno `ShadowUniformBufferObject` né una `shadowFromMap2D()`: da
+quando la shadow map 2D del sole è stata rimossa (§5.2), il set 2 non porta più
+nessun UBO di matrici, solo i sampler delle cubemap. Le torce **non hanno mai
+avuto bisogno di una matrice qui**: una cubemap si campiona per *direzione*, non
+trasformando in clip space.
 
-Le torce **non hanno una matrice qui**: una cubemap si campiona per *direzione*,
-non trasformando in clip space, quindi la loro matematica non lascia mai
-`computeShadowMatrices()` / `populateCommandBuffer()`.
+Il set 2 contiene:
 
-Il set 2 contiene anche i sampler:
-
-- binding 0 — l'UBO qui sopra
-- binding 1..2 — i `sampler2D` delle mappe 2D
-- binding 3..34 — i 32 `samplerCube`
+- binding 0..31 — i 32 `samplerCube` (`NUM_SHADOW_CUBES`), uno per slot dinamico
 
 Sono **binding separati e non un array binding**. Motivo tecnico:
 `Scene::init` calcola la dimensione del descriptor pool facendo
 `texturesInPool += 1` per ogni *binding*, non per ogni *descrittore* che un array
 binding richiederebbe. Un array binding sotto-dimensionerebbe silenziosamente il
-pool. Da qui le catene `if(idx == 0) ... if(idx == 1) ...` in
-`sampleShadowMap2D()` e `sampleShadowCube()`: è il prezzo di quella scelta.
+pool. Da qui la catena `if(idx == 0) ... if(idx == 1) ...` in
+`sampleShadowCube()`: è il prezzo di quella scelta.
 
 Questo set passa attraverso la macchina per-istanza di `Scene` (a `P` vengono
 dati tre layout), quindi **ogni istanza CookTorrance ne riceve una copia
@@ -727,45 +730,56 @@ una sala grande.
 
 ### Il termine ambient
 
-L'**ambient emisferico** (E07 s.47-54) è un modello economico della luce
-indiretta: invece di simulare i rimbalzi, si assume che dall'alto arrivi il
-colore del cielo e dal basso quello riflesso dal terreno, e si mescolano in base
-a come è orientata la superficie.
+**Non c'è più un ambient emisferico cielo/terra.** Il sole è stato rimosso
+(§5.2) e con lui `ambientUpper`, `ambientLower`, `ambientDir`: non c'è più né
+un cielo né un terreno da cui mescolare un colore. L'unica luce indiretta
+rimasta in scena, oggi, è il **rimbalzo (bounce) di torce e candele**: niente
+sole, niente cielo, niente ambient autorato a parte.
+
+Il meccanismo, dentro il loop sulle luci di `main()`:
 
 ```glsl
-w = (dot(dir, ambientDir) + 1.0) / 2.0;   // dot è -1..1, w è 0..1
-return mix(ambientLower, ambientUpper, w);
+// per ogni point/spot light, oltre al contributo diretto Lo:
+if(gubo.lights[i].type != LIGHT_DIRECT) {
+    bounce += radiance * (dot(N, L) * 0.5 + 0.5) * vis;
+}
+```
+
+`bounce` accumula la **stessa radianza e la stessa visibilità (`vis`, lo shadow
+factor)** già calcolate per il contributo diretto di ogni luce, pesate con un
+termine "wrap-around" `(dot(N,L)+1)/2` invece del coseno clampato della BRDF: la
+luce rimbalzata arriva da buona parte dell'emisfero, quindi non ha un
+terminatore netto come la luce diretta. Le luci direzionali sono escluse per
+principio (non hanno una posizione a cui il wrap possa essere relativo), anche
+se oggi non ce n'è più nessuna in scena.
+
+Fuori dal loop:
+
+```glsl
+float aw = ambientShare();
+vec3 indirect = bounce * gubo.ambientBounce;
+vec3 ambient = metal ? metalAmbient(N, V, mSG, roughG, ubo.F0, indirect)
+                     : indirect * mD;
+vec3 color = Lo * (1.0 - aw) + ambient * aw;
 ```
 
 `ambientShare()` restituisce `ubo.ambientWeight` se ≥ 0, altrimenti
 `gubo.ambientWeight`: un peso per-modello che sovrascrive quello di scena, così
 un corridoio chiuso e un cortile aperto possono avere valori diversi nello stesso
-frame. Il default è il valore *da interno*, perché il gioco si svolge dentro il
-dungeon.
+frame.
 
-Il punto importante — e una probabile domanda — è che il risultato è un **blend,
-non una somma**:
+Il punto importante resta lo stesso di prima: il risultato è un **blend, non
+una somma**. Sommando, l'ambient diventerebbe un pavimento di luminosità sotto
+ogni pixel della scena; col blend non può mai contribuire più di `aw` al frame.
+Ma ora il termine ha anche un **vero effetto di visibilità**, perché `bounce`
+eredita `vis` dal loop: un corridoio senza nessuna torcia accesa raccoglie
+letteralmente zero luce indiretta, non un pavimento minimo come nel vecchio
+modello emisferico — è l'aspetto onesto di un corridoio di dungeon buio.
 
-```glsl
-color = Lo * (1.0 - aw) + ambient * aw;
-```
-
-Sommando, come faceva la versione precedente, l'ambient diventava un pavimento di
-luminosità sotto ogni pixel della scena: non ha alcun termine di visibilità,
-quindi una stanza sigillata raccoglieva la stessa luce indiretta del cortile
-aperto e nessun soffitto poteva fermarla. Col blend, l'ambient non può mai
-contribuire più di `aw` al frame, e il totale non può mai superare quello che le
-luci dirette da sole avrebbero dato.
-
-Va detto onestamente: **non è occlusione**. È una stima autorata a mano di quanto
-una superficie sia racchiusa, che è quello che fa E17 e quello che gli asset
-permettono — le mesh MGCG spediscono solo l'albedo, quindi non c'è nessuna mappa
-di ambient occlusion da campionare. La soluzione onesta sarebbe bakerne una.
-
-Nota importante: l'ambient **non viene moltiplicato per lo shadow factor**. Lo
-shadow mapping blocca solo il contributo diretto di una luce, mai il rimbalzo
-indiretto: altrimenti un'ombra si leggerebbe come un buco nel nero assoluto
-invece che come la zona fiocamente illuminata che è nella realtà.
+Va detto onestamente: **non è occlusione**. Non simula rimbalzi multipli né
+ombreggia l'indiretto per forma della stanza al di là di quello che lo shadow
+factor delle luci dirette già dà; le mesh MGCG spediscono solo l'albedo, quindi
+non c'è nessuna mappa di ambient occlusion da campionare.
 
 ### `metalAmbient()` — l'ambient per i metalli
 
@@ -777,15 +791,29 @@ usciva quasi nera ovunque non arrivasse una torcia (le sue UV campionano la
 banda di ferro battuto della texture della porta, albedo ~0.03 lineare, e `mD`
 azzerava il termine) e il lucchetto usciva come plastica arancione dipinta.
 
-La scena non ha environment map, quindi **l'emisfero fa da ambiente**: si
-campiona `hemisphereColor()` lungo la direzione riflessa. Con due accorgimenti:
+La scena non ha né un'environment map né un emisfero autorato: **l'unico
+"ambiente" che un metallo può riflettere è lo stesso bounce di torce/candele**
+appena calcolato sopra, passato come parametro `indirect`:
 
-- un metallo ruvido riflette una stanza *sfocata*, e con un emisfero a due colori e niente mip chain non c'è nulla da sfocare. Il sostituto è far scivolare la direzione di campionamento da `reflect(-V, N)` (specchio) verso `N` (quello che userebbe una superficie diffusa) man mano che la rugosità cresce: i due estremi sono esattamente i due estremi che il modello vero interpola.
-- Schlick di nuovo, ma su `N·V` (non c'è half vector, perché la "luce" è tutto l'emisfero). Il tetto è `max(1 - roughness, F0)` invece di 1.0: un metallo ruvido non diventa uno specchio perfetto all'orizzonte, e lasciarlo arrivare a 1.0 metteva un bordo netto e brillante esattamente sui pixel che disegnano il contorno di un tubo.
+```glsl
+vec3 metalAmbient(vec3 N, vec3 V, vec3 mS, float roughness, float F0, vec3 indirect) {
+    float NdotV = clamp(dot(N, V), 0.0, 1.0);
+    float F = F0 + (max(1.0 - roughness, F0) - F0) * pow(1.0 - NdotV, 5.0);
+    return indirect * mS * F;
+}
+```
 
-È la forma più economica e onesta dell'ambient speculare "split-sum" (l'emisfero
-di E07 al posto di una cube map prefiltrata); quella vera richiederebbe un pass
-di cattura che il progetto non ha.
+Schlick su `N·V` (non c'è half vector: non c'è una singola direzione di
+riflesso campionata, `indirect` è già una somma scalare su tutte le luci). Il
+tetto è `max(1 - roughness, F0)` invece di 1.0: un metallo ruvido non diventa
+uno specchio perfetto all'orizzonte, e lasciarlo arrivare a 1.0 metteva un bordo
+netto e brillante esattamente sui pixel che disegnano il contorno di un tubo.
+`mS`, non `mD`: per un metallo il colore speculare **è** il colore del
+materiale.
+
+Conseguenza diretta di non avere più un ambiente autorato a parte: un metallo
+non può mai mostrare un riflesso che le torce/candele vere della scena non
+abbiano effettivamente prodotto.
 
 ## 3.3 Il grime procedurale
 
@@ -832,19 +860,14 @@ Moltiplicare l'aggiunta per `(1 + luminanza pre-glow)` cancella quella divisione
 al primo ordine: l'algebra è `(c + k(Y+1)) / (Y + k(Y+1) + 1) → k/(1+k)` al
 crescere di `Y`, cioè una costante invece di qualcosa che tende a zero.
 
-## 3.5 `Shadow.vert` / `Shadow.frag` — le shadow map 2D
+## 3.5 `Shadow.vert` / `Shadow.frag` — rimossi insieme al sole
 
-`Shadow.vert` è tre righe: `gl_Position = pc.lightViewProj * ubo.mMat * pos`.
-
-Due cose da saper spiegare:
-
-- riusa il **descriptor set per-istanza della pipeline principale**, dichiarato a set 0 qui perché questa pipeline non ha il `DSLglobal` davanti. È l'unico punto del renderer in cui un descriptor set è condiviso fra due pipeline diverse, ed è ciò che fa sì che un occlusore in movimento proietti un'ombra che lo segue.
-- la view-projection della luce è una **push constant**, il che è sicuro solo perché il sole non si muove mai (§2.1).
-
-`Shadow.frag` è vuoto. Il render pass è `AT_DEPTH_ONLY`, non ha alcun color
-attachment: la profondità la scrive lo stadio fixed-function da `gl_Position.z`,
-non c'è nessun valore per pixel che un fragment shader debba calcolare. Lo stage
-esiste solo perché `Pipeline::init` linka sempre vertex + fragment.
+Questi due shader non esistono più nel progetto (vedi §5.2): descrivevano il
+pass depth-only 2D che catturava l'ombra del sole, con `gl_Position =
+pc.lightViewProj * ubo.mMat * pos` nel vertex e un fragment vuoto (`AT_DEPTH_ONLY`
+scrive la profondità dallo stadio fixed-function, senza bisogno di un valore
+per pixel). Il numero di sezione resta occupato solo per non spostare tutti i
+riferimenti `§3.x` più sotto.
 
 ## 3.6 `ShadowCube.vert` / `ShadowCube.frag` — la cattura delle cubemap
 
@@ -1177,7 +1200,7 @@ GLSL di base non ha `#include`. Qui funziona perché CMake passa a `glslc` la
 stessa `-I` del compilatore C++ e gli shader abilitano
 `GL_GOOGLE_include_directive`.
 
-- `custom/LightConstants.glsl` — incluso **sia da GLSL sia da C++** (`SceneLights.hpp`). Contiene solo direttive del preprocessore, che è l'unica sintassi su cui i due linguaggi concordano — e `MAX_LIGHTS` deve comunque essere una `#define`, perché dimensiona un array. Dentro: `MAX_LIGHTS`, `NUM_SHADOW_MAPS_2D`, `NUM_SHADOW_CUBES`, `SHADOW_CUBE_RES`, i tre tipi di luce, i bit `LIGHT_DEBUG_*`. Il punto è avere **una sola definizione** invece di due tenute in sync a mano.
+- `custom/LightConstants.glsl` — incluso **sia da GLSL sia da C++** (`SceneLights.hpp`). Contiene solo direttive del preprocessore, che è l'unica sintassi su cui i due linguaggi concordano — e `MAX_LIGHTS` deve comunque essere una `#define`, perché dimensiona un array. Dentro: `MAX_LIGHTS`, `NUM_SHADOW_CUBES`, `SHADOW_CUBE_RES`, i tre tipi di luce, i bit `LIGHT_DEBUG_*` (incluso `LIGHT_DEBUG_NO_BOUNCE`, per il rimbalzo di torce/candele). Il punto è avere **una sola definizione** invece di due tenute in sync a mano.
 - `custom/FlameColor.glsl` — `rgb2hsv` / `hsv2rgb` / `recolorStop`, condiviso da `Flame.frag` e `Spark.frag` così corpo e scintille si ricolorano allo stesso modo.
 - `custom/Noise.glsl` — rumore condiviso.
 
@@ -1261,22 +1284,26 @@ La posizione di una luce può essere in coordinate di mondo esplicite oppure
 sopravvive allo spostamento di quell'istanza. Stessa idea delle box di
 collisione autorate.
 
-**L'ambient emisferico.** `AmbientLight` ha `upper` (cielo), `lower` (terra),
-`dir` (l'asse lungo cui i due si mescolano, cioè l'alto del mondo) e `weight`
-(quota di luce indiretta, default 0.05, che è il valore *da interno*). Il
-default è quello indoor perché il gioco si gioca dentro il dungeon: un modello
-che non dichiara un peso è molto più probabilmente in una stanza chiusa che sotto
-il cielo, e non va illuminato come se il soffitto sopra non facesse niente.
+**`AmbientLight` — di cui oggi conta solo metà.** La struct C++
+(`SceneLights.hpp:79`) dichiara ancora `upper` (cielo), `lower` (terra), `dir`
+(l'asse lungo cui i due si mescolerebbero) e `weight`, più `bounce`. Ma
+`main.cpp` (riga ~4100) legge da questa struct **solo `weight` e `bounce`** —
+`ubo.ambientWeight = amb.weight; ubo.ambientBounce = amb.bounce;` — e nessuno
+legge mai `.upper`, `.lower` o `.dir`. Sono un residuo del vecchio modello
+emisferico cielo/terra, rimosso insieme al sole (§5.2): il codice li lascia
+dichiarati (di default a nero, cioè "questo livello non li autora") ma sono
+morti, non arrivano più alla GPU. `weight` è la quota di luce indiretta,
+default 0.05, il valore *da interno*: il gioco si gioca dentro il dungeon, e
+un modello che non dichiara un peso è più probabilmente in una stanza chiusa
+che sotto il cielo. `bounce` (default 0.35) è la quota della radianza di ogni
+point/spot light che torna come luce indiretta — vedi "Il termine ambient"
+in §3.2, che è oggi l'unica fonte reale di luce indiretta nella scena.
 
-Siccome `CookTorrance.frag` fonde invece di sommare (§3.2), `weight` è la
-*luminosità* del termine indiretto e `upper`/`lower` sono solo i suoi due
-**colori** — motivo per cui in `lights.json` sono vicini a 1 e non vicini a 0.1
-come erano quando venivano sommati.
-
-Gli **switch di debug** sono per *tipo* di luce, non per singola luce, perché la
-domanda a cui rispondono è "è il sole o una lanterna a fare quello?". Non
-modificano `lights.json`: `update()` semplicemente non restituisce le luci il
-cui tipo è disabilitato, quindi il file resta l'unica fonte di verità.
+Gli **switch di debug per tipo di luce** restano per struttura anche se il
+sole non c'è più: non modificano `lights.json`, `update()` semplicemente non
+restituisce le luci il cui tipo è disabilitato, quindi il file resta l'unica
+fonte di verità. Oggi solo `LIGHT_POINT` e `LIGHT_SPOT` hanno istanze reali in
+scena.
 
 > **Se il prof chiede**
 >
@@ -1334,29 +1361,22 @@ d'occhio è l'opposto: qualcosa costruito come una singola faccia piatta non ha
 una faccia lontana da registrare, e smette di proiettare ombra dal lato che la
 luce vede.
 
-Il progetto ha **due famiglie** di ombre, una per tipo di proiezione.
+Il progetto **aveva** due famiglie di ombre, una per tipo di proiezione; oggi
+ne resta una sola.
 
-## 5.2 Shadow map 2D — il sole
+## 5.2 Shadow map 2D — rimossa insieme al sole
 
-`NUM_SHADOW_MAPS_2D = 2` slot (oggi ne serve uno, l'altro è margine per una
-futura spot che proietti ombra). Un render pass depth-only `AT_DEPTH_ONLY`
-ciascuno, a 1024×1024, e **una sola pipeline condivisa**: i render pass hanno
-configurazione di attachment identica, quindi vale la regola di compatibilità
-(§0.4). Sono creati una volta in `localInit()` e mai toccati da un resize —
-un target offscreen non dipende dalla finestra.
+Questa sezione documenta una feature che **non esiste più**, lasciata qui
+perché il resto del documento la referenzia per numero e perché è utile sapere
+cosa c'era prima. Il sole è stato tolto dalla scena (non c'è nessuna luce
+direzionale in `lights.json` oggi), e con lui l'intero pass depth-only 2D:
+`NUM_SHADOW_MAPS_2D`, la pipeline `PShadow`, gli shader `Shadow.vert`/
+`Shadow.frag`, la struct `ShadowUniformBufferObject` e la funzione
+`shadowFromMap2D()` sono spariti dal codice. La sola luce direzionale/spot
+rimasta (l'ExitGlow, §7.4) non proietta ombre proprie.
 
-Il sole usa una proiezione **ortografica** (i raggi sono paralleli), e questo
-rende il bias facile: la sua box distribuisce 1..200 linearmente, quindi
-`0.0015` fisso vale ~30 cm ovunque.
-
-In `shadowFromMap2D()` ci sono due controlli che vale la pena saper spiegare:
-
-- `if(lightClip.w <= 0.0) return 1.0;` — per una matrice prospettica `w` è la distanza in *avanti* dalla camera, quindi `w <= 0` significa che il punto è dietro. La divisione prospettica specchierebbe un punto del genere dentro il range 0..1 della mappa, facendo campionare una profondità che appartiene a una direzione completamente diversa. Il sole, essendo ortografico, dà sempre `w = 1` e non ci passa mai.
-- il controllo che le UV siano dentro 0..1 — fuori dalla box della mappa non c'è niente contro cui confrontare, e senza il controllo si campionerebbe spazzatura sul bordo clampato.
-
-Nota su `lightNDC.z`: grazie a `GLM_FORCE_DEPTH_ZERO_TO_ONE` (impostato in
-`Starter.hpp`) la z è già nel range 0..1 di Vulkan, lo stesso in cui è
-memorizzata la mappa. Solo le XY vanno rimappate da -1..1 a 0..1.
+L'unica famiglia di ombre oggi in scena è la cube shadow map delle torce,
+§5.3.
 
 ## 5.3 Cube shadow map — le torce
 
@@ -1629,7 +1649,8 @@ essere una quantità dell'ordine del texel.
 > offset **non c'è più**: `NORMAL_OFFSET_TEXELS` è 0. Serviva a centrare la
 > lookup nel texel della superficie giusta, problema che esiste solo se la
 > superficie è nella mappa, e costava uno spostamento laterale del bordo
-> d'ombra. Sul sole, ortografico, resta il bias fisso `0.0015` (§5.2).
+> d'ombra. Il sole e la sua shadow map ortografica sono stati rimossi (§5.2):
+> oggi questo è l'unico bias del progetto.
 >
 > *"Hai 32 cubemap, non è tantissimo?"* — Non sono tutte attive: sono un pool
 > assegnato a runtime alle torce più vicine al giocatore, con isteresi per non
@@ -1986,16 +2007,23 @@ non ricevono l'aura, così l'effetto non le rivela in anticipo.
 ## 7.4 L'uscita e il finale
 
 La condizione di vittoria è una **box allineata agli assi** definita in
-`gameplay.json`, in cui il giocatore deve stare. Il varco d'uscita **non consuma**
-la chiave che controlla: la run è finita nell'istante in cui ci si arriva, non ha
-senso spendere niente.
+`gameplay.json` (`"exit": { "box": [21.4, -1.0, 9.7, 26.8, 5.0, 11.9] }`), in
+cui il giocatore deve stare. **Non c'è più nessun controllo sulla chiave** a
+questo livello: quel meccanismo (`exitRequiresKey`/`exitKeyId`, il prompt "The
+way out is locked") è stato rimosso. Il lucchetto vive solo sulla porta stessa
+(`addDoor("dvDoorPanel")`, padlock "iron"): una porta visibilmente incatenata
+dice "ti serve una chiave" in un modo che una box invisibile potrebbe dire solo
+a cose fatte, ed evita anche una collisione di regole — un lock su porta
+*consuma* la chiave con cui viene pagato, quindi un'uscita che ricontrollasse
+di nuovo l'anello qui non potrebbe mai essere superata.
 
-La box parte a x 19.6: dentro l'apertura, ma oltre il piano in cui sta il
+La box parte a x 21.4: dentro l'apertura, ma oltre il piano in cui sta il
 battente chiuso, quindi nessuno può trovarcisi dentro finché la porta non è
-stata sbloccata e aperta. E non va oltre, deliberatamente: la luce del giorno sta
-a x 22.0 con la porta che si apre davanti, e una box più esterna consegnerebbe la
-vittoria al giocatore mentre guarda il *retro* dell'effetto. Il premio deve
-arrivare mentre l'abbaglio riempie ancora lo schermo.
+stata sbloccata e aperta. E non va oltre, deliberatamente: la luce del giorno
+(`EXIT_GLOW_CENTER.x = 23.6`) sta con la porta che si apre davanti, e una box
+più esterna consegnerebbe la vittoria al giocatore mentre guarda il *retro*
+dell'effetto. Il premio deve arrivare mentre l'abbaglio riempie ancora lo
+schermo.
 
 **ExitGlow** — la luce del giorno fuori dalla porta, tre quad (shader in §3.13).
 Perché tre e non uno è pura geometria: il muro è spesso (x 18.758..20) e l'arco è
@@ -2030,9 +2058,8 @@ vantaggio.
 ## 7.5 Camera, collisioni, movimento
 
 Camera free-look: `camPos`, `camYaw` (0 guarda verso +X, crescente gira a
-destra), `camPitch` (-90 giù, +90 su). Spawn dentro la sala del dungeon a
-`(-33.5, 1.8, 29.0)`, girata verso +X così si guarda dritti lungo il corridoio
-verso la porta in fondo, libera dal tavolo e da entrambe le torce.
+destra), `camPitch` (-90 giù, +90 su). Spawn a `(-20.2, 1.8, 18.0)` (main.cpp:498,
+coordinate aggiornate dal rimpicciolimento del livello), girata verso +X.
 
 Gravità: `camVerticalVelocity`, azzerata ogni volta che il clamp col terreno
 scatta (cioè siamo atterrati). Il salto ha edge detection, così tenere premuto
@@ -2142,9 +2169,15 @@ che sulla GPU è il caso economico.
 Accendere e spegnere **intere categorie** di luce non sta qui: succede lato CPU
 in `SceneLights`, che semplicemente non le carica.
 
-Altri toggle: collisioni (no-clip), ombre delle torce, ombre delle candele,
-overlay delle posizioni delle luci (`LightDebug.hpp`), stampa continua della
-posizione della camera.
+Altri toggle: collisioni (no-clip), salto, hunt forzato, se i fantasmi possono
+acchiappare, torce di stanza, torcia in mano, torch bounce, ombre globali,
+se la torcia in mano proietta ombra da tenuta, speculare, tone mapping,
+fullbright, normali, focus glow, overlay delle posizioni delle luci
+(`LightDebug.hpp`), frustum delle ombre, collider, camera di debug, heatmap
+di luce, shadow gap. I due toggle "Torch Shadows" / "Candle Shadows" che
+esistevano prima sono stati rimossi: erano ridondanti col toggle "Shadows"
+globale e con "Held Torch Casts Shadow", e disattivarli non cambiava nulla di
+osservabile.
 
 ---
 
@@ -2158,13 +2191,14 @@ posizione della camera.
 - `G` — posa a terra la chiave che hai in mano.
 - `R` — riavvia la run. `restartRun()` rimette tutto allo stato autorato **senza rileggere nessun file**: ogni valore "autorato" era stato catturato in `localInit()`.
 - `L` — menu cheat. Frecce + Invio dentro.
+- `F11` — schermo intero, edge-triggered (`toggleFullscreen()`/`pollFullscreenToggle()`, main.cpp:1792).
 - `Esc` — esci.
 
 ---
 
 # PARTE 11 — Numeri chiave, tutti in un posto
 
-- `MAX_LIGHTS` = 32, `NUM_SHADOW_MAPS_2D` = 2, `NUM_SHADOW_CUBES` = 32, `SHADOW_CUBE_RES` = 1024.
+- `MAX_LIGHTS` = 32, `NUM_SHADOW_CUBES` = 32, `SHADOW_CUBE_RES` = 1024. Non esiste più `NUM_SHADOW_MAPS_2D`: il sole e il suo shadow pass 2D sono stati rimossi (§5.2).
 - MSAA 4×, con per-sample shading forzato da `Starter.hpp`.
 - Bloom: un quarto di risoluzione (`BLOOM_DIV` = 4), soglia 1.55, knee 0.45, intensità 0.65, esposizione 1.0.
 - Cube shadow: near 0.05, far 60.0 (che è anche il clear value), bias 0.02..0.06, normal offset ≤ 0.12.
@@ -2174,8 +2208,9 @@ posizione della camera.
 - Inviluppi della fiamma: luminosità 0.30..1.40, altezza 0.78..1.09.
 
 **Un vincolo di cui essere consapevoli**, perché è il genere di cosa su cui un
-prof può incalzare: 32 `samplerCube` + 2 `sampler2D` + 1 albedo = 35 immagini
-campionate nello stage fragment, ben oltre il minimo **garantito** da Vulkan
+prof può incalzare: 32 `samplerCube` + 1 albedo = 33 immagini campionate nello
+stage fragment (i 2 `sampler2D` delle shadow map 2D non esistono più, §5.2),
+ben oltre il minimo **garantito** da Vulkan
 (`maxPerStageDescriptorSampledImages` = 16). È una scelta deliberata — le GPU
 desktop reali ne permettono molte di più, e `flames.json` fa sì che il numero di
 point light dipenda dal livello e non sia più fisso — ma va detto: il progetto
