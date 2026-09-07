@@ -30,6 +30,7 @@
 
 #include <fstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 // Defaults are a neutral dielectric, so a model missing from the data file
@@ -117,9 +118,20 @@ class SceneMaterials {
 		return byModel[modelIndex];
 	}
 
+	// Same, but honouring a per-instance override from the file's "instances"
+	// block if one exists for this Instance::Iid. Falls straight through to
+	// forModel() otherwise, so the render loop pays one int-keyed lookup and
+	// nothing else. Used where two instances of one model must shade
+	// differently -- the three door keys, which are all the "key" model.
+	const Material &forInstance(int instanceIndex, int modelIndex) const {
+		auto it = byInstance.find(instanceIndex);
+		return it != byInstance.end() ? it->second : forModel(modelIndex);
+	}
+
 	private:
 	Material fallback;
 	std::vector<Material> byModel;
+	std::unordered_map<int, Material> byInstance;	// Instance::Iid -> override
 
 	// Reads only the fields present, leaving the rest of `m` untouched: that is
 	// what makes the default/override layering work.
@@ -190,8 +202,27 @@ void SceneMaterials::init(Scene *SC, const std::string &file) {
 		}
 	}
 
+	int namedInstances = 0;
+	if(js.contains("instances")) {
+		for(auto it = js["instances"].begin(); it != js["instances"].end(); ++it) {
+			auto iIt = SC->InstanceIds.find(it.key());
+			if(iIt == SC->InstanceIds.end()) {
+				std::cout << "SceneMaterials: scene has no instance '" << it.key()
+						  << "', skipped\n";
+				continue;
+			}
+			// Layer on the instance's own model material, so an override only
+			// has to name the fields that differ from it.
+			Material m = byModel[SC->I[iIt->second]->Mid];
+			readInto(it.value(), m);
+			byInstance[iIt->second] = m;
+			namedInstances++;
+		}
+	}
+
 	std::cout << "SceneMaterials: " << named << " of " << SC->ModelCount
-			  << " models have their own material\n";
+			  << " models have their own material, " << namedInstances
+			  << " instances override theirs\n";
 }
 
 #endif

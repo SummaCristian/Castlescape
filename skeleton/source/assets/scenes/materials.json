@@ -319,5 +319,38 @@
 		// is in the shader, not here: it is one shared cue rather than a
 		// per-model surface property.
 		"ghost": { "castsShadow": false, "specularColor": [0.55, 0.86, 0.92] }
+	},
+
+	// Per-INSTANCE overrides, keyed by the instance id in scene.json. Each one
+	// starts from its model's material above and changes only the fields named,
+	// same layering as default -> model.
+	//
+	// The three locked doors each want a different metal for the key and its
+	// padlock, so the ring reads as three distinct keys instead of one brass
+	// key collected three times. They all share the "key" / "padlock01" models,
+	// so the distinction can only live here. The gold pair keeps the model
+	// material (the brass authored on "key" already reads as gold), so only the
+	// silver and bronze doors appear below.
+	//
+	// metallic is inherited from the model, so specularColor IS the reflectance
+	// colour of the metal (not a highlight tint) -- see Material::metallic in
+	// SceneMaterials.hpp. The albedo texture is not sampled for a metal at all,
+	// which is why re-skinning Key_Albedo did nothing: the colour has to be set
+	// here.
+	//
+	// Silver: near-neutral, a shade cool, and polished (low roughness) so it
+	// throws a tight bright reflection the warm metals don't.
+	//
+	// Bronze: deliberately pushed well past "measured bronze" toward brown-
+	// orange and darkened, because the room is lit almost entirely by orange
+	// torches -- a physically-accurate bronze under that light still reads as
+	// "dark brass", and the three keys have to be told apart at a glance. Also
+	// the roughest of the three: a cast, handled bronze key, not a cut one.
+	"instances": {
+		"hbKeyIron":      { "specularColor": [0.92, 0.95, 0.99], "F0": 0.97, "roughness": 0.26 },
+		"hbDoorNPadlock": { "specularColor": [0.92, 0.95, 0.99], "F0": 0.97, "roughness": 0.26 },
+
+		"rbKeyBronze":     { "specularColor": [0.82, 0.44, 0.22], "F0": 0.80, "roughness": 0.60 },
+		"hbDoorSPadlock":  { "specularColor": [0.82, 0.44, 0.22], "F0": 0.80, "roughness": 0.60 }
 	}
 }

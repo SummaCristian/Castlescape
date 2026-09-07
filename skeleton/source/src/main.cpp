@@ -4310,8 +4310,11 @@ class Castlescape : public BaseProject {
 				ubo.mvpMat = ViewPrj * ubo.mMat;
 				ubo.nMat = glm::inverse(glm::transpose(ubo.mMat));
 
-				// By Mid rather than by name, so no string hashing per frame.
-				const Material &m = materials.forModel(SC.TI[techniqueId].I[instanceId].Mid);
+				// By Mid rather than by name, so no string hashing per frame;
+				// forInstance also checks Iid for a per-instance override (the
+				// three door keys, one "key" model shaded as three metals).
+				const Material &m = materials.forInstance(SC.TI[techniqueId].I[instanceId].Iid,
+														 SC.TI[techniqueId].I[instanceId].Mid);
 				ubo.mS = m.specularColor;
 				ubo.roughness = m.roughness;
 				ubo.F0 = m.F0;
