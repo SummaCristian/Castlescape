@@ -619,11 +619,6 @@ class Castlescape : public BaseProject {
 		bool toneMapEnabled = true;  // off clips overexposure to white
 		bool shadowsEnabled = true;  // off forces shadowFactor() to 1 (shading vs geometry diagnostic)
 
-		// Off means that flame category never competes for a cube-shadow slot
-		// at all, unlike shadowsEnabled which just blanks an already-cast one.
-		bool torchShadowsEnabled = true;
-		bool candleShadowsEnabled = true;
-
 		// Off by default: the held torch has no arm/body to anchor a shadow of
 		// its own mesh, so it would look like the torch floating mid-air.
 		bool handTorchModelCastsShadowWhenHeld = false;
@@ -1171,7 +1166,7 @@ class Castlescape : public BaseProject {
 		float lightScale = 1.0f;
 
 		// True for a candle, false for a torch (held included); from
-		// flames.json's "isCandle". Only used by the HUD's Torch/Candle Shadows toggles.
+		// flames.json's "isCandle". Feeds flameLightG()'s candle-scaled falloff.
 		bool isCandle = false;
 
 		// Read through flameBurning(): off takes light, billboard, sparks,
@@ -2814,8 +2809,6 @@ class Castlescape : public BaseProject {
 		hud.addToggle("Holding Torch", &cheats.handTorchEnabled);
 		hud.addToggle("Torch Bounce", &sceneLights.bounceEnabled);
 		hud.addToggle("Shadows", &cheats.shadowsEnabled);
-		hud.addToggle("Torch Shadows", &cheats.torchShadowsEnabled);
-		hud.addToggle("Candle Shadows", &cheats.candleShadowsEnabled);
 		hud.addToggle("Held Torch Casts Shadow", &cheats.handTorchModelCastsShadowWhenHeld);
 		hud.addToggle("Specular", &cheats.specularEnabled);
 		hud.addToggle("Tone Mapping", &cheats.toneMapEnabled);
@@ -2845,7 +2838,7 @@ class Castlescape : public BaseProject {
 	// torch's only while the torch exists.
 	bool cubeSlotOccupied(int t) const {
 		if(t == HAND_TORCH_SHADOW_INDEX) {
-			return HAND_TORCH_SHADOW_INDEX < activeCubeShadows && cheats.torchShadowsEnabled;
+			return HAND_TORCH_SHADOW_INDEX < activeCubeShadows;
 		}
 		return (t < dynamicShadowSlotBase) || (dynamicSlotOccupant[t] != -1);
 	}
@@ -2962,13 +2955,6 @@ class Castlescape : public BaseProject {
 														TORCH_LIGHT_BETA);
 		};
 
-		// Torch/Candle Shadows HUD toggles: a disabled category never
-		// candidates and drops any slot it held this tick.
-		auto categoryEnabled = [&](const TorchFlame &tf) {
-			if(!flameBurning(tf)) return false;
-			return tf.isCandle ? cheats.candleShadowsEnabled : cheats.torchShadowsEnabled;
-		};
-
 		// A torch whose light reaches nothing drawn gives its slot back.
 		// Existing occupants get a margin (SHADOW_VIEW_KEEP_MARGIN) so hovering
 		// on the cone boundary doesn't re-render every pass; a fresh candidate
@@ -2982,7 +2968,7 @@ class Castlescape : public BaseProject {
 
 		for(int s = base; s < base + count; s++) {
 			int idx = dynamicSlotOccupant[s];
-			if(idx != -1 && (!categoryEnabled(torchFlames[idx])
+			if(idx != -1 && (!flameBurning(torchFlames[idx])
 							 || !lightsView(torchFlames[idx], SHADOW_VIEW_KEEP_MARGIN))) {
 				torchFlames[idx].shadowSlot = -1;
 				dynamicSlotOccupant[s] = -1;
@@ -2993,7 +2979,7 @@ class Castlescape : public BaseProject {
 		std::vector<Cand> waiting;
 		for(size_t i = 0; i < torchFlames.size(); i++) {
 			const TorchFlame &tf = torchFlames[i];
-			if(!tf.shadowCandidate || tf.shadowSlot >= 0 || !categoryEnabled(tf)
+			if(!tf.shadowCandidate || tf.shadowSlot >= 0 || !flameBurning(tf)
 			   || !lightsView(tf, 1.0f)) {
 				continue;
 			}
@@ -4072,12 +4058,8 @@ class Castlescape : public BaseProject {
 				// IMPORTANT: explicit -1 for a non-candidate matters -- slot 0
 				// would otherwise read as the sun's shadow map indoors.
 				if(tf.heldByCamera) {
-					if(cheats.torchShadowsEnabled) {
-						L.shadowIndex = HAND_TORCH_SHADOW_INDEX;
-						updateHandTorchShadow(L.pos);
-					} else {
-						L.shadowIndex = -1;
-					}
+					L.shadowIndex = HAND_TORCH_SHADOW_INDEX;
+					updateHandTorchShadow(L.pos);
 				} else if(tf.shadowCandidate) {
 					L.shadowIndex = tf.shadowSlot;
 				} else {
