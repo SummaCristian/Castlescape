@@ -163,11 +163,10 @@ class SceneLights {
 	// a bool* and there is nothing to recompute when one changes.
 	//
 	// One per light TYPE rather than per light: the point is answering "is this
-	// the sun or a lantern doing that?", and the scene has one sun, two matched
-	// lanterns and one spot, so per-light switches would only add rows.
+	// the sun or a lantern doing that?", and the scene has one sun and two
+	// matched lanterns, so per-light switches would only add rows.
 	bool directEnabled = true;	// the sun
 	bool pointEnabled = true;	// the torches and candles
-	bool spotEnabled = true;	// none authored today, kept for completeness
 	// The scene's only indirect light (main.cpp turns this into
 	// LIGHT_DEBUG_NO_BOUNCE): torch/candle radiance returned off nearby
 	// surfaces, for diffuse materials and metals alike -- there is no sun and
@@ -422,7 +421,7 @@ const std::vector<LightData> &SceneLights::update(float deltaT) {
 	for(const LightData &L : lights) {
 		bool enabled = (L.type == LIGHT_DIRECT) ? directEnabled
 					 : (L.type == LIGHT_POINT)  ? pointEnabled
-												: spotEnabled;
+												: true;	// LIGHT_SPOT (exit spill): no cheat gate
 		if(enabled) {
 			activeLights.push_back(L);
 		}

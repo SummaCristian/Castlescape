@@ -604,6 +604,7 @@ class Castlescape : public BaseProject {
 		bool collisionEnabled = true;   // false = no-clip
 		bool showCoordinates = false;   // live camera position/yaw readout, for placing scene.json objects
 		bool ghostsCanCatch = true;     // off: hunt still plays out but can't end the run
+		bool jumpEnabled = false;       // off by default: player can't jump
 
 		// Flame switches, read by flameBurning(). Not in SceneLights: flame
 		// lights are appended into gubo directly, never via lights.json.
@@ -2798,16 +2799,16 @@ class Castlescape : public BaseProject {
 							   [this](float v) { return formatMsaaLevel(v); });
 		hud.addToggle("Collision", &cheats.collisionEnabled);
 		hud.addToggle("Show Coordinates", &cheats.showCoordinates);
+		hud.addToggle("Jump", &cheats.jumpEnabled);
 
 		hud.addToggle("Hunt", &huntCycle.forceHunt);
 		hud.addToggle("Ghosts Can Catch", &cheats.ghostsCanCatch);
 
-		// Lighting rows: sources first, then shading. Spotlight/Ambient point
-		// into sceneLights (which owns them); Torches/Holding Torch into
-		// cheats (flame lights never go through SceneLights).
+		// Lighting rows: sources first, then shading. Ambient points into
+		// sceneLights (which owns it); Torches/Holding Torch into cheats
+		// (flame lights never go through SceneLights).
 		hud.addToggle("Torches", &cheats.roomTorchesEnabled);
 		hud.addToggle("Holding Torch", &cheats.handTorchEnabled);
-		hud.addToggle("Spotlight", &sceneLights.spotEnabled);
 		hud.addToggle("Torch Bounce", &sceneLights.bounceEnabled);
 		hud.addToggle("Shadows", &cheats.shadowsEnabled);
 		hud.addToggle("Torch Shadows", &cheats.torchShadowsEnabled);
@@ -5205,7 +5206,7 @@ class Castlescape : public BaseProject {
 			}
 
 			// Jump: spacebar (Starter's "fire"), only while grounded.
-			if(fire && !jumpKeyWasPressed && grounded) {
+			if(cheats.jumpEnabled && fire && !jumpKeyWasPressed && grounded) {
 				camVerticalVelocity = movement.jumpSpeed;
 				eyeStepOffset = 0.0f;	// drop leftover step smoothing, or a jump after a step-up trails the view
 			}
