@@ -4980,12 +4980,9 @@ class Castlescape : public BaseProject {
 			}
 		}
 
-		// Freeze all movement/physics while an overlay is open or a run has
-		// ended, so the last frame the player saw is the one they keep looking
-		// at.
+		// Freeze all movement/physics while an overlay is open or a run has ended
 		if(!overlayOpen() && runState == RunState::Running) {
-			// Sprint: Ctrl multiplies move speed, polled directly (Starter.hpp
-			// doesn't wire it). Starts only while grounded, stops immediately on release.
+			// Sprint -> Ctrl
 			bool ctrlHeld = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) || glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL);
 			if(!ctrlHeld) {
 				sprinting = false;
@@ -5015,7 +5012,7 @@ class Castlescape : public BaseProject {
 				for(Collider *C : allColliders) {
 					AABBextents E = C->getExtents();
 
-					// Low enough to step onto: not a wall, the ground pass lifts the player onto it.
+					// Low enough to step onto. The ground pass lifts the player onto it.
 					if(E.yMax <= feetY + MAX_STEP_HEIGHT) continue;
 
 					// A wall only where the body reaches it: walk under a lintel above head height.
@@ -5051,7 +5048,7 @@ class Castlescape : public BaseProject {
 
 			}
 
-			// Jump: spacebar (Starter's "fire"), edge-triggered, only while grounded.
+			// Jump: spacebar (Starter's "fire"), only while grounded.
 			if(fire && !jumpKeyWasPressed && grounded) {
 				camVerticalVelocity = movement.jumpSpeed;
 				eyeStepOffset = 0.0f;	// drop leftover step smoothing, or a jump after a step-up trails the view
@@ -5116,7 +5113,7 @@ class Castlescape : public BaseProject {
 				}
 			}
 
-			// The floor torch: ordinary pickup tolerances, it's a small floor object.
+			// The floor torch: standard pickup tolerances.
 			nearbyHandTorch = false;
 			if(findGazedHandTorch(front)) {
 				float dx = camPos.x - handTorchWorldPos.x;
@@ -5127,8 +5124,7 @@ class Castlescape : public BaseProject {
 				}
 			}
 
-			// Single targeted instance for the focus glow, in E-key priority
-			// order: floor torch/pickup, wall torch, candle, door.
+			// Single targeted instance for the focus glow, in E-key priority order
 			gazedInstance = nullptr;
 			gazedInteractionDisabled = false;
 			if(nearbyHandTorch) {
@@ -5163,10 +5159,8 @@ class Castlescape : public BaseProject {
 					nearbyHandTorch = false;
 					gazedInstance = nullptr;
 
-					// The floor pose is about to vanish along with any shadow it
-					// was baked into. queueMoverCubeSlotRenders() only tracks
-					// movers within reach, which can miss a pickup at a torch's
-					// dim edge, so sweep every occupied-slot face the floor pose falls in, once.
+					// Floor object disappear -> sweep occupied-slot faces once (shadow): queueMoverCubeSlotRenders() can miss it if too far.
+
 					{
 						const glm::vec4 &local = modelSphere(handTorchInst->Mid);
 						const glm::vec3 centre = glm::vec3(handTorchSpawnWm * glm::vec4(glm::vec3(local), 1.0f));
@@ -5189,12 +5183,11 @@ class Castlescape : public BaseProject {
 				} else if(nearbyPickup >= 0) {
 					Pickup &p = pickups[nearbyPickup];
 					p.collected = true;
-					// No visibility flag, so "removed" means parked below the
+					// No visibility flag -> "removed" means parked below the
 					// map; a key is redrawn in hand from here on.
 					p.inst->Wm = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
 					if(!p.keyId.empty()) {
-						// One free hand: a key already held goes back on the
-						// floor, dropped short (0.5, not G's 1.0) to land underfoot.
+						// Hand already occupied -> drop item on floor and change it in hand
 						if(!keyRing.empty()) {
 							dropKeyFromRing((int)keyRing.size() - 1, camPos, front, 0.5f);
 						}
@@ -5202,33 +5195,27 @@ class Castlescape : public BaseProject {
 						keyRaiseElapsed = 0.0f;	// restart the raise
 					}
 				} else if(nearbyWallTorch >= 0) {
-					// Lighting the held torch is one bool: flameBurning() turns
-					// its billboard, sparks and light on this frame. From here
-					// hasBurningTorch() is true, so candles can be lit.
+					// Light the hand torch from nearby wall torch.
 					torchFlames[handFlameIdx].burning = true;
 					std::cout << "[torch] lit hand torch from '"
 							  << *torchFlames[nearbyWallTorch].inst->id << "'\n";
 					nearbyWallTorch = -1;
 					gazedInstance = nullptr;
 				} else if(nearbyCandle >= 0) {
-					// Lighting a candle is one bool: every consequence asks
-					// through flameBurning() and turns itself on this frame.
-					// Only with fire in hand; failure isn't reported (the aura
-					// and prompt already say so).
+					// Light the candle from the held torch. Requires fire in hand.
 					if(hasBurningTorch()) {
 						torchFlames[nearbyCandle].burning = true;
 						std::cout << "[candle] lit '"
 								  << *torchFlames[nearbyCandle].inst->id << "'\n";
-						// Lit now, so it stops being a target this frame.
+						// Lit now, so it stops being a target.
 						nearbyCandle = -1;
 						gazedInstance = nullptr;
 					}
 				} else if(nearbyDoor >= 0) {
 					Door &d = doors[nearbyDoor];
 					if(d.locked) {
-						// Padlocked: E spends a matching key (destroyed by the
-						// unlock) and swings the door open in the same press.
-						// No match, or the wrong face of the door: nothing
+						// Padlocked: E spends a matching key (destroyed) and swings the door open.
+						// No match / wrong face of the door: nothing
 						// happens (the prompt already says what's missing).
 						int slot = d.onLockSide(camPos) ? findKeyInRing(d.lockKeyId) : -1;
 						if(slot >= 0) {
@@ -5236,9 +5223,9 @@ class Castlescape : public BaseProject {
 									  << "' with key '" << d.lockKeyId << "'\n";
 							Instance *spent = pickups[keyRing[slot]].inst;
 							consumeKey(slot);
-							// If this item is a whenUnlocked prop of this door,
-							// cancel the sink consumeKey() just queued -- the
-							// prop loop puts it onto the shelf this same frame.
+							// If item is a whenUnlocked prop of this door (book) ->
+							// cancel the sink consumeKey() just queued ->
+							// prop loop puts it onto the shelf this same frame (later in code).
 							for(const Door::LockProp &prop : d.lockProps) {
 								if(prop.whenUnlocked && prop.inst == spent) {
 									keyLowerIdx = -1;
@@ -5261,6 +5248,7 @@ class Castlescape : public BaseProject {
 			interactKeyWasPressed = interactKey;
 
 			// Drop key (G): puts the newest key down at arm's length; repeated presses drop the ring in reverse order.
+			// (Current: just 1 kay at the time)
 			bool dropKey = glfwGetKey(window, GLFW_KEY_G);
 			if(heldKeyIdx() >= 0 && dropKey && !dropKeyWasPressed) {
 				dropKeyFromRing((int)keyRing.size() - 1, camPos, front, 1.0f);
@@ -5271,19 +5259,19 @@ class Castlescape : public BaseProject {
 				// Magnitude from the scene, direction from whoever opened it (swingSign).
 				float target = d.open ? std::abs(d.openAngleDeg) * d.swingSign : 0.0f;
 				float maxStep = DOOR_OPEN_SPEED * deltaT;
-				if(d.angle < target) d.angle = std::min(d.angle + maxStep, target);
-				else if(d.angle > target) d.angle = std::max(d.angle - maxStep, target);
+				if(d.angle < target) d.angle = std::min(d.angle + maxStep, target); // Rotation
+				else if(d.angle > target) d.angle = std::max(d.angle - maxStep, target); // Rotation
 
 				// The leaf's local origin is its hinge, so opening it is one more rotation on the closed transform.
+				// Order of operations: local -> world. Door_closed_mat * rotation_mat
 				d.inst->Wm = d.baseWm * glm::rotate(glm::mat4(1.0f), glm::radians(d.angle), glm::vec3(0.0f, 1.0f, 0.0f));
 				if(d.inst->C != nullptr) {
 					d.inst->C->setWorldMatrix(d.inst->Wm);
 				}
 
-				// Chains/padlock ride the leaf's matrix while locked, parked
-				// below the map once not; driven every frame so restartRun()
-				// re-locking brings them back for free. A whenUnlocked prop is
-				// the mirror: appears once unlocked, left alone (still a Pickup) while locked.
+				// Chains/padlock follow the door while locked, hidden below the map once not.
+				// whenUnlocked props (book in bookshelf) are the mirror: appear once unlocked, untouched while locked.
+				// Driven every frame so restartRun() gets re-locking for free.
 				for(const Door::LockProp &prop : d.lockProps) {
 					if(prop.whenUnlocked) {
 						if(!d.locked) prop.inst->Wm = d.inst->Wm * prop.local;
@@ -5298,9 +5286,8 @@ class Castlescape : public BaseProject {
 				}
 			}
 
-			// How far the way out has swung, off the same animated angle the
-			// leaf draws with. Smoothstepped so the light builds through the
-			// swing; frozen once the run ends so an open door keeps lighting the escape banner.
+			// How open the exit door is, 0 to 1, used to fade in its light as it swings.
+			// Stops updating once you win.
 			if(exitDoorIndex >= 0) {
 				const Door &exitDoor = doors[exitDoorIndex];
 				float span = std::abs(exitDoor.openAngleDeg);
@@ -5309,7 +5296,7 @@ class Castlescape : public BaseProject {
 					: 0.0f;
 			}
 
-			// Ghosts: see the Ghost struct for the three modes. Bob is added on
+			// Ghosts: see the Ghost struct for the three modes. Bob (vertical height) is added on
 			// top of `pos` at the end, so it never feeds back into steering/collision.
 			bool ghostsHunting = huntCycle.hunting();
 			for(Ghost &g : ghosts) {
@@ -5431,7 +5418,7 @@ class Castlescape : public BaseProject {
 					}
 
 					float t = segLen > 0.0f ? g.distAlongSegment / segLen : 0.0f;
-					// Authored, not steered: no wall resolution, so a nearby collider can't shove a ghost off its loop.
+					// Patrol follows the authored waypoints exactly, no wall push-out a nearby collider can't nudge it off its loop.
 					g.pos = glm::mix(from, to, t);
 					if(segLen > 0.0f) {
 						moveDir = glm::normalize(glm::vec2(to.x - from.x, to.z - from.z));
@@ -5450,8 +5437,8 @@ class Castlescape : public BaseProject {
 					g.yaw += glm::clamp(dYaw, -maxStep, maxStep);
 				}
 
-				// The chase telegraph, eased. Here, not in updateUniformBuffer(),
-				// because this loop owns `mode` and has a deltaT.
+				// // Chase indicator (e.g. glow), smoothed instead of snapping on/off.
+				// Here, not in updateUniformBuffer(), because this loop owns `mode` and has a deltaT.
 				{
 					float target = (g.mode == GhostMode::Chase) ? 1.0f : 0.0f;
 					float tau = (target > g.chaseBlend) ? GHOST_CHASE_FADE_IN_TAU
@@ -5466,13 +5453,11 @@ class Castlescape : public BaseProject {
 				g.inst->Wm = glm::translate(glm::mat4(1.0f), drawPos)
 							* glm::rotate(glm::mat4(1.0f), g.yaw, glm::vec3(0.0f, 1.0f, 0.0f));
 
-				// The catch. Only a hunting ghost ends the run -- brushing one
-				// on patrol would make the colour telegraph a lie.
+				// The catch. Only a hunting ghost ends the run.
 				if(ghostsHunting && cheats.ghostsCanCatch && runState == RunState::Running) {
 					float dx = camPos.x - g.pos.x;
 					float dz = camPos.z - g.pos.z;
-					// From the chest, not the eyes: the eye height is the top of
-					// the body.
+					// From the chest, not the eyes: the eye height is the top of the body.
 					float dy = std::abs((camPos.y - 0.9f) - g.pos.y);
 					if(dx * dx + dz * dz < GHOST_CATCH_RADIUS * GHOST_CATCH_RADIUS &&
 					   dy < GHOST_CATCH_VERTICAL) {
@@ -5481,11 +5466,10 @@ class Castlescape : public BaseProject {
 					}
 				}
 
-				// Non-hunt encounter: walking through a ghost doesn't end the
-				// run but snuffs the held torch (setting `burning` false plays
-				// the ignition spring in reverse). Triggered by the spectral
-				// veil's own ramp, not GHOST_CATCH_RADIUS, so it fires when
-				// "inside the ghost" first reads, not at dead centre.
+				// Non-hunt encounter:
+				// walking through a ghost doesn't end the run.
+				// Snuffs the held torch (setting `burning` false plays the ignition spring in reverse).
+				// Triggered by the spectral veil's own ramp, not GHOST_CATCH_RADIUS.
 				if(!ghostsHunting && handTorchCollected && handFlameIdx >= 0 &&
 				   torchFlames[handFlameIdx].burning) {
 					const float dyv = camPos.y - drawPos.y;
@@ -5587,8 +5571,8 @@ class Castlescape : public BaseProject {
 		// Exponential decay: never overshoots, no "still stepping" state.
 		eyeStepOffset *= std::exp(-deltaT / EYE_SMOOTH_TAU);
 
-		// Walk-bob signal shared by camera and both hands: one phase, eased by
-		// walkBobBlend so start/stop doesn't snap the sway.
+		// Walk-bob phase, shared by camera and hands: one value, eased so
+		// start/stop doesn't snap.
 		bool isWalking = grounded && (std::abs(m.x) > 0.01f || std::abs(m.z) > 0.01f);
 		float bobTarget = isWalking ? 1.0f : 0.0f;
 		walkBobBlend += (bobTarget - walkBobBlend) * (1.0f - std::exp(-deltaT / WALK_BOB_BLEND_TAU));
@@ -5596,19 +5580,16 @@ class Castlescape : public BaseProject {
 			walkBobPhase += WALK_BOB_SPEED * (sprinting ? 1.4f : 1.0f) * deltaT;
 		}
 
-		// Rendered from the smoothed eye height; camPos stays exact for
-		// collisions/gravity. Small head-bob, well under the hand's, presentation only.
+		// Applies bob only to the rendered eye position, not camPos, so
+		// collisions/gravity stay unaffected.
 		float camBob = std::sin(walkBobPhase * 2.0f) * CAM_BOB_VERTICAL * walkBobBlend;
 		glm::vec3 eyePos = camPos - glm::vec3(0.0f, eyeStepOffset - camBob, 0.0f);
 		View = glm::lookAt(eyePos, eyePos + front, up);
 
-		// IMPORTANT: View stays the true first-person one -- billboards, held
-		// items and the light/geometry culls read it via inverse(View) and
-		// must not follow the spectator. Only ViewPrj (what's actually
-		// rasterised) is rebased onto the debug camera.
+		// IMPORTANT: View must stay first-person (billboards, held items, culling all read it).
+		// Only ViewPrj, what's actually drawn, swaps to the debug camera.
 		if(cheats.debugCam) {
-			// Snap the orbit behind the player's facing on the frame it turns
-			// on; camYaw 0 faces +X, so +180 sits the orbit behind.
+			// Snap the debug orbit behind the player's current facing when it turns on.
 			if(!dbgCamWasOn) {
 				dbgOrbitYaw = camYaw + 180.0f;
 				dbgOrbitPitch = DEBUG_CAM_PITCH0;
@@ -5660,11 +5641,7 @@ class Castlescape : public BaseProject {
 			glm::vec4(eyePos, 1.0f)
 		);
 
-		// Wall tuck for both hands (see applyTuck). Resolved here, not in each
-		// hand's block below: both probe against the same camWm this frame, and
-		// both factors must advance every frame -- an un-advanced one would
-		// stay pinned at whatever it read when the item left the hand. No-clip
-		// keeps both hands out (nothing to rest an item against).
+		// Wall tuck for both hands, computed once here for both. Off with no collision enabled.
 		{
 			bool tuckActive = cheats.collisionEnabled;
 
@@ -5718,9 +5695,9 @@ class Castlescape : public BaseProject {
 				* glm::scale(glm::mat4(1.0f), glm::vec3(HAND_TORCH_SCALE));
 		}
 
-		// Held key: same camera-anchored placement as the torch, live once
-		// picked up. Reuses the world instance; pointing its Wm at the camera
-		// every frame is the whole "in your hand" effect. Only the newest key on the ring is drawn.
+		// Held key: same camera-anchored placement as the torch. Reuses the
+		// world instance, pointed at the camera each frame. Only the newest
+		// key on the ring is drawn.
 		if(heldKeyIdx() >= 0) {
 			Pickup &held = pickups[heldKeyIdx()];
 			float bobLateral = sinf(walkBobPhase) * WALK_BOB_LATERAL * walkBobBlend;
@@ -5748,8 +5725,8 @@ class Castlescape : public BaseProject {
 				* glm::scale(glm::mat4(1.0f), glm::vec3(held.worldScale));
 		}
 
-		// Key spent on a lock: mirror of the rise, played downward, cubic
-		// ease-in. Drawn here since the key is already off the ring; parked below the map when the fall ends.
+		// Key spent on a lock: mirror of the rise, played downward, cubic ease-in.
+		// Drawn here since the key is already off the ring; parked below the map when the fall ends.
 		if(keyLowerIdx >= 0) {
 			keyLowerElapsed = std::min(keyLowerElapsed + deltaT, KEY_RAISE_DURATION);
 			float t = keyLowerElapsed / KEY_RAISE_DURATION;
@@ -5787,7 +5764,7 @@ class Castlescape : public BaseProject {
 };
 
 
-// This is the main: probably you do not need to touch this!
+// Main
 int main() {
     Castlescape app;
 
