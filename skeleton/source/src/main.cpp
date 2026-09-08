@@ -13,6 +13,8 @@
 #include "modules/Starter.hpp"
 #include "modules/TextMaker.hpp"
 #include "modules/Scene.hpp"
+
+// ---------- CUSTOM FILES ----------
 #include "custom/UiQuad.hpp"
 #include "custom/CheatHud.hpp"
 #include "custom/PauseMenu.hpp"
@@ -26,9 +28,6 @@
 #include "custom/CubeShadowMap.hpp"
 #include "custom/DebugLines.hpp"
 #include "custom/HuntCycle.hpp"
-
-// Scene is data-driven: assets/scenes/*.json (scene, colliders, materials,
-// lights, flames, gameplay). Shaders in source/shaders/. See OVERVIEW.md.
 
 // The uniform buffer object used in this example
 struct UniformBufferObject {
@@ -46,6 +45,7 @@ struct UniformBufferObject {
 	float k;					// diffuse share of the BRDF
 	int flatNormals;			// 1: derive the face normal in the shader
 	int interiorAmbient;		// 1: use hemispheric ambient for a vertical (interior) surface
+
 	// Seconds since startup; only Flame shaders read it. Per-object, not global,
 	// to avoid shifting LightData[]'s offset.
 	float time;
@@ -95,7 +95,12 @@ struct Vertex {
 	glm::vec2 UV;
 };
 
-// Shared by all four post passes; each fills only the fields it needs.
+// Shared by all four post passes. Each fills only the fields it needs.
+// Currently used by:
+// - Flame's bloom effect
+// - Flame's HDR pass
+// - Ghost effect (blue overlay)
+// - End of game white light effect
 struct PostUniformBufferObject {
 	glm::vec2 texelSize;	// 1/width, 1/height of the SOURCE texture
 	glm::vec2 blurDir;		// (1,0) or (0,1); read by BloomBlur.frag only
@@ -116,8 +121,8 @@ struct PostVertex {
 	glm::vec2 pos;
 };
 
-// Cheap 1D noise for the torch flicker, computed on CPU so flame, sparks
-// and light all share the same value. // Integer hash, not fract(sin(x)*...): that trick gives poor randomness for small x.
+// Cheap 1D noise for the torch flicker.
+// Computed on CPU so flame, sparks and light all share the same value.
 static float fireHash(int32_t n) {
 	uint32_t h = (uint32_t)n;
 	h = (h ^ 61u) ^ (h >> 16);
@@ -132,14 +137,12 @@ static float fireNoise(float x) {
 	float fi = std::floor(x);
 	float f = x - fi;
 	int32_t i = (int32_t)fi;
-	// Smoothstep between the two lattice points, so the result is C1 and the
-	// flame's brightness never steps.
+	// Interpolate between the two values
 	float u = f * f * (3.0f - 2.0f * f);
 	return fireHash(i) * (1.0f - u) + fireHash(i + 1) * u;
 }
 
-// Three octaves: enough that no single frequency is audible in the result,
-// few enough that this stays a rounding error next to the rest of the frame.
+// Mix different frequencies to make it look more random
 static float fireFbm(float x) {
 	return fireNoise(x) * 0.55f
 		 + fireNoise(x * 2.3f + 17.0f) * 0.30f
@@ -205,7 +208,7 @@ class Castlescape : public BaseProject {
 	// Descriptor Layouts [what will be passed to the shaders]
 	DescriptorSetLayout DSLlocal, DSLglobal;
 
-	// Vertex formants, Pipelines [Shader couples] and Render passes
+	// Vertex formats, Pipelines [Shader couples] and Render passes
 	VertexDescriptor VD;
 	// The scene pass. Renders into an offscreen floating-point colour
 	// attachment (not the swapchain), which is what makes bloom possible.
@@ -218,17 +221,17 @@ class Castlescape : public BaseProject {
 
 	// Ghosts' depth prepass (SpectralDepth.frag), run right before Pspectral.
 	// IMPORTANT: uses VK_COMPARE_OP_LESS (not Pspectral's LESS_OR_EQUAL) so it
-	// writes the nearest ghost surface's depth, letting the colour pass reject
-	// the ghost's own interior instead of blending it under the body.
+	// writes the nearest ghost surface's depth, so that the back side of the ghost
+	// is not visible through itself
 	Pipeline PspectralDepth;
 
 	// =====================================================================
 	// Cube shadow maps: Vulkan objects
 	// =====================================================================
-	// Shadow mapping, cube branch (the torches): a real 6-face cube map per
+	// Shadow mapping, cube branch (the torches): a 6-face cube map per
 	// point light (CubeShadowMap.hpp: linear-distance storage, one flat bias).
 	//
-	// IMPORTANT: // // RPShadowCubeCompat: hack to get a valid VkRenderPass for the per-face framebuffers.
+	// IMPORTANT: RPShadowCubeCompat: hack to get a valid VkRenderPass for the per-face framebuffers.
 	// - createRenderPass() is private -> can't call it directly
 	// - so we build a full RenderPass via .init()/.create() and just keep .renderPass
 	// - its own attachment/image is never actually used
