@@ -2218,11 +2218,9 @@ class Castlescape : public BaseProject {
 		PRs.resize(2);
 		PRs[0].init("CookTorrance", {
 							{&P, {//Pipeline and DSL for the main pass
-							 /*DSLglobal*/{},
-							 /*DSLlocal*/{
-									/*t0*/{true,  0, {}}
-								  },
-							 /*DSLshadowSample*/ shadowMapDefs
+							 /*DSLglobal*/{},                          // nothing here (handled elsewhere, same for the whole scene)
+							 /*DSLlocal*/{ /*t0*/{true, 0, {}} },      // slot 0 = "fetch THIS object's own texture" (fromInstance=true)
+							 /*DSLshadowSample*/ shadowMapDefs         // slots 0..31 = the 32 fixed shadow maps, same for everyone
 								 }
 								}
 						  }, /*TotalNtextures*/1, &VD);
@@ -2235,10 +2233,8 @@ class Castlescape : public BaseProject {
 		// populateCommandBuffer() in order: dungeon, flames, ghost prepass, ghost colour.
 		PRs[1].init("Spectral", {
 							{&PspectralDepth, {
-							 /*DSLglobal*/{},
-							 /*DSLlocal*/{
-									/*t0*/{true,  0, {}}
-								  }
+							 /*DSLglobal*/{},                     // nothing here (handled elsewhere, same for the whole scene)
+							 /*DSLlocal*/{ /*t0*/{true, 0, {}} }  // slot 0 = "fetch THIS object's own texture" (fromInstance=true)
 								 }
 								}
 						  }, /*TotalNtextures*/1, &VD);
