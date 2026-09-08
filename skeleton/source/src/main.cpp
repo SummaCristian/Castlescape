@@ -408,7 +408,7 @@ class Castlescape : public BaseProject {
 	// Scene, text and UI overlays
 	// =====================================================================
 	// To support loading assets from a scene.json file
-	Scene SC;
+	Scene MainScene;
 	std::vector<VertexDescriptorRef>  VDRs;
 	std::vector<TechniqueRef> PRs;
 
@@ -1789,7 +1789,7 @@ class Castlescape : public BaseProject {
 		// IMPORTANT: the collider visualizer owns a swapchain-attached render
 		// pass too; without this it rebuilds its framebuffers at the old size
 		// on resize (VUID-...-04533).
-		SC.ColShow.resizeScreen(w, h);
+		MainScene.ColShow.resizeScreen(w, h);
 	}
 
 	// ---- F11 fullscreen toggle ----
@@ -2227,7 +2227,7 @@ class Castlescape : public BaseProject {
 
 		// DSLlocal takes the ghost's albedo at slot 0 (Spectral.frag reads it
 		// as a density mask). IMPORTANT: the pipeline named here is the depth
-		// prepass, not Pspectral -- naming it makes SC.init() build this
+		// prepass, not Pspectral -- naming it makes MainScene.init() build this
 		// technique's descriptor sets (shared by both passes), then it's
 		// nulled below so Scene skips it; both passes are issued by hand in
 		// populateCommandBuffer() in order: dungeon, flames, ghost prepass, ghost colour.
@@ -2239,7 +2239,9 @@ class Castlescape : public BaseProject {
 								}
 						  }, /*TotalNtextures*/1, &VD);
 
-		if(SC.init(this, 1, VDRs, PRs, "assets/scenes/scene.json") != 0) {
+		// Loads scene.json and builds every instance's descriptor sets per the PRs recipes above.
+		// Runs once at startup, actual drawing happens later, every frame, in populateCommandBuffer().
+		if(MainScene.init(this, 1, VDRs, PRs, "assets/scenes/scene.json") != 0) {
 			std::cout << "ERROR LOADING THE SCENE\n";
 			exit(0);
 		}
@@ -2247,18 +2249,18 @@ class Castlescape : public BaseProject {
 		// Unhook the ghost depth prepass from Scene's walk: flames must draw
 		// between the dungeon and the prepass, or a ghost's occluding depth
 		// would erase a flame poking into its body. Descriptor sets stay valid.
-		SC.TI[1].T->PT[0].P = nullptr;
+		MainScene.TI[1].T->PT[0].P = nullptr;
 
 		// ---- 4. World: floor, colliders, doors, pickups ----
 		// Cache the floor's top Y for the no-clip under-the-map clamp.
-		auto floorIt = SC.InstanceIds.find("floor");
-		if(floorIt != SC.InstanceIds.end() && SC.I[floorIt->second]->C != nullptr) {
-			worldFloorY = SC.I[floorIt->second]->C->getExtents().yMax;
+		auto floorIt = MainScene.InstanceIds.find("floor");
+		if(floorIt != MainScene.InstanceIds.end() && MainScene.I[floorIt->second]->C != nullptr) {
+			worldFloorY = MainScene.I[floorIt->second]->C->getExtents().yMax;
 		}
 
 		// Gameplay collision list: scene.json's auto-fit boxes, plus
 		// hand-authored geometry for models an auto-fit box gets wrong.
-		colliderSet.init(&SC, "assets/scenes/colliders.json");
+		colliderSet.init(&MainScene, "assets/scenes/colliders.json");
 		allColliders = colliderSet.list();
 
 		// Interactable doors. promptOffset is the doorway's centre in the
@@ -2270,14 +2272,14 @@ class Castlescape : public BaseProject {
 		// lockLabel is the prompt's name for it, defaulting to the id.
 		auto addDoor = [&](const char *id, glm::vec3 promptOffset, float openAngleDeg,
 						   const char *lockKeyId = "", const char *lockLabel = "") {
-			auto it = SC.InstanceIds.find(id);
-			if(it == SC.InstanceIds.end()) {
+			auto it = MainScene.InstanceIds.find(id);
+			if(it == MainScene.InstanceIds.end()) {
 				std::cout << "Door instance '" << id << "' not found, skipping\n";
 				return;
 			}
 			Door d;
 			d.instanceId = id;
-			d.inst = SC.I[it->second];
+			d.inst = MainScene.I[it->second];
 			d.baseWm = d.inst->Wm;
 			d.promptOffset = promptOffset;
 			d.promptPos = glm::vec3(d.baseWm * glm::vec4(promptOffset, 1.0f));
@@ -2338,8 +2340,8 @@ class Castlescape : public BaseProject {
 		auto addLockProp = [&](const char *doorId, const char *propId, bool flip = false) {
 			auto d = std::find_if(doors.begin(), doors.end(),
 								  [&](const Door &x) { return x.instanceId == doorId; });
-			auto it = SC.InstanceIds.find(propId);
-			if(d == doors.end() || it == SC.InstanceIds.end()) {
+			auto it = MainScene.InstanceIds.find(propId);
+			if(d == doors.end() || it == MainScene.InstanceIds.end()) {
 				std::cout << "Lock prop '" << propId << "' or its door '" << doorId
 						  << "' not found, skipping\n";
 				return;
@@ -2351,11 +2353,11 @@ class Castlescape : public BaseProject {
 					  * glm::rotate(glm::mat4(1.0f), glm::radians(180.0f), glm::vec3(0.0f, 1.0f, 0.0f))
 					  * glm::translate(glm::mat4(1.0f), -pivot);
 			}
-			d->lockProps.push_back({SC.I[it->second], local});
+			d->lockProps.push_back({MainScene.I[it->second], local});
 
 			// Grow the auto-fit box outward (xMax only, model space) so the
 			// player stops before the hardware is in the torch's reach.
-			Collider *propC = SC.I[it->second]->C;
+			Collider *propC = MainScene.I[it->second]->C;
 			if(propC != nullptr) {
 				// getExtents() is world-space; at identity it reads back the model box.
 				propC->setWorldMatrix(glm::mat4(1.0f));
@@ -2400,14 +2402,14 @@ class Castlescape : public BaseProject {
 		auto addPickup = [&](const char *id, const char *keyId = "",
 							 glm::vec3 handTiltDeg = HAND_KEY_TILT_DEG,
 							 glm::vec3 handOffset = HAND_KEY_OFFSET) {
-			auto it = SC.InstanceIds.find(id);
-			if(it == SC.InstanceIds.end()) {
+			auto it = MainScene.InstanceIds.find(id);
+			if(it == MainScene.InstanceIds.end()) {
 				std::cout << "Pickup instance '" << id << "' not found, skipping\n";
 				return;
 			}
 			Pickup p;
 			p.instanceId = id;
-			p.inst = SC.I[it->second];
+			p.inst = MainScene.I[it->second];
 			p.worldPos = glm::vec3(p.inst->Wm[3]);
 			p.spawnWm = p.inst->Wm;
 			p.spawnPos = p.worldPos;
@@ -2510,8 +2512,8 @@ class Castlescape : public BaseProject {
 
 				for(const auto &g : js.value("ghosts", nlohmann::json::array())) {
 					std::string id = g.value("instance", std::string(""));
-					auto it = SC.InstanceIds.find(id);
-					if(it == SC.InstanceIds.end()) {
+					auto it = MainScene.InstanceIds.find(id);
+					if(it == MainScene.InstanceIds.end()) {
 						std::cout << "gameplay.json: no scene instance '" << id
 								  << "', ghost skipped\n";
 						continue;
@@ -2519,7 +2521,7 @@ class Castlescape : public BaseProject {
 
 					Ghost gh;
 					gh.instanceId = id;
-					gh.inst = SC.I[it->second];
+					gh.inst = MainScene.I[it->second];
 					gh.speed = g.value("speed", gh.speed);
 					gh.chaseSpeed = g.value("chaseSpeed", gh.chaseSpeed);
 					for(const auto &w : g.value("waypoints", nlohmann::json::array())) {
@@ -2545,7 +2547,7 @@ class Castlescape : public BaseProject {
 				// Fit the ghost's collision size from the mesh (all ghosts share Ghost.gltf).
 				if(!ghosts.empty()) {
 					Collider fit;
-					fit.fitAABB(SC.M[ghosts[0].inst->Mid]);
+					fit.fitAABB(MainScene.M[ghosts[0].inst->Mid]);
 					AABBextents E = fit.getExtents();	// fit's Wm is identity: local space
 
 					// fitAABB is blind to scene.json's "scale"; multiply it back in.
@@ -2588,11 +2590,11 @@ class Castlescape : public BaseProject {
 		// Held torch. Starts on the floor at its authored pose; picked up with
 		// [E], after which GameLogic rebuilds its Wm from the camera.
 		{
-			auto it = SC.InstanceIds.find("handTorch");
-			if(it == SC.InstanceIds.end()) {
+			auto it = MainScene.InstanceIds.find("handTorch");
+			if(it == MainScene.InstanceIds.end()) {
 				std::cout << "Hand torch instance 'handTorch' not found, skipping\n";
 			} else {
-				handTorchInst = SC.I[it->second];
+				handTorchInst = MainScene.I[it->second];
 				handTorchSpawnWm = handTorchInst->Wm;
 				// Lifted off the instance origin (below the mesh, torch lies
 				// on its side) so the crosshair lands on the torch body.
@@ -2617,12 +2619,12 @@ class Castlescape : public BaseProject {
 								 glm::vec3 color = TORCH_LIGHT_COLOR, float sizeScale = 1.0f,
 								 float lightScale = 1.0f, bool isCandle = false,
 								 bool burning = true) {
-			auto it = SC.InstanceIds.find(id);
-			if(it == SC.InstanceIds.end()) {
+			auto it = MainScene.InstanceIds.find(id);
+			if(it == MainScene.InstanceIds.end()) {
 				std::cout << "Torch instance '" << id << "' not found, skipping its flame\n";
 				return;
 			}
-			Instance *inst = SC.I[it->second];
+			Instance *inst = MainScene.I[it->second];
 			float seed = (float)torchFlames.size() * 2.3971f;	// irrational-ish stride avoids phase collisions
 			int flameId = flame.spawn(seed);
 			if(flameId < 0) {
@@ -2702,8 +2704,8 @@ class Castlescape : public BaseProject {
 				std::unordered_map<int, FlameDef> byModel;
 				if(js.contains("models")) {
 					for(auto it = js["models"].begin(); it != js["models"].end(); ++it) {
-						auto mit = SC.MeshIds.find(it.key());
-						if(mit == SC.MeshIds.end()) {
+						auto mit = MainScene.MeshIds.find(it.key());
+						if(mit == MainScene.MeshIds.end()) {
 							std::cout << "flames.json: unknown model '" << it.key() << "', skipped\n";
 							continue;
 						}
@@ -2713,12 +2715,12 @@ class Castlescape : public BaseProject {
 
 				const nlohmann::json *overrides = js.contains("overrides") ? &js["overrides"] : nullptr;
 
-				for(const auto &kv : SC.InstanceIds) {
+				for(const auto &kv : MainScene.InstanceIds) {
 					const std::string &id = kv.first;
 					if(id == "handTorch") {
 						continue;
 					}
-					Instance *inst = SC.I[kv.second];
+					Instance *inst = MainScene.I[kv.second];
 					auto dit = byModel.find(inst->Mid);
 					if(dit == byModel.end()) {
 						continue;
@@ -2735,11 +2737,11 @@ class Castlescape : public BaseProject {
 
 		// ---- 7. Materials, lights and cube-shadow slots ----
 		// Surface parameters for the BRDF, one per model.
-		materials.init(&SC, "assets/scenes/materials.json");
+		materials.init(&MainScene, "assets/scenes/materials.json");
 
 		// After Scene::init: a light can be anchored to an instance and needs
 		// that instance's world matrix.
-		sceneLights.init(&SC, "assets/scenes/lights.json");
+		sceneLights.init(&MainScene, "assets/scenes/lights.json");
 
 		// After sceneLights.init(): needs the resolved world position of every
 		// shadow-casting light, which instance+offset lights only have once
@@ -3042,7 +3044,7 @@ class Castlescape : public BaseProject {
 		glm::vec4 &s = modelSphereCache[mid];
 		if(s.w < 0.0f) {
 			Collider fit;
-			fit.fitAABB(SC.M[mid]);
+			fit.fitAABB(MainScene.M[mid]);
 			const AABBextents E = fit.getExtents();	// fit's Wm is identity, so local space
 			const glm::vec3 centre((E.xMin + E.xMax) * 0.5f,
 								   (E.yMin + E.yMax) * 0.5f,
@@ -3095,8 +3097,8 @@ class Castlescape : public BaseProject {
 		// face is being drawn), and only when there's anything to draw.
 		if(slotOccupied && faceMask != 0) {
 			shadowCasterScratch.clear();
-			for(int j = 0; j < SC.TI[0].InstanceCount; j++) {
-				Instance &inst = SC.TI[0].I[j];
+			for(int j = 0; j < MainScene.TI[0].InstanceCount; j++) {
+				Instance &inst = MainScene.TI[0].I[j];
 				if(!materials.forModel(inst.Mid).castsShadow) {
 					continue;
 				}
@@ -3167,9 +3169,9 @@ class Castlescape : public BaseProject {
 					}
 					Instance &inst = *sc.inst;
 					inst.DS[0][1]->bind(commandBuffer, PShadowCube, 0, currentImage);
-					SC.M[inst.Mid]->bind(commandBuffer);
+					MainScene.M[inst.Mid]->bind(commandBuffer);
 					vkCmdDrawIndexed(commandBuffer,
-									 static_cast<uint32_t>(SC.M[inst.Mid]->indices.size()), 1, 0, 0, 0);
+									 static_cast<uint32_t>(MainScene.M[inst.Mid]->indices.size()), 1, 0, 0, 0);
 				}
 			}
 
@@ -3579,9 +3581,9 @@ class Castlescape : public BaseProject {
 
 		// Here you define the data set
 		// If the scene has textures coming from a render pass, the corresponding element of the technique must be
-		// updated before calling SC.pipelinesAndDescriptorSetsInit();
+		// updated before calling MainScene.pipelinesAndDescriptorSetsInit();
 
-		SC.pipelinesAndDescriptorSetsInit();
+		MainScene.pipelinesAndDescriptorSetsInit();
 		txt.pipelinesAndDescriptorSetsInit();
 		uiQuad.pipelinesAndDescriptorSetsInit();
 		crosshair.pipelinesAndDescriptorSetsInit();
@@ -3625,7 +3627,7 @@ class Castlescape : public BaseProject {
 		DSblurV.cleanup();
 		DScomposite.cleanup();
 
-		SC.pipelinesAndDescriptorSetsCleanup();
+		MainScene.pipelinesAndDescriptorSetsCleanup();
 		txt.pipelinesAndDescriptorSetsCleanup();
 		uiQuad.pipelinesAndDescriptorSetsCleanup();
 		crosshair.pipelinesAndDescriptorSetsCleanup();
@@ -3676,11 +3678,11 @@ class Castlescape : public BaseProject {
 		RPblurV.destroy();
 		RPcomposite.destroy();
 
-		// Before SC.localCleanup(), which frees scene.json's colliders that colliderSet also points at.
+		// Before MainScene.localCleanup(), which frees scene.json's colliders that colliderSet also points at.
 		colliderSet.cleanup();
 		allColliders.clear();
 
-		SC.localCleanup();
+		MainScene.localCleanup();
 		txt.localCleanup();
 		uiQuad.localCleanup();
 		crosshair.localCleanup();
@@ -3716,7 +3718,7 @@ class Castlescape : public BaseProject {
 		RP.begin(commandBuffer, currentImage);
 		// The dungeon only: the Spectral depth prepass was unhooked from this
 		// walk in localInit() so the flames can slot in ahead of it.
-		SC.populateCommandBuffer(commandBuffer, 0, currentImage);
+		MainScene.populateCommandBuffer(commandBuffer, 0, currentImage);
 
 		// Flames before the ghosts: they depth-test against the dungeon but
 		// land before any ghost depth, so a flame poking into a ghost's body
@@ -3726,27 +3728,27 @@ class Castlescape : public BaseProject {
 		// Ghost depth prepass, by hand: nearest ghost-surface depth only
 		// (LESS, no colour), so the colour pass keeps just that layer.
 		PspectralDepth.bind(commandBuffer);
-		for(int i = 0; i < SC.TI[1].InstanceCount; i++) {
-			Instance &inst = SC.TI[1].I[i];
-			SC.M[inst.Mid]->bind(commandBuffer);
+		for(int i = 0; i < MainScene.TI[1].InstanceCount; i++) {
+			Instance &inst = MainScene.TI[1].I[i];
+			MainScene.M[inst.Mid]->bind(commandBuffer);
 			for(int j = 0; j < inst.NDs[0]; j++) {
 				inst.DS[0][j]->bind(commandBuffer, PspectralDepth, j, currentImage);
 			}
 			vkCmdDrawIndexed(commandBuffer,
-							 static_cast<uint32_t>(SC.M[inst.Mid]->indices.size()), 1, 0, 0, 0);
+							 static_cast<uint32_t>(MainScene.M[inst.Mid]->indices.size()), 1, 0, 0, 0);
 		}
 
 		// Ghosts' colour pass, by hand: same instances through Pspectral;
 		// LESS_OR_EQUAL against the prepass keeps only the nearest layer per pixel.
 		Pspectral.bind(commandBuffer);
-		for(int i = 0; i < SC.TI[1].InstanceCount; i++) {
-			Instance &inst = SC.TI[1].I[i];
-			SC.M[inst.Mid]->bind(commandBuffer);
+		for(int i = 0; i < MainScene.TI[1].InstanceCount; i++) {
+			Instance &inst = MainScene.TI[1].I[i];
+			MainScene.M[inst.Mid]->bind(commandBuffer);
 			for(int j = 0; j < inst.NDs[0]; j++) {
 				inst.DS[0][j]->bind(commandBuffer, Pspectral, j, currentImage);
 			}
 			vkCmdDrawIndexed(commandBuffer,
-							 static_cast<uint32_t>(SC.M[inst.Mid]->indices.size()), 1, 0, 0, 0);
+							 static_cast<uint32_t>(MainScene.M[inst.Mid]->indices.size()), 1, 0, 0, 0);
 		}
 
 		// After the scene (so castle depth masks this quad to the arch) and the flames.
@@ -4483,15 +4485,15 @@ class Castlescape : public BaseProject {
 		}
 
 		// Over every technique, not just the first, since all instances need the same per-object uniforms.
-		for(int techniqueId = 0; techniqueId < SC.TechniqueInstanceCount; techniqueId++) {
-			for(int instanceId = 0; instanceId < SC.TI[techniqueId].InstanceCount; instanceId++) {
-				glm::mat4 renderWm = SC.TI[techniqueId].I[instanceId].Wm;
+		for(int techniqueId = 0; techniqueId < MainScene.TechniqueInstanceCount; techniqueId++) {
+			for(int instanceId = 0; instanceId < MainScene.TI[techniqueId].InstanceCount; instanceId++) {
+				glm::mat4 renderWm = MainScene.TI[techniqueId].I[instanceId].Wm;
 				// Geometry visibility cull: an instance outside radius+cone
 				// gets an invertible off-map translate (not a zero matrix,
 				// since nMat is its inverse-transpose); the collider is
 				// untouched. Tested as a bounding sphere from collider extents
 				// (this pack isn't centre-pivoted), else GEOM_CULL_FALLBACK_RADIUS.
-				Instance &cullInst = SC.TI[techniqueId].I[instanceId];
+				Instance &cullInst = MainScene.TI[techniqueId].I[instanceId];
 				glm::vec3 instPos = glm::vec3(renderWm[3]);
 				float instRadius = GEOM_CULL_FALLBACK_RADIUS;
 				if(cullInst.C != nullptr) {
@@ -4517,8 +4519,8 @@ class Castlescape : public BaseProject {
 				// By Mid rather than by name, so no string hashing per frame;
 				// forInstance also checks Iid for a per-instance override (the
 				// three door keys, one "key" model shaded as three metals).
-				const Material &m = materials.forInstance(SC.TI[techniqueId].I[instanceId].Iid,
-														 SC.TI[techniqueId].I[instanceId].Mid);
+				const Material &m = materials.forInstance(MainScene.TI[techniqueId].I[instanceId].Iid,
+														 MainScene.TI[techniqueId].I[instanceId].Mid);
 				ubo.mS = m.specularColor;
 				ubo.roughness = m.roughness;
 				ubo.F0 = m.F0;
@@ -4529,7 +4531,7 @@ class Castlescape : public BaseProject {
 				ubo.metallic = m.metallic;
 				ubo.time = simTime;
 
-				Instance &inst = SC.TI[techniqueId].I[instanceId];
+				Instance &inst = MainScene.TI[techniqueId].I[instanceId];
 				// Gazed instance (plus lock hardware) glows; other instances
 				// of the same model don't, hence per-instance not per-Material.
 				bool glow = false;
