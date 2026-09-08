@@ -290,7 +290,7 @@ class Castlescape : public BaseProject {
 	// Bitmask of stale FACES per slot (not per slot) since a cube map is six
 	// independent images and redrawing all six to fix one is mostly clear cost.
 	std::array<uint8_t, NUM_SHADOW_CUBES> pendingFaceMask{};
-	static constexpr uint8_t ALL_CUBE_FACES = 0x3F;
+	static constexpr uint8_t ALL_CUBE_FACES = 0x3F; // 6 bit on -> 111111 = 63
 
 	// =====================================================================
 	// Cube shadow maps: per-frame submission
@@ -3411,12 +3411,12 @@ class Castlescape : public BaseProject {
 		VkMemoryBarrier memBarrier{};
 		memBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
 		memBarrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
-								   | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+								   | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT; // Written before | written later
 		memBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 		vkCmdPipelineBarrier(cb,
 							 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
-								 | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-							 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+								 | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, // srcStage: writing happened (faces rendering)
+							 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, // dstStage: where writing will happen (shaders scene rendering)
 							 0, 1, &memBarrier, 0, nullptr, 0, nullptr);
 
 		if(vkEndCommandBuffer(cb) != VK_SUCCESS) {
