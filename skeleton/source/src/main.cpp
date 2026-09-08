@@ -3438,17 +3438,16 @@ class Castlescape : public BaseProject {
 
 	// Builds every torch's CubeShadowMap (colour cube image + face views +
 	// per-torch depth + the 36 face framebuffers) plus the shared sampler.
+	//
 	// Called right after RPShadowCubeCompat.create(), since the framebuffers
 	// are built against its .renderPass handle. Lives here, not in
 	// CubeShadowMap.hpp, because createImage/createImageView/findDepthFormat
 	// are protected members of BaseProject.
 	void createCubeShadowMaps() {
 		// Shared by every torch, no mipmaps (a shadow lookup always samples level 0).
-		// IMPORTANT: NEAREST, not LINEAR -- these cubes store a distance, and
-		// averaging four distances across a silhouette returns one that
-		// belongs to neither surface, causing false shadowing/unshadowing that
-		// used to be papered over with a 0.35 grazing bias (and let light leak
-		// through closed doors). Nearest keeps the comparison honest.
+		// IMPORTANT: NEAREST, not LINEAR: these cubes store a distance, and averaging
+		// distances across a silhouette invents a value that belongs to no
+		// real surface (e.g. light leaking through closed doors).
 		cubeShadowSampler.init(this, VK_FILTER_NEAREST, VK_FILTER_NEAREST,
 								VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
 								VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
@@ -3461,7 +3460,7 @@ class Castlescape : public BaseProject {
 		for(int i = 0; i < NUM_SHADOW_CUBES; i++) {
 			CubeShadowMap &c = torchCube[i];
 
-			// CUBE_COMPATIBLE_BIT lets the cube view below treat its 6 layers as faces, not an array.
+			// CUBE_COMPATIBLE_BIT: 6 layers -> read as cube faces, not as an array.
 			createImage(SHADOW_MAP_RES, SHADOW_MAP_RES, 1, 6,
 						VK_SAMPLE_COUNT_1_BIT, colorFmt, VK_IMAGE_TILING_OPTIMAL,
 						VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -3469,7 +3468,7 @@ class Castlescape : public BaseProject {
 						VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 						c.colorImage, c.colorMemory);
 
-			// The one view CookTorrance.frag's samplerCube reads.
+			// What CookTorrance.frag's samplerCube READS (in one element). (no WRITES)
 			c.cubeView = createImageView(c.colorImage, colorFmt, VK_IMAGE_ASPECT_COLOR_BIT,
 										  1, VK_IMAGE_VIEW_TYPE_CUBE, 6);
 
@@ -3505,7 +3504,7 @@ class Castlescape : public BaseProject {
 			// The 6 real framebuffers: colour face view + the shared depth
 			// view, against RPShadowCubeCompat.renderPass.
 			for(int face = 0; face < 6; face++) {
-				VkImageView attachments[2] = {c.faceViews[face], c.depthView};
+				VkImageView attachments[2] = {c.faceViews[face], c.depthView}; // attachment: {color, depth}
 
 				VkFramebufferCreateInfo fbInfo{};
 				fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
@@ -3515,7 +3514,7 @@ class Castlescape : public BaseProject {
 				fbInfo.width = SHADOW_MAP_RES;
 				fbInfo.height = SHADOW_MAP_RES;
 				fbInfo.layers = 1;
-				VkResult result = vkCreateFramebuffer(device, &fbInfo, nullptr, &c.faceFramebuffers[face]);
+				VkResult result = vkCreateFramebuffer(device, &fbInfo, nullptr, &c.faceFramebuffers[face]); // New frameBuffer each time
 				if(result != VK_SUCCESS) {
 					PrintVkError(result);
 					throw std::runtime_error("failed to create cube shadow face framebuffer!");
