@@ -1,0 +1,38 @@
+title Il trucco delle shadow map delle torce (versione semplice)
+
+participant "Il nostro codice\n(main.cpp)" as Noi
+participant "Starter\n(il framework)" as Starter
+participant "Scheda video\n(driver Vulkan)" as GPU
+participant "Le 6 'foto'\ndella torcia" as Facce
+
+note over Noi,Facce: ===== PROBLEMA =====
+note over Noi: Per disegnare l'ombra di una torcia servono\n6 "foto" della scena (una per direzione:\nsu, giù, avanti, indietro, destra, sinistra).\nStarter sa fare UNA foto alla volta,\nnon sa organizzare "6 foto che formano un cubo".
+
+note over Noi,Facce: ===== PASSO 1: procurarsi un "permesso di stampa" =====
+note over Noi: Per scattare una foto e salvarla,\nla scheda video vuole un "permesso" ufficiale\n(un oggetto che dice: formato, dimensione, come salvarla).\nQuesto permesso normalmente lo crea Starter internamente,\nma non lo dà mai in mano al nostro codice.
+
+Noi->Starter: "Creami un permesso di stampa completo"\n(gli passiamo dati finti, tanto\nnon li useremo mai davvero)
+Starter->GPU: (internamente) crea il permesso
+GPU-->Starter: ecco il permesso (un codice/ID)
+Starter-->Noi: eccoti l'oggetto risultante
+
+note over Noi: A noi interessa SOLO il codice/ID del permesso.\nTutto il resto di quell'oggetto (la foto finta che\nStarter si è preparato) lo buttiamo via, non lo useremo mai.
+
+note over Noi,Facce: ===== PASSO 2: costruire le 6 foto vere a mano =====
+note over Noi: Ora che abbiamo il codice del "permesso",\npossiamo usarlo per creare le 6 foto vere,\nma dobbiamo farlo a mano, chiamata per chiamata,\nperché Starter non ha una funzione pronta per "6 foto a cubo".
+
+loop per ognuna delle 6 direzioni
+  Noi->GPU: "Preparami lo spazio per questa foto,\nusando il permesso ottenuto al passo 1"
+  GPU-->Facce: spazio pronto per la foto in questa direzione
+end
+
+note over Noi,Facce: ===== PASSO 3: scattare le foto (ogni frame) =====
+loop per ognuna delle 6 direzioni, ogni fotogramma
+  Noi->GPU: "Scatta la foto: disegna tutto quello\nche la torcia illumina in questa direzione,\nsalva quanto è distante ogni oggetto dalla torcia"
+  GPU-->Facce: foto salvata (distanza torcia->oggetto)
+end
+
+note over Noi,Facce: ===== PASSO 4: usare le foto per disegnare l'ombra =====
+Noi->Facce: "Guarda in che direzione sto illuminando\nquesto pezzo di scena, prendi la foto giusta\ntra le 6, e dimmi quant'era distante l'oggetto\nregistrato lì"
+Facce-->Noi: distanza registrata
+note over Noi: Se l'oggetto che sto disegnando ORA è più lontano\ndella distanza registrata nella foto,\nvuol dire che c'è qualcosa in mezzo -> è in ombra.

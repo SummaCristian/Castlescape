@@ -1,0 +1,58 @@
+title Cube Shadow Map Workaround (Torce)
+
+participant "main.cpp\n(VulkanProject : BaseProject)" as Main
+participant "RPShadowCubeCompat\n(Starter::RenderPass)" as RP
+participant "BaseProject\n(Starter, friend di RenderPass)" as Base
+participant "Vulkan Driver" as VK
+participant "torchCube[i]\n(CubeShadowMap)" as Cube
+participant "PShadowCube\n(Starter::Pipeline)" as Pipe
+participant "CookTorrance.frag" as Frag
+
+note over Main,Frag: ===== FASE 1: SETUP (una tantum, initVulkan) =====
+
+Main->RP: RPShadowCubeCompat.init(this, RES, RES, -1,\n&cubeShadowAtt, &cubeShadowDeps, true)
+note right of RP: attachment/immagine costruiti qui\nnon verranno MAI usati davvero
+Main->RP: RPShadowCubeCompat.create()
+RP->Base: bp->createRenderPass()\n(privato, ma RP è friend class)
+Base->VK: vkCreateRenderPass(...)
+VK-->Base: VkRenderPass handle
+Base-->RP: memorizza in this->renderPass
+RP-->Main: ritorna (handle salvato in\nRPShadowCubeCompat.renderPass)
+
+note over Main: <<createCubeShadowMaps()>>
+loop per ogni torcia i in NUM_SHADOW_CUBES
+  Main->Base: createImage(RES,RES, layers=6,\nCUBE_COMPATIBLE_BIT, ...)
+  Base->VK: vkCreateImage + vkAllocateMemory
+  VK-->Cube: colorImage, colorMemory
+  Main->Base: createImageView(colorImage, ...,\nVIEW_TYPE_CUBE, layerCount=6)
+  Base-->Cube: cubeView (per samplerCube)
+  loop per ogni faccia f in 0..5
+    Main->VK: vkCreateImageView\n(VIEW_TYPE_2D, baseArrayLayer=f)
+    VK-->Cube: faceViews[f]
+  end
+  Main->Base: createImage(RES,RES, depthFmt)\n+ createImageView(depthFmt)
+  Base-->Cube: depthImage, depthView (condiviso dalle 6 facce)
+  loop per ogni faccia f in 0..5
+    Main->VK: vkCreateFramebuffer(\n  renderPass = RPShadowCubeCompat.renderPass,\n  attachments = [faceViews[f], depthView])
+    note right of VK: qui si "ruba" l'handle di RP:\nil framebuffer punta a facce vere,\nnon all'attachment fittizio di RP
+    VK-->Cube: faceFramebuffers[f]
+  end
+end
+
+note over Main,Frag: ===== FASE 2: RENDER LOOP (ogni frame, per torcia) =====
+
+loop per ogni torcia t con shadow attivo
+  loop per ogni faccia f in 0..5 (se in faceMask)
+    Main->VK: vkCmdBeginRenderPass(\n  renderPass = RPShadowCubeCompat.renderPass,\n  framebuffer = torchCube[t].faceFramebuffers[f])
+    Main->Pipe: PShadowCube.bind(commandBuffer)
+    Main->VK: vkCmdDraw (occluders, matrice vista f)
+    note right: fragment shader scrive\nlength(fragPos - lightPos)\nnel color attachment R32_SFLOAT
+    Main->VK: vkCmdEndRenderPass
+  end
+end
+
+note over Main,Frag: ===== FASE 3: SAMPLING (main pass, ogni frame) =====
+
+Main->Frag: bind torchCube[t].cubeView come samplerCube\n(set DSLshadowSample)
+Frag->Frag: texture(cubeShadow, dirLuceFrammento)\n-> distanza memorizzata
+Frag->Frag: confronto con distanza reale\n+ bias costante -> shadowFactor
