@@ -617,7 +617,6 @@ class Castlescape : public BaseProject {
 		// Flame switches, read by flameBurning(). Not in SceneLights: flame
 		// lights are appended into gubo directly, never via lights.json.
 		bool roomTorchesEnabled = true;
-		bool handTorchEnabled = true;   // off also hides the held torch model
 
 		// Lighting debug views, resolved into gubo.debugFlags for CookTorrance.frag.
 		bool unlit = false;          // albedo only, no lighting
@@ -1080,18 +1079,9 @@ class Castlescape : public BaseProject {
 	// UNLIT; lit from a burning wall torch with [E]. hasBurningTorch() reads
 	// its `burning`.
 	int handFlameIdx = -1;
-	// True once the torch has been picked up. Until then it sits at its floor
-	// pose as a pickup target, no flame or hand model is drawn, and
-	// hasBurningTorch() is false. restartRun() clears it.
-	bool handTorchCollected = false;
-	// The torch's authored floor pose, captured in localInit before the
-	// held-torch code can overwrite Wm. For the gaze check on the ground and
-	// to put it back.
-	glm::mat4 handTorchSpawnWm{1.0f};
-	glm::vec3 handTorchWorldPos{0.0f};
-	// True when the crosshair is on the floor torch within reach this
-	// frame. Mirrors nearbyPickup; set every frame in GameLogic().
-	bool nearbyHandTorch = false;
+	// True once the torch is in the player's hand. Starts true: the player
+	// spawns already holding it, unlit. restartRun() resets it back to true.
+	bool handTorchCollected = true;
 	// Torch position relative to the eye, camera space. Low and close, so the
 	// handle crops off the bottom and only the torch shows, like a viewmodel.
 	static constexpr glm::vec3 HAND_TORCH_OFFSET = glm::vec3(0.5f, -0.35f, -1.1f);
@@ -1253,18 +1243,9 @@ class Castlescape : public BaseProject {
 		return best;
 	}
 
-	// The floor torch, before pickup: mirrors findGazedPickup for the one
-	// prop that doesn't ride the Pickup/keyRing machinery.
-	bool findGazedHandTorch(const glm::vec3 &front) const {
-		if(handTorchInst == nullptr || handTorchCollected) return false;
-		float cosAngle;
-		return isGazedAt(front, handTorchWorldPos, PICKUP_LOOK_DISTANCE,
-						 PICKUP_AIM_RADIUS, cosAngle);
-	}
-
 	// True if a flame is lit and should cast light, sparks, glare and shadows.
 	bool flameBurning(const TorchFlame &tf) const {
-		if(tf.heldByCamera) return cheats.handTorchEnabled && tf.burning;
+		if(tf.heldByCamera) return tf.burning;
 		if(tf.isCandle)     return tf.burning;
 		return cheats.roomTorchesEnabled;
 	}
@@ -1272,7 +1253,6 @@ class Castlescape : public BaseProject {
 	// True if the player is holding a torch that is lit and can light other torches.
 	bool hasBurningTorch() const {
 		return handTorchInst != nullptr && handTorchCollected &&
-			   cheats.handTorchEnabled &&
 			   handFlameIdx >= 0 && torchFlames[handFlameIdx].burning;
 	}
 
@@ -2533,19 +2513,14 @@ class Castlescape : public BaseProject {
 		}
 
 		// ---- 6. Torches, candles and flames ----
-		// Held torch. Starts on the floor at its authored pose; picked up with
-		// [E], after which GameLogic rebuilds its Wm from the camera.
+		// Held torch. Spawns already in the player's hand, unlit; GameLogic
+		// rebuilds its Wm from the camera every frame.
 		{
 			auto it = MainScene.InstanceIds.find("handTorch");
 			if(it == MainScene.InstanceIds.end()) {
 				std::cout << "Hand torch instance 'handTorch' not found, skipping\n";
 			} else {
 				handTorchInst = MainScene.I[it->second];
-				handTorchSpawnWm = handTorchInst->Wm;
-				// Lifted off the instance origin (below the mesh, torch lies
-				// on its side) so the crosshair lands on the torch body.
-				handTorchWorldPos = glm::vec3(handTorchInst->Wm[3]) +
-									glm::vec3(0.0f, 0.35f, 0.0f);
 			}
 		}
 
@@ -2750,10 +2725,9 @@ class Castlescape : public BaseProject {
 		hud.addToggle("Ghosts Can Catch", &cheats.ghostsCanCatch);
 
 		// Lighting rows: sources first, then shading. Ambient points into
-		// sceneLights (which owns it); Torches/Holding Torch into cheats
-		// (flame lights never go through SceneLights).
+		// sceneLights (which owns it); Torches into cheats (flame lights
+		// never go through SceneLights).
 		hud.addToggle("Torches", &cheats.roomTorchesEnabled);
-		hud.addToggle("Holding Torch", &cheats.handTorchEnabled);
 		hud.addToggle("Torch Bounce", &sceneLights.bounceEnabled);
 		hud.addToggle("Shadows", &cheats.shadowsEnabled);
 		hud.addToggle("Specular", &cheats.specularEnabled);
@@ -3050,7 +3024,7 @@ class Castlescape : public BaseProject {
 				// The held torch's mesh: an occluder on the floor, not once in
 				// hand (no arm/body to anchor a shadow of its own mesh, it
 				// would look like the torch floating mid-air).
-				if(&inst == handTorchInst && handTorchCollected && cheats.handTorchEnabled) {
+				if(&inst == handTorchInst && handTorchCollected) {
 					continue;
 				}
 				ShadowCaster sc;
@@ -3161,8 +3135,7 @@ class Castlescape : public BaseProject {
 
 			// Held torch in hand jumps every frame but isn't drawn as an
 			// occluder; skip it here, the pickup-frame jump is handled by "held a mover, now doesn't".
-			if(movingOccluders[m] == handTorchInst && handTorchCollected
-			   && cheats.handTorchEnabled) {
+			if(movingOccluders[m] == handTorchInst && handTorchCollected) {
 				movingOccluderWm[m] = wm;
 				movingOccluderWasMoving[m] = false;
 				continue;
@@ -4537,14 +4510,11 @@ class Castlescape : public BaseProject {
 			static std::string interactPromptText;
 			bool showInteractPrompt = runState == RunState::Running &&
 									  (nearbyDoor >= 0 || nearbyPickup >= 0 ||
-									   nearbyCandle >= 0 || nearbyWallTorch >= 0 ||
-									   nearbyHandTorch);
+									   nearbyCandle >= 0 || nearbyWallTorch >= 0);
 			// Door prompts split four ways: openable padlock, unopenable
 			// (names the key by lockLabel), wrong side (no key visible), plain door.
 			std::string wantedPromptText;
-			if(nearbyHandTorch) {
-				wantedPromptText = "[E] Pick up torch";
-			} else if(nearbyPickup >= 0) {
+			if(nearbyPickup >= 0) {
 				wantedPromptText = "[E] Pick up";
 			} else if(nearbyWallTorch >= 0) {
 				wantedPromptText = "[E] Light your torch";
@@ -4855,8 +4825,8 @@ class Castlescape : public BaseProject {
 		keyRing.clear();
 		keyLowerIdx = -1;	// else a key mid-fall keeps drawing off camera before being parked
 
-		// Torch back on the floor, every lit candle back out; Wm restored next frame.
-		handTorchCollected = false;
+		// Torch stays in hand (unlit), every lit candle back out; Wm restored next frame.
+		handTorchCollected = true;
 		for(TorchFlame &tf : torchFlames) {
 			tf.burning = tf.spawnBurning;
 			tf.ignitionScale = tf.spawnBurning ? 1.0f : 0.0f;	// snap to rest, not mid-spring
@@ -4867,7 +4837,6 @@ class Castlescape : public BaseProject {
 		nearbyPickup = -1;
 		nearbyCandle = -1;
 		nearbyWallTorch = -1;
-		nearbyHandTorch = false;
 		gazedInstance = nullptr;
 		exitOpenFrac = 0.0f;	// the way out closes with the rest of the doors, taking its daylight/whiteout
 		escapeFlash = 0.0f;
@@ -5182,24 +5151,10 @@ class Castlescape : public BaseProject {
 				}
 			}
 
-			// The floor torch: standard pickup tolerances.
-			nearbyHandTorch = false;
-			if(findGazedHandTorch(front)) {
-				float dx = camPos.x - handTorchWorldPos.x;
-				float dy = camPos.y - handTorchWorldPos.y;
-				float dz = camPos.z - handTorchWorldPos.z;
-				if(std::sqrt(dx * dx + dy * dy + dz * dz) < PICKUP_INTERACT_RADIUS) {
-					nearbyHandTorch = true;
-				}
-			}
-
 			// Single targeted instance for the focus glow, in E-key priority order
 			gazedInstance = nullptr;
 			gazedInteractionDisabled = false;
-			if(nearbyHandTorch) {
-				gazedInstance = handTorchInst;
-				gazedGlowKind = GlowKind::Pickup;
-			} else if(nearbyPickup >= 0) {
+			if(nearbyPickup >= 0) {
 				gazedInstance = pickups[nearbyPickup].inst;
 				gazedGlowKind = GlowKind::Pickup;
 			} else if(nearbyWallTorch >= 0) {
@@ -5220,36 +5175,7 @@ class Castlescape : public BaseProject {
 
 			bool interactKey = glfwGetKey(window, GLFW_KEY_E);
 			if(interactKey && !interactKeyWasPressed) {
-				if(nearbyHandTorch) {
-					// Into the hand, still unlit; next frame's updateUniformBuffer() rebuilds Wm off the camera.
-					handTorchCollected = true;
-					torchRaiseElapsed = 0.0f;	// restart the raise
-					std::cout << "[torch] picked up hand torch\n";
-					nearbyHandTorch = false;
-					gazedInstance = nullptr;
-
-					// Floor object disappear -> sweep occupied-slot faces once (shadow): queueMoverCubeSlotRenders() can miss it if too far.
-
-					{
-						const glm::vec4 &local = modelSphere(handTorchInst->Mid);
-						const glm::vec3 centre = glm::vec3(handTorchSpawnWm * glm::vec4(glm::vec3(local), 1.0f));
-						const float scale = std::max({glm::length(glm::vec3(handTorchSpawnWm[0])),
-													  glm::length(glm::vec3(handTorchSpawnWm[1])),
-													  glm::length(glm::vec3(handTorchSpawnWm[2]))});
-						const float r = local.w * scale;
-						for(int t = 0; t < HAND_TORCH_SHADOW_INDEX; t++) {
-							if(!cubeSlotOccupied(t)) {
-								continue;
-							}
-							const glm::vec3 rel = centre - torchLightPos[t];
-							for(int face = 0; face < 6; face++) {
-								if(sphereInCubeFace(rel, r, face)) {
-									pendingFaceMask[t] |= (uint8_t)(1u << face);
-								}
-							}
-						}
-					}
-				} else if(nearbyPickup >= 0) {
+				if(nearbyPickup >= 0) {
 					Pickup &p = pickups[nearbyPickup];
 					p.collected = true;
 					// No visibility flag -> "removed" means parked below the
@@ -5714,7 +5640,7 @@ class Castlescape : public BaseProject {
 			bool tuckActive = cheats.collisionEnabled;
 
 			float torchTarget = 1.0f;
-			if(tuckActive && handTorchInst != nullptr && handTorchCollected && cheats.handTorchEnabled) {
+			if(tuckActive && handTorchInst != nullptr && handTorchCollected) {
 				torchTarget = handFreeReach(camWm, HAND_TORCH_OFFSET, HAND_TUCK_TORCH_PAD);
 			}
 			advanceReach(handTorchReach, torchTarget, deltaT);
@@ -5728,13 +5654,9 @@ class Castlescape : public BaseProject {
 			advanceReach(handKeyReach, keyTarget, deltaT);
 		}
 
-		// Held torch: fixed camera-local offset once picked up; before that,
-		// its authored floor pose. With "Holding Torch" off it's parked below the map.
-		bool torchInHand = handTorchCollected && cheats.handTorchEnabled;
-		if(handTorchInst != nullptr && !torchInHand) {
-			handTorchInst->Wm = (!handTorchCollected && cheats.handTorchEnabled)
-				? handTorchSpawnWm
-				: glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
+		// Held torch: fixed camera-local offset.
+		if(handTorchInst != nullptr && !handTorchCollected) {
+			handTorchInst->Wm = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
 		} else if(handTorchInst != nullptr) {
 			float bobLateral = sinf(walkBobPhase) * WALK_BOB_LATERAL * walkBobBlend;
 			float bobVertical = sinf(walkBobPhase * 2.0f) * WALK_BOB_VERTICAL * walkBobBlend;
