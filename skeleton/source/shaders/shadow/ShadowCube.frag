@@ -19,5 +19,5 @@ layout(location = 0) in vec3 inWorldPos;
 layout(location = 0) out float outDistance;
 
 void main() {
-	outDistance = length(inWorldPos - cubeData.lightPos.xyz);
+	outDistance = length(inWorldPos - cubeData.lightPos.xyz); // distance from light to nearest occluder here (in the middle -> shadow)
 }

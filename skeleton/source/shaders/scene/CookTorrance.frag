@@ -197,8 +197,8 @@ float shadowFromCube(int cubeIndex, vec3 pos, vec3 normal, vec3 lightPos, float 
     vec3 d3 = toFrag + tapRadius * (-1.00 * tangent + 0.33 * bitangent);
 
     // One `dist` shared by all four taps: error is negligible vs. the bias.
-    vec4 gaps = vec4(dist) - sampleShadowCube4(cubeIndex, d0, d1, d2, d3);
-    vec4 lit = vec4(1.0) - clamp((gaps - vec4(bias)) / softEdge, 0.0, 1.0);
+    vec4 gaps = vec4(dist) - sampleShadowCube4(cubeIndex, d0, d1, d2, d3); // Read texture from shadowCube.frag (binded)
+    vec4 lit = vec4(1.0) - clamp((gaps - vec4(bias)) / softEdge, 0.0, 1.0); // per-tap: 1 lit, 0 shadowed, soft in between
 
     return dot(lit, vec4(0.25));
 }
@@ -446,7 +446,8 @@ void main() {
 
         vec3 lightDir = lightDirection(gubo.lights[i], fragPos);
         float normalDotLight = clamp(dot(normal, lightDir), 0.0, 1.0); // Cosine light
-        float vis = shadowFactor(gubo.lights[i].shadowIndex, gubo.lights[i].type, fragPos, normal, gubo.lights[i].pos, normalDotLight); // Light visibility from this point (clamp)
+        // shadow: 1 lit, 0 in shadow !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        float vis = shadowFactor(gubo.lights[i].shadowIndex, gubo.lights[i].type, fragPos, normal, gubo.lights[i].pos, normalDotLight);
         directLighting += radiance
             * BRDF(normal, lightDir, viewDir, diffuseColor, specularColorWithGrime, roughnessWithGrime, ubo.F0, diffuseShare)
             * vis;
