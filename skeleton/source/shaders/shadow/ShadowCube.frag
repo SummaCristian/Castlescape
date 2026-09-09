@@ -9,9 +9,8 @@
 // across a face and again on the adjacent one).
 //
 // The distance stored is raw, with NO bias folded in. A slope-scaled bias
-// here would be invisible downstream -- including to LIGHT_DEBUG_SHADOW_GAP,
-// which reads the stored value -- so it would hide the artifact it caused.
-// A shadow map should store a measurement; slack belongs where it can be
+// here would be invisible downstream, hiding the artifact it caused. A
+// shadow map should store a measurement; slack belongs where it can be
 // seen. Acne is handled upstream instead, by culling FRONT faces so a lit
 // surface is never in its own map (PShadowCube.setCullMode() in main.cpp).
 

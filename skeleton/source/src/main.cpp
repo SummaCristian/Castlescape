@@ -628,18 +628,11 @@ class Castlescape : public BaseProject {
 		bool shadowsEnabled = true;  // off forces shadowFactor() to 1 (shading vs geometry diagnostic)
 
 		// Geometry overlays (DebugLines.hpp).
-		bool showLightGizmos = false;
-		bool showShadowFrustums = false;
 		bool showColliders = false;     // wireframe box per collider/ramp quad
 		// Third-person spectator view; visibility culls still run from the real
 		// first-person eye, so the cull boundary becomes visible from outside.
 		bool debugCam = false;
 		bool showLightHeatmap = false;  // recolor surfaces by incoming light intensity
-		// False-color cube-shadow diagnostic (LIGHT_DEBUG_SHADOW_GAP): green
-		// means the map says a fragment is unoccluded yet it read as shadowed
-		// upstream (stale/wrong cube data), blue means a tap genuinely found
-		// an occluder there. See LightConstants.glsl for the full legend.
-		bool showShadowGap = false;
 	} cheats;
 
 	// Numeric tuning for the movement cheats
@@ -2768,12 +2761,9 @@ class Castlescape : public BaseProject {
 		hud.addToggle("Fullbright", &cheats.unlit);
 		hud.addToggle("Show Normals", &cheats.showNormals);
 		hud.addToggle("Focus Glow", &cheats.focusGlowEnabled);
-		hud.addToggle("Light Gizmos", &cheats.showLightGizmos);
-		hud.addToggle("Shadow Frustums", &cheats.showShadowFrustums);
 		hud.addToggle("Show Colliders", &cheats.showColliders);
 		hud.addToggle("Debug Camera", &cheats.debugCam);
 		hud.addToggle("Light Heatmap", &cheats.showLightHeatmap);
-		hud.addToggle("Shadow Gap", &cheats.showShadowGap);
 
 		hud.addSlider("Render Scale", &renderScale, 0.4f, 1.0f, 0.05f,
 					  [this]() { applyRenderScaleChange(); },
@@ -4072,7 +4062,6 @@ class Castlescape : public BaseProject {
 		if(!cheats.toneMapEnabled)  gubo.debugFlags |= LIGHT_DEBUG_NO_TONEMAP;
 		if(!cheats.shadowsEnabled)  gubo.debugFlags |= LIGHT_DEBUG_NO_SHADOWS;
 		if(cheats.showLightHeatmap) gubo.debugFlags |= LIGHT_DEBUG_HEATMAP;
-		if(cheats.showShadowGap)    gubo.debugFlags |= LIGHT_DEBUG_SHADOW_GAP;
 		if(!sceneLights.bounceEnabled)  gubo.debugFlags |= LIGHT_DEBUG_NO_BOUNCE;
 
 		// Both computed further up, before the torch fire state that needs them.
@@ -4300,33 +4289,6 @@ class Castlescape : public BaseProject {
 
 		// Debug overlay (DebugLines.hpp, cheat-gated), placed here so gubo.lights[]/torchLightPos[] are current.
 		std::vector<glm::vec4> dbgPos, dbgColor;
-		if(cheats.showLightGizmos) {
-			for(int i = 0; i < gubo.lightCount; i++) {
-				const LightData &L = gubo.lights[i];
-				glm::vec4 color = glm::vec4(L.color, 1.0f);
-				if(L.type == LIGHT_DIRECT) {
-					// The sun has no position, so its gizmo is an arrow near the player, not a cross.
-					glm::vec3 anchor = eyePos + glm::vec3(0.0f, 2.0f, 0.0f);
-					glm::vec3 tip = anchor + L.dir * 3.0f;
-					DebugLines::PushLine(anchor, tip, color, dbgPos, dbgColor);
-					glm::vec3 upHint = (std::abs(L.dir.y) > 0.99f) ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
-					glm::vec3 side = glm::normalize(glm::cross(L.dir, upHint)) * 0.3f;
-					glm::vec3 back = -L.dir * 0.3f;
-					DebugLines::PushLine(tip, tip + back + side, color, dbgPos, dbgColor);
-					DebugLines::PushLine(tip, tip + back - side, color, dbgPos, dbgColor);
-				} else {
-					DebugLines::PushCross(L.pos, 0.3f, color, dbgPos, dbgColor);
-				}
-			}
-		}
-		if(cheats.showShadowFrustums) {
-			for(int t = 0; t < activeCubeShadows; t++) {
-				DebugLines::PushBox(torchLightPos[t], TORCH_SHADOW_NEAR_CONST,
-									glm::vec4(1.0f, 1.0f, 0.0f, 1.0f), dbgPos, dbgColor);
-				DebugLines::PushBox(torchLightPos[t], TORCH_SHADOW_FAR_CONST,
-									glm::vec4(1.0f, 0.5f, 0.0f, 1.0f), dbgPos, dbgColor);
-			}
-		}
 		// Collision geometry (showColliders). Read off the same list and
 		// accessors the collision loops use, so it can't drift from what
 		// blocks the player.

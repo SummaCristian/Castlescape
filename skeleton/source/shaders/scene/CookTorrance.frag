@@ -201,24 +201,6 @@ vec4 sampleShadowCube4(int idx, vec3 d0, vec3 d1, vec3 d2, vec3 d3) {
 // artefact -- light leaking through a closed door, or peter-panning where a
 // shadow detaches from its base.
 //
-// LIGHT_DEBUG_SHADOW_GAP's working state, written by shadowFromCube() and read
-// at the end of main(). Globals, not out-parameters, because the call sits
-// inside the light loop's expression. A shadow belongs to one light, so this
-// reports the one whose radiance dominates this fragment: keeping the smallest
-// gap or pinning it to the held torch both answer about the wrong light and
-// paint the frame green. dbgLast* is scratch for the current call; the loop
-// promotes it to dbg* if that light is the brightest seen so far.
-bool  dbgLastValid = false;
-float dbgLastGap = 0.0;
-float dbgLastBias = 0.0;
-float dbgLastSoft = 0.0;
-
-bool  dbgCube = false;
-float dbgGap = 0.0;
-float dbgBias = 0.0;
-float dbgSoft = 0.0;
-float dbgBestLum = -1.0;
-
 float shadowFromCube(int idx, vec3 pos, vec3 normal, vec3 lightPos, float NdotL) {
     // Depth slack: floating-point noise only. Front-face culling in the
     // capture keeps this surface out of its own map, so there is no acne left
@@ -277,13 +259,6 @@ float shadowFromCube(int idx, vec3 pos, vec3 normal, vec3 lightPos, float NdotL)
     // r^2/(2*dist), under a micrometre at three texels, far below the bias.
     vec4 gaps = vec4(dist) - sampleShadowCube4(idx, d0, d1, d2, d3);
     vec4 lit = vec4(1.0) - clamp((gaps - vec4(bias)) / softEdge, 0.0, 1.0);
-
-    // Debug scratch for this call; the light loop decides which light survives.
-    // The gap reported is the tap most willing to call this lit.
-    dbgLastValid = true;
-    dbgLastGap = min(min(gaps.x, gaps.y), min(gaps.z, gaps.w));
-    dbgLastBias = bias;
-    dbgLastSoft = softEdge;
 
     return dot(lit, vec4(0.25));
 }
@@ -611,18 +586,7 @@ void main() {
         vec3 lightDir = lightDirection(gubo.lights[i], fragPos);
         // Same clamped dot the BRDF uses; shadowFactor scales its bias by it.
         float NdotL = clamp(dot(normal, lightDir), 0.0, 1.0);
-        dbgLastValid = false;
         float vis = shadowFactor(gubo.lights[i].shadowIndex, gubo.lights[i].type, fragPos, normal, gubo.lights[i].pos, NdotL);
-        // dbg* globals: keep the cube-shadowed light contributing most radiance
-        // here -- the one whose shadow is worth looking at.
-        float dbgLum = dot(radiance, vec3(0.2126, 0.7152, 0.0722));
-        if(dbgLastValid && dbgLum > dbgBestLum) {
-            dbgBestLum = dbgLum;
-            dbgCube = true;
-            dbgGap = dbgLastGap;
-            dbgBias = dbgLastBias;
-            dbgSoft = dbgLastSoft;
-        }
         Lo += radiance
             * BRDF(normal, lightDir, viewDir, diffuseColor, mSG, roughG, ubo.F0, diffuseShare)
             * vis;
@@ -674,19 +638,6 @@ void main() {
     if(heatmap) {
         float intensity = dot(color, vec3(0.2126, 0.7152, 0.0722));
         outColor = vec4(heatmapRamp(intensity), 1.0);
-        return;
-    }
-
-    // LIGHT_DEBUG_SHADOW_GAP. After the light loop (which fills dbgGap),
-    // before the glow tail (meaningless in a false-color view).
-    if(debugOn(LIGHT_DEBUG_SHADOW_GAP)) {
-        vec3 dbg;
-        if(!dbgCube)                       dbg = vec3(0.25);
-        else if(dbgGap <= 0.0)             dbg = vec3(0.0, 1.0, 0.0);
-        else if(dbgGap <= dbgBias)         dbg = vec3(1.0, 0.0, 0.0);
-        else if(dbgGap < dbgBias + dbgSoft) dbg = vec3(1.0, 1.0, 0.0);
-        else                               dbg = vec3(0.0, 0.0, 0.4);
-        outColor = vec4(dbg, 1.0);
         return;
     }
 
