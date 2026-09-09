@@ -89,6 +89,7 @@ class HuntCycle {
 
 #ifdef HUNTCYCLE_IMPLEMENTATION
 
+// JSON array -> vec3.
 glm::vec3 HuntCycle::readVec3(const nlohmann::json &js, const glm::vec3 &fallback) {
 	if(js.size() != 3) {
 		std::cout << "HuntCycle: expected 3 values, got " << js.size()
@@ -99,6 +100,7 @@ glm::vec3 HuntCycle::readVec3(const nlohmann::json &js, const glm::vec3 &fallbac
 	return glm::vec3(js[0].get<float>(), js[1].get<float>(), js[2].get<float>());
 }
 
+// Load config + reset.
 void HuntCycle::init(const nlohmann::json &js) {
 	if(js.contains("calmDuration"))      cfg.calmDuration = js["calmDuration"].get<float>();
 	if(js.contains("warningDuration"))   cfg.warningDuration = js["warningDuration"].get<float>();
@@ -119,6 +121,7 @@ void HuntCycle::init(const nlohmann::json &js) {
 	reset();
 }
 
+// Back to Calm, blend 0.
 void HuntCycle::reset() {
 	current = HuntPhase::Calm;
 	phaseTimer = cfg.calmDuration;
@@ -130,6 +133,7 @@ void HuntCycle::reset() {
 	forceHuntWasSet = false;
 }
 
+// Switch phase, reset its timer.
 void HuntCycle::enter(HuntPhase p) {
 	current = p;
 	justChanged = true;
@@ -140,12 +144,14 @@ void HuntCycle::enter(HuntPhase p) {
 	}
 }
 
+// Force-skip Calm -> Warning.
 void HuntCycle::triggerHunt() {
 	if(current == HuntPhase::Calm) {
 		enter(HuntPhase::Warning);
 	}
 }
 
+// Per-frame tick: cheat toggle, timer, blend ramp.
 void HuntCycle::update(float deltaT) {
 	justChanged = false;
 	elapsed += deltaT;
@@ -182,14 +188,17 @@ void HuntCycle::update(float deltaT) {
 	else if(blend > target) blend = std::max(blend - step, target);
 }
 
+// base -> huntColor by blend.
 glm::vec3 HuntCycle::flameColor(const glm::vec3 &base) const {
 	return glm::mix(base, cfg.huntColor, blend);
 }
 
+// 1.0 -> huntLightScale by blend.
 float HuntCycle::lightScale() const {
 	return glm::mix(1.0f, cfg.huntLightScale, blend);
 }
 
+// Warning-only flicker, sine-based.
 float HuntCycle::warningPulse() const {
 	if(current != HuntPhase::Warning) {
 		return 1.0f;
