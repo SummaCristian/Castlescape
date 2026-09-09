@@ -37,16 +37,19 @@ vec3 softThreshold(vec3 c) {
 	soft = soft * soft / max(4.0 * post.knee, 1e-4);
 	float contribution = max(soft, br - post.threshold);
 	// Rescale by surviving brightness fraction, not flat grey, to keep hue/sat.
-	return c * (contribution / max(br, 1e-4));
+	return c * (contribution / max(br, 1e-4)); // Keep color
 }
 
 void main() {
 	// Four taps offset half a texel diagonally; bilinear averages each over a
 	// 2x2 block, giving a box downsample for 4 fetches instead of 16.
 	// Clamped half a texel in (REPEAT samplers, see BloomBlur.frag).
+
+	// 2x2
 	vec2 texelOffset = post.texelSize;
 	vec2 lo = texelOffset * 0.5;
 	vec2 hi = vec2(1.0) - lo;
+	// 4 Tap sample
 	vec3 tapTL = texture(srcTex, clamp(uv + vec2(-texelOffset.x, -texelOffset.y), lo, hi)).rgb;
 	vec3 tapTR = texture(srcTex, clamp(uv + vec2( texelOffset.x, -texelOffset.y), lo, hi)).rgb;
 	vec3 tapBL = texture(srcTex, clamp(uv + vec2(-texelOffset.x,  texelOffset.y), lo, hi)).rgb;
