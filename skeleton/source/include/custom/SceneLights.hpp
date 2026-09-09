@@ -66,28 +66,17 @@ class SceneLights {
 	bool pointEnabled = true;	// torches and candles
 	bool bounceEnabled = true;	// torch/candle bounce (LIGHT_DEBUG_NO_BOUNCE in shader)
 
-	// Forces an orbit onto static directional lights. Authored orbitSpeed wins over this.
-	bool orbitOverride = false;
-
 	private:
 	std::vector<LightData> lights;
 	std::vector<LightData> activeLights;	// filtered copy, rebuilt every update()
 	AmbientLight ambientLight;
-
-	// Animation state, index-matched with `lights`. Zero for anything static.
-	std::vector<float> orbitSpeed;	// degrees per second around world Y
-	std::vector<glm::vec3> baseDir;	// direction before any rotation
 
 	// Flicker state, index-matched with `lights`.
 	std::vector<glm::vec3> baseColor;	// color before flicker scales it
 	std::vector<bool> flickerEnabled;
 	std::vector<float> flickerStrength;	// swing from 1.0
 	std::vector<float> flickerPhase;		// per-light stagger so torches don't sync
-	float orbitAngle = 0.0f;
-
-	// orbitOverride speed/angle: fast sweep for scanning sun angles, resets on toggle-off.
-	static constexpr float DEBUG_ORBIT_SPEED = -15.0f;
-	float debugOrbitAngle = 0.0f;
+	float elapsedTime = 0.0f;				// feeds the flicker sine waves
 
 	static glm::vec3 readVec3(const nlohmann::json &js, const glm::vec3 &fallback);
 
@@ -216,9 +205,6 @@ void SceneLights::init(Scene *SC, const std::string &file) {
 		}
 
 		lights.push_back(L);
-		baseDir.push_back(L.dir);
-		orbitSpeed.push_back(l.value("orbitSpeed", 0.0f));
-
 		baseColor.push_back(L.color);
 		flickerEnabled.push_back(l.value("flicker", false));
 		flickerStrength.push_back(l.value("flickerStrength", 0.35f));
@@ -234,33 +220,12 @@ AmbientLight SceneLights::ambient() const {
 }
 
 const std::vector<LightData> &SceneLights::update(float deltaT) {
-	orbitAngle += deltaT;
-	// Ticks only while override is on, rewinds when it goes off.
-	debugOrbitAngle = orbitOverride ? debugOrbitAngle + deltaT : 0.0f;
-
-	for(size_t i = 0; i < lights.size(); i++) {
-		float speed = orbitSpeed[i];
-		float angle = orbitAngle;
-		if(speed == 0.0f) {
-			// Static unless override claims it, and only for directional lights.
-			if(!orbitOverride || lights[i].type != LIGHT_DIRECT) {
-				lights[i].dir = baseDir[i]; // restores authored direction once override drops
-				continue;
-			}
-			speed = DEBUG_ORBIT_SPEED;
-			angle = debugOrbitAngle;
-		}
-		// Tilt is baked into the authored direction; this only sweeps it around world up.
-		glm::mat4 R = glm::rotate(glm::mat4(1.0f),
-								  glm::radians(speed * angle),
-								  glm::vec3(0.0f, 1.0f, 0.0f));
-		lights[i].dir = glm::vec3(R * glm::vec4(baseDir[i], 0.0f));
-	}
+	elapsedTime += deltaT;
 
 	// Three sine waves at unrelated frequencies so the flicker doesn't visibly repeat.
 	for(size_t i = 0; i < lights.size(); i++) {
 		if(!flickerEnabled[i]) continue;
-		float t = orbitAngle + flickerPhase[i];
+		float t = elapsedTime + flickerPhase[i];
 		float n = 0.5f * std::sin(2.1f * t)
 				+ 0.3f * std::sin(4.7f * t + 1.3f)
 				+ 0.2f * std::sin(9.3f * t + 2.6f);
