@@ -10,20 +10,20 @@
 
 struct CubeShadowMap {
 	// 6-layer image + single cube view sampled with samplerCube.
-	VkImage colorImage = VK_NULL_HANDLE;
-	VkDeviceMemory colorMemory = VK_NULL_HANDLE;
-	VkImageView cubeView = VK_NULL_HANDLE;
+	VkImage colorImage = VK_NULL_HANDLE;         // the 6-layer distance image itself
+	VkDeviceMemory colorMemory = VK_NULL_HANDLE; // GPU memory backing colorImage
+	VkImageView cubeView = VK_NULL_HANDLE;       // whole-cube view (single element), bound as samplerCube in CookTorrance.frag
 
 	// One 2D view per layer: framebuffers can't attach to a cube view.
-	VkImageView faceViews[6] = {};
+	VkImageView faceViews[6] = {}; // one flat 2D view per face, what ShadowCube.frag draws into
 
 	// Z-test only, never sampled (storeOp DONT_CARE). Shared by all 6 faces, cleared each pass.
-	VkImage depthImage = VK_NULL_HANDLE;
-	VkDeviceMemory depthMemory = VK_NULL_HANDLE;
-	VkImageView depthView = VK_NULL_HANDLE;
+	VkImage depthImage = VK_NULL_HANDLE;          // scratch depth buffer, one shared by all 6 faces
+	VkDeviceMemory depthMemory = VK_NULL_HANDLE;  // GPU memory backing depthImage
+	VkImageView depthView = VK_NULL_HANDLE;       // view used only for the depth attachment
 
 	// One framebuffer per face (RPShadowCubeCompat in main.cpp).
-	VkFramebuffer faceFramebuffers[6] = {};
+	VkFramebuffer faceFramebuffers[6] = {}; // draw target for each of the 6 ShadowCube passes
 };
 
 // Vulkan cube layer order (+X,-X,+Y,-Y,+Z,-Z) + up vector per face for glm::lookAt.
