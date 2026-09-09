@@ -13,5 +13,5 @@ void main() {
 	gl_Position = vec4(inPos, 0.0, 1.0);
 
 	// Remap to 0..1; Vulkan texture origin matches NDC +Y-down, no flip needed.
-	uv = inPos * 0.5 + 0.5;
+	uv = inPos * 0.5 + 0.5; // this pixel's screen position, 0..1 (rectangle on my screen)
 }
