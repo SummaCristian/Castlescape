@@ -5247,9 +5247,9 @@ class Castlescape : public BaseProject {
 
 				// The leaf's local origin is its hinge, so opening it is one more rotation on the closed transform.
 				// Order of operations: local -> world. Door_closed_mat * rotation_mat
-				d.inst->Wm = d.baseWm * glm::rotate(glm::mat4(1.0f), glm::radians(d.angle), glm::vec3(0.0f, 1.0f, 0.0f));
+				d.inst->Wm = d.baseWm * glm::rotate(glm::mat4(1.0f), glm::radians(d.angle), glm::vec3(0.0f, 1.0f, 0.0f)); // moves the visible mesh
 				if(d.inst->C != nullptr) {
-					d.inst->C->setWorldMatrix(d.inst->Wm);
+					d.inst->C->setWorldMatrix(d.inst->Wm); // moves the collider to match; not automatic
 				}
 
 				// Chains/padlock follow the door while locked, hidden below the map once not.
