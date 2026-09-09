@@ -1,17 +1,10 @@
-// VERTEX SHADER for one FACE of a point light's cube shadow map (see
-// CubeShadowMap.hpp / PShadowCube in main.cpp). Run 6 times per torch per
-// frame, over the same occluder set Shadow.vert uses, flames skipped.
-//
-// `ubo` is the same per-instance buffer the main pass reads (set 0 here), so
-// a moving occluder still casts a following shadow. Unlike Shadow.vert this
-// also hands the fragment shader the world position: ShadowCube.frag needs it
-// for the linear distance to the light (see that file for why linear).
-//
-// lightViewProj/lightPos come from a UNIFORM BUFFER, not a push constant:
-// the main command buffer is recorded once and reused, and a push constant
-// would freeze at record time and never track the held torch. A UBO's
-// contents are read fresh at draw time. updateUniformBuffer() maps cubeData
-// for every torch each frame.
+// One FACE of a point light's cube shadow map (CubeShadowMap.hpp / PShadowCube,
+// main.cpp). Run 6x per torch per frame, flames skipped.
+// ubo = same per-instance buffer as the main pass, so moving occluders track.
+// Also outputs world position for ShadowCube.frag's linear distance calc.
+// lightViewProj/lightPos via UBO not push constant: command buffer is
+// recorded once, a push constant would freeze at record time; UBO is read
+// fresh per draw (updateUniformBuffer() remaps cubeData each frame).
 
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
@@ -34,11 +27,10 @@ layout(binding = 0, set = 0) uniform UniformBufferObject {
 
 layout(binding = 0, set = 1) uniform ShadowCubeUniformBufferObject {
 	mat4 lightViewProj[6];
-	vec4 lightPos;	// xyz used, w is padding to keep the block 16-aligned
+	vec4 lightPos;	// xyz used, w padding for 16-byte alignment
 } cubeData;
 
-// Which of the 6 faces this draw is for. Safe as a push constant, unlike the
-// matrix above: it's fixed by where this draw sits in the command buffer.
+// Which of the 6 faces; safe as push constant since it's fixed per draw.
 layout(push_constant) uniform ShadowCubeFacePushConstant {
 	int face;
 } pc;

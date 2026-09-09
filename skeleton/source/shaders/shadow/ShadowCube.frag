@@ -1,18 +1,10 @@
-// FRAGMENT SHADER for one FACE of a point light's cube shadow map. It has a
-// real color attachment (one R32_SFLOAT channel per face) and fills it with
-// the LINEAR distance from the light to the fragment, in world units.
-//
-// Linear, not projective depth: CookTorrance.frag samples the cube by
-// DIRECTION with an ordinary samplerCube, and that lookup doesn't know which
-// face answered, so the stored value has to mean the same on every face --
-// true for a Euclidean distance, false for a perspective depth (which warps
-// across a face and again on the adjacent one).
-//
-// The distance stored is raw, with NO bias folded in. A slope-scaled bias
-// here would be invisible downstream, hiding the artifact it caused. A
-// shadow map should store a measurement; slack belongs where it can be
-// seen. Acne is handled upstream instead, by culling FRONT faces so a lit
-// surface is never in its own map (PShadowCube.setCullMode() in main.cpp).
+// One FACE of a point light's cube shadow map. R32_SFLOAT attachment holding
+// LINEAR distance (world units) from light to fragment.
+// Linear not projective depth: CookTorrance.frag samples by direction
+// (samplerCube), doesn't know which face answered, so value must be
+// face-independent -- true for Euclidean distance, not perspective depth.
+// No bias folded in here; acne is handled upstream by culling front faces
+// (PShadowCube.setCullMode(), main.cpp).
 
 #version 450
 #extension GL_ARB_separate_shader_objects : enable

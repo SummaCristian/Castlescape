@@ -1,11 +1,8 @@
 // ***** CUSTOM *****
 
-// A keyboard/mouse-navigable HUD for flipping cheat flags at runtime. Text
-// rows come from TextMaker; the panel and selection highlight from UiQuad,
-// since the font atlas has no filled rectangle.
-//
-// Header-only, implementation gated behind CHEATHUD_IMPLEMENTATION (Libs.cpp).
-// Assumes Starter.hpp, TextMaker.hpp and UiQuad.hpp were included first.
+// Keyboard/mouse-navigable HUD for flipping cheat flags at runtime.
+// Rows from TextMaker; panel/highlight from UiQuad.
+// Header-only, gated behind CHEATHUD_IMPLEMENTATION (Libs.cpp).
 
 #include <algorithm>
 #include <cmath>
@@ -14,10 +11,8 @@
 #include <string>
 #include <vector>
 
-// One row: either an on/off toggle bound to a live bool, or a Left/Right
-// slider bound to a live float. Exactly one of toggleValue/sliderValue is set.
-// The HUD changes the real value in place. onChange is for a slider whose
-// effect needs more than a read to take hold (a render-target rebuild, say).
+// One row: toggle bound to a bool, or Left/Right slider bound to a float.
+// Exactly one of toggleValue/sliderValue is set.
 struct CheatRow {
 	std::string label;
 	bool *toggleValue = nullptr;
@@ -25,31 +20,27 @@ struct CheatRow {
 	float sliderMin = 0.0f;
 	float sliderMax = 1.0f;
 	float sliderStep = 0.05f;
-	// Fires once per Left/Right press that moved the value -- edge-triggered,
-	// so a held key can't spam an expensive rebuild. Unused for a toggle.
+	// Edge-triggered: fires once per change, not every held frame. Unused for a toggle.
 	std::function<void()> onChange;
-	// Turns *sliderValue into the right-hand text. Default: "< NN% >" of
-	// value*100, for a 0..1 fraction; anything else (MSAA level, an exponent)
-	// passes its own, e.g. "< 4x >".
+	// Value -> right-hand text. Default: "< NN% >" of value*100; else custom, e.g. "< 4x >".
 	std::function<std::string(float)> format;
 };
 
 struct CheatHud {
 	void init(TextMaker *txt, UiQuad *quads);
 	void addToggle(const std::string &label, bool *value);
-	// step: how much one Left/Right press moves *value, clamped to [min, max].
-	// onChange/format: see CheatRow.
+	// step: per-press delta, clamped to [min, max]. onChange/format: see CheatRow.
 	void addSlider(const std::string &label, float *value, float min, float max,
 				   float step, std::function<void()> onChange = nullptr,
 				   std::function<std::string(float)> format = nullptr);
 	bool isOpen() const { return open; }
 
-	// Reads input, updates state, re-renders the panel if anything changed.
+	// Reads input, updates state, re-renders panel if changed.
 	// Once per frame from GameLogic(), BEFORE getSixAxis.
 	void update(GLFWwindow *window, int screenW, int screenH);
 
 	private:
-	// Not owned: the game's TextMaker/UiQuad instances.
+	// Not owned.
 	TextMaker *txt = nullptr;
 	UiQuad *quads = nullptr;
 
@@ -57,47 +48,40 @@ struct CheatHud {
 	int selectedIndex = 0;
 	bool open = false;
 
-	// Last screen size renderRows() ran at. renderRows bakes each row's pixel
-	// position into a fixed NDC anchor, and TextMaker can't notice a resize on
-	// its own, so update() forces a re-render when the size changes.
+	// Last screen size renderRows() ran at; forces re-render + layout drop on resize.
 	int lastScreenW = -1;
 	int lastScreenH = -1;
 
-	// Edge-detection: trigger once per physical press, not per frame held.
+	// Edge-detection: once per press, not per frame held.
 	bool lKeyWasPressed = false;
 	bool upKeyWasPressed = false;
 	bool downKeyWasPressed = false;
 	bool enterKeyWasPressed = false;
 	bool leftMouseWasPressed = false;
-	// Adjust the selected row's slider (no-op on a toggle row).
 	bool leftArrowKeyWasPressed = false;
 	bool rightArrowKeyWasPressed = false;
 
-	// Set whenever the panel needs re-printing (opened/closed, selection moved,
-	// a toggle flipped). Avoids rebuilding TextMaker's mesh every idle frame.
+	// Panel needs re-printing (opened/closed, selection moved, toggle flipped).
 	bool dirty = true;
 
-	// Panel layout in pixels, anchored top-left. Hit-testing, the highlight
-	// quad and the background all derive from these, so they can't drift.
+	// Panel layout in pixels, anchored top-left.
 	static constexpr float PANEL_X = 24.0f;
 	static constexpr float PANEL_Y = 24.0f;
 	static constexpr float PADDING = 10.0f;          // panel edge to text
 	static constexpr float LABEL_STATE_GAP = 20.0f;  // min gap, label to [ON]/[OFF]
 	static constexpr float LINE_GAP = 8.0f;          // extra vertical room per row
-	// Text scales ASKED for; computeLayout() may shrink to titleScale/rowScale.
+	// Asked-for scales; computeLayout() may shrink to titleScale/rowScale.
 	static constexpr float TITLE_SCALE = 1.0f;
 	static constexpr float ROW_SCALE = 0.85f;
-	// Floor for that shrinking: past this the panel runs off the bottom
-	// instead, since unreadable is no better than partly off-screen.
+	// Floor for shrink fit, below which the panel runs off-screen instead.
 	static constexpr float MIN_FIT_SCALE = 0.4f;
 
 	// Text-block ids for TextMaker. Past the FPS counter's id (1).
 	static constexpr int TITLE_TEXT_ID = 100;
 	static constexpr int FIRST_ROW_TEXT_ID = 101;
 
-	// Panel width, row heights and the scales actually used, in pixels.
-	// Computed from real rendered text size, so the panel fits its content
-	// exactly. Lazy via computeLayout(), invalidated on a resize.
+	// Panel width/row heights/scales actually used, in pixels.
+	// Lazy via computeLayout(), invalidated on resize.
 	bool layoutComputed = false;
 	float panelWidth = 0.0f;
 	float titleRowHeight = 0.0f;
@@ -105,11 +89,9 @@ struct CheatHud {
 	float titleScale = TITLE_SCALE;
 	float rowScale = ROW_SCALE;
 
-	// The panel shrinks to fit screenH: the row list grows with every cheat
-	// added, and there's no scrolling.
+	// Shrinks panel to fit screenH; no scrolling.
 	void computeLayout(int screenH);
-	// Pixel size of "s" as TextMaker would render it. fontId must match the
-	// (FontFace, Bold, Italic, Small) combo of the print() call.
+	// Pixel size of "s" as TextMaker would render it. fontId must match the print() call.
 	float measureTextWidth(const std::string &s, int fontId, float scale) const;
 	float measureTextHeight(int fontId, float scale) const;
 
@@ -119,8 +101,7 @@ struct CheatHud {
 
 	void renderRows(int screenW, int screenH);
 	void hideRows();
-	// Top-left pixel coord -> the NDC-ish anchor TextMaker::print expects
-	// (mirrors TextMaker::pixelToScr, which is private).
+	// Top-left pixel coord -> NDC-ish anchor for TextMaker::print.
 	static void pixelToAnchor(float px, float py, int screenW, int screenH, float &ax, float &ay);
 };
 
@@ -158,8 +139,7 @@ void CheatHud::pixelToAnchor(float px, float py, int screenW, int screenH, float
 }
 
 void CheatHud::update(GLFWwindow *window, int screenW, int screenH) {
-	// A resize leaves TextMaker showing rows baked for the old size, so force
-	// a re-render (and drop the cached layout, fitted to the old height).
+	// Resize: drop cached layout, force re-render.
 	if(screenW != lastScreenW || screenH != lastScreenH) {
 		lastScreenW = screenW;
 		lastScreenH = screenH;
@@ -167,7 +147,7 @@ void CheatHud::update(GLFWwindow *window, int screenW, int screenH) {
 		dirty = true;
 	}
 
-	// Open/close toggle, always polled regardless of current state.
+	// Open/close toggle.
 	bool lPressed = glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS;
 	if(lPressed && !lKeyWasPressed) {
 		open = !open;
@@ -184,7 +164,7 @@ void CheatHud::update(GLFWwindow *window, int screenW, int screenH) {
 		return;
 	}
 
-	// Keyboard navigation: Up/Down move the selection, Enter flips it.
+	// Up/Down move selection, Enter flips it.
 	bool upPressed = glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS;
 	if(upPressed && !upKeyWasPressed) {
 		selectedIndex = (selectedIndex - 1 + (int)options.size()) % (int)options.size();
@@ -207,8 +187,7 @@ void CheatHud::update(GLFWwindow *window, int screenW, int screenH) {
 	}
 	enterKeyWasPressed = enterPressed;
 
-	// Left/Right: adjust the selected row's slider, if it is one. No-op on
-	// a toggle row (Enter/click cover those).
+	// Left/Right: adjust selected row's slider; no-op on a toggle row.
 	auto adjustSelectedSlider = [&](float sign) {
 		CheatRow &row = options[selectedIndex];
 		if(row.sliderValue == nullptr) {
@@ -237,8 +216,7 @@ void CheatHud::update(GLFWwindow *window, int screenW, int screenH) {
 	}
 	rightArrowKeyWasPressed = rightArrowPressed;
 
-	// Mouse: hovering a row selects it (shares selectedIndex with the
-	// keyboard), a click selects and flips it.
+	// Mouse: hover selects, click selects and flips it.
 	double mx, my;
 	glfwGetCursorPos(window, &mx, &my);
 	int hoveredIndex = -1;
@@ -281,8 +259,7 @@ float CheatHud::measureTextHeight(int fontId, float scale) const {
 	int w, h, nlines, totChars;
 	std::vector<int> linew;
 	std::vector<std::string> lines;
-	// Any non-empty single-line string measures the face's line height;
-	// content doesn't matter here, only fontId/nlines do.
+	// Content doesn't matter here, only fontId/nlines do.
 	txt->measureText("Ag", fontId, w, h, nlines, totChars, linew, lines);
 	return (float)h * scale;
 }
@@ -292,21 +269,19 @@ void CheatHud::computeLayout(int screenH) {
 		return;
 	}
 
-	// fontIds matching TextMaker::print's formula: "SS" family is 8, Bold
-	// adds 2. Rows measure Bold so the layout isn't too narrow once selected.
+	// fontIds per TextMaker::print: "SS" family is 8, Bold adds 2.
+	// Rows measure Bold so layout isn't too narrow once selected.
 	const int titleFontId = 8 + 2;
 	const int rowFontId = 8 + 2;
 	const int stateFontId = 8;
 
-	// Heights at the asked-for scales first: whether they fit is the question.
-	// PANEL_Y margin top and bottom.
+	// Heights at asked-for scales; PANEL_Y margin top and bottom.
 	float titleH = measureTextHeight(titleFontId, TITLE_SCALE) + LINE_GAP;
 	float rowH = measureTextHeight(rowFontId, ROW_SCALE) + LINE_GAP;
 	float contentH = titleH + rowH * (float)options.size();
 	float availableH = (float)screenH - PANEL_Y * 2.0f - PADDING * 2.0f;
 
-	// One factor for text and row heights alike, so the panel keeps its
-	// proportions. PADDING is a margin, left alone.
+	// One factor for text and row heights alike, keeps proportions. PADDING untouched.
 	float fit = 1.0f;
 	if(contentH > availableH && contentH > 0.0f) {
 		fit = std::max(availableH / contentH, MIN_FIT_SCALE);
@@ -316,11 +291,9 @@ void CheatHud::computeLayout(int screenH) {
 	titleRowHeight = titleH * fit;
 	rowHeight = rowH * fit;
 
-	// Width at the fitted scales, so a shrunk panel is narrower too.
+	// Width at fitted scales, so a shrunk panel is narrower too.
 	float maxContentWidth = measureTextWidth("CHEATS (L to close)", titleFontId, titleScale);
-	// "< 100% (9999x9999) >" is a generous stand-in for a slider's value text,
-	// so the panel width doesn't shift as a slider is adjusted or a format()
-	// changes length -- only on a resize.
+	// Generous stand-in for a slider's value text, so panel width only changes on resize.
 	float stateWidth = std::max({measureTextWidth("[ON]", stateFontId, rowScale),
 								  measureTextWidth("[OFF]", stateFontId, rowScale),
 								  measureTextWidth("< 100% (9999x9999) >", stateFontId, rowScale)});
@@ -338,9 +311,7 @@ void CheatHud::renderRows(int screenW, int screenH) {
 
 	float ax, ay;
 
-	// Background panel sized to fit title + rows + padding, then a highlight
-	// bar behind the selected row -- in that order so the translucent
-	// highlight composites on top.
+	// Background panel, then highlight bar behind selected row (order matters for compositing).
 	std::vector<UiRect> panelQuads;
 	panelQuads.push_back({PANEL_X, PANEL_Y, panelWidth, panelHeight(),
 						   {0.05f, 0.05f, 0.08f, 0.8f}});

@@ -1,36 +1,13 @@
-// FRAGMENT SHADER for the ghosts (technique "Spectral", Pspectral in main.cpp).
-// Everything else goes through CookTorrance.frag; the ghosts don't, because a
-// ghost is not a surface: it reflects nothing, no torch lights it, and it
-// casts no shadow. Shaded as a dielectric it read as an opaque grey statue
-// with a missing shadow. Shaded as an emissive translucent volume, the missing
-// shadow becomes the point.
-//
-// No BRDF, no light read. Three things build the apparition, in main() order:
-//   1. FRESNEL RIM. Density and emission both go up where the surface turns
-//      away from the eye -- Schlick's grazing term, on ALPHA and brightness.
-//      It makes a hollow shell read as a volume, and it IS the whole outline:
-//      the rim follows the MESH, so the model's ragged hem lights up on its
-//      own.
-//   2. NOISE. Object-space value noise on the body's density, faded out at the
-//      rim so the silhouette stays clean. Same construction as Flame.frag.
-//   3. EMISSION. Written unlit, peaking above 1.0 at the rim so the bloom
-//      bright pass picks the silhouette up as a halo.
-//
-// NOT here, on purpose: a vertical dissolve with a fake scalloped hem (the
-// mesh already ends in points -- the outline is its job); any animation (the
-// ghost already moves, a pulse on top reads as a flickering lamp; ubo.time is
-// unread). Only the chase tint changes over time.
-//
-// BODY_ALPHA is high on purpose: low, you could read the brick courses through
-// a torso, and a recognisable pattern seen through something makes it a
-// window. Real translucency lives at the edges. Raise this one number if lit
-// walls start showing their courses.
-//
-// The pipeline is alpha-blended with depthWriteEnable hardcoded on, and keeps
-// BACK-FACE CULLING -- one layer of translucency per pixel, no self-blend
-// order to get wrong. That's also why the discard below matters: a transparent
-// fragment reaching the depth stage would still punch a ghost-shaped hole
-// through the flames and exit glow.
+// FRAGMENT SHADER for ghosts (technique "Spectral"). Not shaded via
+// CookTorrance.frag: a ghost reflects nothing, is unlit, casts no shadow.
+// No BRDF. Three parts, in main() order:
+//   1. Fresnel rim: density/emission rise at grazing angles (Schlick), making
+//      a hollow shell read as a volume; the rim follows the mesh outline.
+//   2. Noise: object-space value noise on body density, faded at the rim.
+//   3. Emission: unlit, peaking above 1.0 at rim for bloom halo.
+// BODY_ALPHA kept high so walls aren't readable through the torso.
+// Alpha-blended, depthWriteEnable on, back-face culled (one translucency
+// layer per pixel); discard below avoids a ghost-shaped hole through bloom.
 
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
@@ -45,14 +22,11 @@ layout(location = 2) in vec2 fragUV;
 
 layout(location = 0) out vec4 outColor;
 
-// Must match PosNormUV.vert field for field; the ghosts ride the same
-// per-instance struct as every other prop. Three fields are read:
-//   mMat           the instance's world matrix, transposed below for object space. Col 3 is the origin.
-//   specularColor  the spectral tint (materials.json "ghost"). Named for
-//                  CookTorrance.frag; here it's the emitted colour.
-//   F0             0..1, how far this ghost is into a CHASE. Reflectance is meaningless
-//                  without a BRDF, so main.cpp reuses the field for Ghost::chaseBlend --
-//                  same piggybacking `glow` does on the other technique.
+// Must match PosNormUV.vert field for field; ghosts reuse the common
+// per-instance struct. Fields read here:
+//   mMat: instance world matrix (col 3 = origin), transposed for object space.
+//   specularColor: spectral tint (materials.json "ghost"), used as emitted color.
+//   F0: repurposed as Ghost::chaseBlend (0..1 chase progress), no BRDF meaning here.
 layout(binding = 0, set = 1) uniform UniformBufferObject {
     mat4 mvpMat;
     mat4 mMat;
@@ -69,12 +43,10 @@ layout(binding = 0, set = 1) uniform UniformBufferObject {
     int metallic;
 } ubo;
 
-// Flat mid-grey with a black face (two eyes, a mouth) painted on. Read as a
-// MASK for those marks, not as a colour -- see faceMask in main().
+// Flat mid-grey with a painted black face; used as a mask, not a color (see faceMask).
 layout(binding = 1, set = 1) uniform sampler2D albedoMap;
 
-// Truncated at the last field read. std140 offsets are positional, so stopping
-// early is legal, reordering is not. Only eyePos matters here.
+// Truncated at last field read (std140 offsets are positional). Only eyePos used.
 layout(binding = 0, set = 0) uniform GlobalUniformBufferObject {
     vec3 eyePos;
     int lightCount;
@@ -84,31 +56,25 @@ layout(binding = 0, set = 0) uniform GlobalUniformBufferObject {
 
 // ---- The look, in one place ----
 
-// Density face-on and at a grazing angle (see the header on the face-on one).
+// Density face-on / grazing.
 const float BODY_ALPHA = 0.46;
 const float RIM_ALPHA  = 0.95;
-// Grazing-ramp exponent, the most important number here: higher is a thinner,
-// sharper edge. Raise it if the ghost reads as a blob, lower it if the glow
-// creeps up the body.
+// Grazing-ramp exponent: higher = thinner sharper edge.
 const float RIM_POWER  = 2.6;
 
-// Below this the fragment is discarded, not drawn invisibly (header).
+// Below this, discard instead of drawing invisibly.
 const float ALPHA_CUTOFF = 0.015;
 
-// Body and rim emission, before the tint. The rim clears BLOOM_THRESHOLD once
-// alpha scales it, putting a halo on the silhouette; the body doesn't, so a
-// distant ghost glows at its edge rather than becoming a lamp. RIM_EMISSION is
-// capped by COLOUR: pushed higher it saturates to white and throws the tint
-// away where the ghost is brightest.
+// Body/rim emission before tint. Rim clears bloom threshold once alpha
+// scales it; body doesn't, so a distant ghost glows at the edge only.
 const float BODY_EMISSION = 0.60;
 const float RIM_EMISSION  = 2.35;
 
-// Chase tint and brightness. Kept clear of the focus glow's gold and the
-// flames' hunt violet -- this cue alone means "it has seen you".
+// Chase tint/brightness, distinct from focus-glow gold and hunt violet.
 const vec3  HUNT_TINT     = vec3(1.0, 0.24, 0.20);
 const float HUNT_EMISSION = 1.7;
 
-// ---- Value noise, identical construction to Flame.frag ----
+// ---- Value noise, same construction as Flame.frag ----
 
 float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
@@ -127,8 +93,8 @@ float noise2(vec2 p) {
     return mix(mix(cornerBL, cornerBR, smoothFrac.x), mix(cornerTL, cornerTR, smoothFrac.x), smoothFrac.y);
 }
 
-// 3 octaves, not Flame.frag's 4: stretched over a whole body, the finest
-// octave lands below a pixel at any distance the ghost is seen from.
+// 3 octaves (not Flame.frag's 4): finest octave lands below a pixel at the
+// distance a ghost is typically viewed.
 float fbm(vec2 p) {
     float sum = 0.0;
     float amp = 0.5;
@@ -143,42 +109,36 @@ float fbm(vec2 p) {
 void main() {
     vec3 normal = normalize(fragNorm);
     vec3 viewDir = normalize(gubo.eyePos - fragPos);
-    // abs(), not max(..., 0): a sheet has no inside, so a fold facing away
-    // should thicken as much as one facing towards. Without abs those folds
-    // punch holes in the silhouette.
+    // abs(), not max(..,0): a sheet has no inside, folds facing away should
+    // thicken too, else they'd punch holes in the silhouette.
     float facing = abs(dot(normal, viewDir));
 
-    // 1. Fresnel rim. The outline of the ghost, and nothing else decides it.
+    // 1. Fresnel rim: decides the whole outline.
     float rim = pow(1.0 - facing, RIM_POWER);
     float alpha = mix(BODY_ALPHA, RIM_ALPHA, rim);
 
     float chase = clamp(ubo.F0, 0.0, 1.0);
 
-    // OBJECT SPACE by transposing the rotation, not inverting it: a ghost's Wm
-    // is translate * rotateY with no scale, so mat3(mMat) is orthonormal and
-    // its transpose is its inverse. Only the noise needs it, so the mottling
-    // stays glued to the ghost as it walks and turns.
+    // Object space via transpose (not inverse): mMat is translate*rotateY, no
+    // scale, so mat3 is orthonormal and transpose == inverse. Keeps mottling
+    // glued to the ghost as it walks/turns.
     vec3 rel = fragPos - ubo.mMat[3].xyz;
     vec3 objPos = vec3(dot(rel, ubo.mMat[0].xyz),
                        dot(rel, ubo.mMat[1].xyz),
                        dot(rel, ubo.mMat[2].xyz));
 
-    // 2. Noise, BODY only. The (1 - rim) weight protects the silhouette: at
-    // the edge the mottling is fully faded, so noise can't bite the outline.
-    // Static -- see the header.
+    // 2. Noise, body only. (1-rim) weight keeps mottling off the silhouette.
     float flow = fbm(vec2(objPos.x * 1.7 + objPos.z * 1.7, objPos.y * 1.15));
     alpha *= mix(1.0, mix(0.72, 1.20, flow), (1.0 - rim) * 0.7);
 
-    // The face. Only the texture's dark texels carry information, and they
-    // mean the opposite of a density map: a painted mark should read as solid,
-    // not thin. So the mask makes the marks the densest thing on the model
-    // and, below, stops them emitting -- black features floating in the glow.
+    // Face mask: dark texels mark eyes/mouth as solid (opposite of density
+    // map), forced dense here and stripped of emission below.
     float texLum = dot(texture(albedoMap, fragUV).rgb, vec3(0.299, 0.587, 0.114));
     float faceMask = 1.0 - smoothstep(0.16, 0.46, texLum);
     alpha = mix(alpha, max(alpha, 0.94), faceMask);
 
-    // LAST alpha term: the face mask forces its marks to 0.94 with a max(),
-    // so anything applied before it would be lost on the eyes and mouth.
+    // Last alpha term: face mask forces 0.94 via max(), must apply after
+    // everything else or the eyes/mouth would lose it.
     alpha *= spectralFade(fragPos, gubo.eyePos, ubo.mMat[3].xyz);
 
     alpha = clamp(alpha, 0.0, 1.0);
@@ -186,21 +146,17 @@ void main() {
         discard;
     }
 
-    // 3. Emission. Unlit: the tint, brightened at the rim, then pushed towards
-    // the hunt colour by however far into a chase this ghost is.
+    // 3. Emission: tint brightened at rim, pushed toward hunt color by chase.
     vec3 tint = mix(ubo.specularColor, HUNT_TINT, chase);
     float emission = mix(BODY_EMISSION, RIM_EMISSION, rim) * mix(1.0, HUNT_EMISSION, chase);
 
-    // A cool core under the tint, strongest where the sheet is thinnest. Two
-    // colours, not one, so the middle is a different temperature from the edge
-    // -- what stops the ghost reading as flat.
+    // Cool core under the tint (two colors, not one) so the ghost doesn't read flat.
     vec3 core = tint * 0.35 + vec3(0.05, 0.09, 0.14);
     vec3 color = mix(core, tint, rim) * emission;
-    // The painted features, cut out of the light.
+    // Painted features cut out of the light.
     color *= 1.0 - 0.93 * faceMask;
 
-    // NOT premultiplied: the blend is srcAlpha * src + (1 - srcAlpha) * dst,
-    // so alpha already scales this colour once. Multiplying it in here would
-    // square that and leave the body black.
+    // Not premultiplied: blend is srcAlpha*src + (1-srcAlpha)*dst, so alpha
+    // already scales color once; multiplying here would square it.
     outColor = vec4(color, alpha);
 }

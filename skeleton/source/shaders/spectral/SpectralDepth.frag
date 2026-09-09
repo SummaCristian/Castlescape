@@ -1,28 +1,15 @@
-// DEPTH PREPASS for the ghosts. Writes no colour: its product is the depth of
-// the ghost surface NEAREST the eye, which stops Spectral.frag (run right
-// after, same mesh) from blending the ghost's far side into its near side.
+// DEPTH PREPASS for ghosts. Writes no color: produces the depth of the ghost
+// surface nearest the eye, so Spectral.frag (same mesh, runs after) doesn't
+// blend the far side (e.g. feet inside robe) through the near surface.
 //
-// Spectral.frag draws a translucent shell, and "behind it" includes the rest
-// of the ghost -- feet inside the robe, the far torso wall. Those fragments
-// arrive in index order, so a far one often rasterises first, writes depth,
-// and is blended under the near surface: the feet's rim glowing through the
-// body. Back-face culling removes the far shell but not front-facing geometry
-// genuinely inside it.
+// Runs with depth test LESS, buffer ends up holding MINIMUM ghost depth per
+// pixel; color pass runs LESS_OR_EQUAL so only the nearest layer survives.
+// Both share PosNormUV.vert/UBO so positions match bit-for-bit. Alpha 0 keeps
+// this invisible (a color-write mask via blend factor).
 //
-// This pass runs with depth writes on and LESS, so afterwards the buffer holds
-// the MINIMUM ghost depth per pixel. The colour pass runs LESS_OR_EQUAL, so
-// only the nearest layer survives. Both share PosNormUV.vert and the same UBO,
-// so positions are bit-identical and the equality holds. It costs nothing
-// visible: alpha 0 returns the destination unchanged -- a colour-write mask
-// spelled with a blend factor, since Pipeline exposes setTransparency() and
-// not the mask.
-//
-// The one DISCARD replicates spectralFade() only -- not ALPHA_CUTOFF, which
-// the body never comes near. The fade takes the whole shell to zero, and a
-// prepass still writing depth there would punch a ghost-shaped hole through
-// the flames and exit glow in exactly the case the fade exists for: the
-// player standing inside a ghost. Threshold 0.015 / 0.33, where the thinnest
-// body fragment drops under the colour cutoff.
+// The discard replicates spectralFade() only, not ALPHA_CUTOFF: a prepass
+// still writing depth during the fade would punch a ghost-shaped hole through
+// bloom while the player stands inside a ghost.
 
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
@@ -36,7 +23,7 @@ layout(location = 2) in vec2 fragUV;
 
 layout(location = 0) out vec4 outColor;
 
-// Both blocks truncated at the last field read (std140 offsets are positional).
+// Truncated at last field read (std140 offsets are positional).
 layout(binding = 0, set = 1) uniform UniformBufferObject {
     mat4 mvpMat;
     mat4 mMat;
@@ -47,7 +34,6 @@ layout(binding = 0, set = 0) uniform GlobalUniformBufferObject {
     int lightCount;
 } gubo;
 
-// 0.015 / 0.33 -- see the header.
 const float FADE_CUTOFF = 0.045;
 
 void main() {

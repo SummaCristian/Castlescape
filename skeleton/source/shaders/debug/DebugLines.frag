@@ -1,5 +1,4 @@
-// FRAGMENT SHADER for the debug line overlay. DebugLines.vert already set each
-// vertex's colour; this just writes the interpolated value.
+// Debug line overlay fragment: writes the interpolated vertex color.
 
 #version 450
 #extension GL_ARB_separate_shader_objects : enable

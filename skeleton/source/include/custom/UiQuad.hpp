@@ -1,10 +1,6 @@
 // ***** CUSTOM *****
-
-// A tiny flat-colored-quad renderer, the background/highlight layer under
-// CheatHud's text. TextMaker only draws glyphs, and there's no filled
-// rectangle in its ASCII range, so a panel background needs its own minimal
-// pipeline: no textures or descriptor sets, just a push-constant color per quad.
-//
+// Flat-colored-quad renderer: background/highlight layer under CheatHud's text.
+// No textures/descriptor sets, just a push-constant color per quad.
 // Header-only, implementation gated behind UIQUAD_IMPLEMENTATION (Libs.cpp).
 
 #include <string>
@@ -45,16 +41,13 @@ struct UiQuad {
 
 	std::vector<UiRect> rects = {};
 	bool commandBufferMustUpdate = false;
-	// Named command-buffer slot. Two instances with the same name fight over
-	// one slot, so any instance beyond the HUD's must pass a distinct name.
+	// Named command-buffer slot; instances beyond the HUD's need a distinct name.
 	std::string bufferName = "ui_quad";
 
 	// Draws before TextMaker's default order (10000), so text composites on top.
 	void init(BaseProject *_BP, int sW, int sH, int so = 9000,
 			  std::string bufName = "ui_quad");
 	void resizeScreen(int sW, int sH);
-	// Replaces the quad list and marks the mesh for rebuild. Unconditional --
-	// the caller only calls it when something changed.
 	void setQuads(std::vector<UiRect> newRects);
 	void createPipeline();
 	void createMesh();
@@ -110,16 +103,13 @@ void UiQuad::resizeScreen(int sW, int sH) {
 }
 
 void UiQuad::createPipeline() {
-	// No descriptor set layouts: only a push-constant color per quad. An empty
-	// vector is safe (Pipeline::create builds pSetLayouts from D.size()).
+	// No descriptor set layouts: empty vector is safe (Pipeline::create builds pSetLayouts from D.size()).
 	P.init(BP, &VD, "shaders/ui/UiQuad.vert.spv", "shaders/ui/UiQuad.frag.spv", {},
 		{{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(UiQuadColorPushConstant)}});
 	P.setCullMode(VK_CULL_MODE_NONE);
 	P.setTransparency(true);
-	// The panel background and the highlight both sit at z=0 and overlap.
-	// Depth test+write is hardcoded on, so with LESS the highlight would fail
-	// against the background's depth. LESS_OR_EQUAL lets same-depth overdraw
-	// through, the same fix TextMaker uses for stacked glyph quads.
+	// LESS_OR_EQUAL: background+highlight overlap at same z, lets same-depth overdraw through
+	// (same fix TextMaker uses for stacked glyph quads).
 	P.setCompareOp(VK_COMPARE_OP_LESS_OR_EQUAL);
 }
 
@@ -131,11 +121,8 @@ void UiQuad::setQuads(std::vector<UiRect> newRects) {
 void UiQuad::createMesh() {
 	M = new Model();
 
-	// initMesh always creates a real non-zero GPU buffer, and once submitted
-	// the command buffer must stay valid for the app's lifetime. So with
-	// nothing to draw (HUD hidden), build one inert placeholder quad instead
-	// of a zero-sized mesh: populateCommandBuffer only draws entries in
-	// "rects" (still empty), so the placeholder is never drawn.
+	// initMesh needs a non-zero GPU buffer; with nothing to draw, use an inert
+	// placeholder quad instead (populateCommandBuffer skips it since rects is empty).
 	const std::vector<UiRect> &meshRects = rects.empty()
 		? std::vector<UiRect>{{0.0f, 0.0f, 0.0f, 0.0f, glm::vec4(0.0f)}}
 		: rects;

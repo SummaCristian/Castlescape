@@ -1,11 +1,6 @@
-// FRAGMENT SHADER: final stage of the bloom chain. Combines the full-res HDR
-// scene with the blurred quarter-res bloom mask, exposes, tone-maps, grades,
-// and writes to the swapchain.
-//
-//   uv          from Post.vert
-//   post (set 0)  per frame: bloom strength, exposure, cheat flags, veil/flash ramps
-//   srcTex       the scene's HDR offscreen target, full res, unblurred
-//   bloomTex     BloomBlur.frag's vertical-pass output: quarter-res, twice blurred
+// FRAGMENT SHADER: final stage of the bloom chain. Combines full-res HDR
+// scene with blurred quarter-res bloom mask, exposes, tone-maps, grades,
+// writes to swapchain.
 
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
@@ -34,8 +29,8 @@ layout(location = 0) in vec2 uv;
 
 layout(location = 0) out vec4 outColor;
 
-// Tone map, L09 s.45: divides by luminance, not per-channel (which would
-// desaturate highlights towards white).
+// Tone map, L09 s.45: divide by luminance, not per-channel (avoids
+// desaturating highlights towards white).
 vec3 toneMap(vec3 c) {
 	float Y = dot(c, vec3(0.2126, 0.7152, 0.0722));
 	return c / (Y + 1.0);
@@ -45,19 +40,14 @@ vec3 toneMap(vec3 c) {
 const float CA_STRENGTH = 0.008;
 
 void main() {
-	// bloomTex is quarter-res; the bilinear sampler upsamples it back to full
-	// res, which also softens the blur's own blockiness. Clamped half a bloom
-	// texel inside the border: the upsample's bilinear footprint reaches
-	// outside the image at the edge, and these attachments carry a REPEAT
-	// sampler (see BloomBlur.frag), so it would blend in the opposite edge --
-	// a thin bright line at the top or bottom whenever something overbright
-	// sits at the other end of the frame.
+	// bloomTex is quarter-res; bilinear upsample also softens blur blockiness.
+	// Clamped half a texel in: REPEAT sampler would else blend the opposite
+	// edge into the bilinear footprint at the border.
 	vec2 bloomTexel = 1.0 / vec2(textureSize(bloomTex, 0));
 	vec2 bloomUV = clamp(uv, bloomTexel * 0.5, 1.0 - bloomTexel * 0.5);
 
-	// Chromatic aberration: pull R and B along the radial direction, scaled by
-	// distance-from-centre squared so only the edges smear. G keeps the true
-	// sample, so the world still lines up with the crosshair and text.
+	// Chromatic aberration: pull R/B along radial dir, scaled by dist^2 so
+	// only edges smear. G keeps the true sample so crosshair/text stay aligned.
 	vec2 caDir = uv - vec2(0.5);
 	float caAmt = dot(caDir, caDir) * CA_STRENGTH;
 	vec3 scene = vec3(
@@ -69,15 +59,13 @@ void main() {
 	vec3 color = scene + bloom * post.bloomIntensity;
 	color *= post.exposure;
 
-	// Debug view: skip the tone map so anything above 1 clips instead of
-	// compressing. Same bit as CookTorrance.frag, so one toggle covers both.
+	// Debug view: skip tone map so values above 1 clip instead of compressing.
 	if((post.debugFlags & LIGHT_DEBUG_NO_TONEMAP) == 0) {
 		color = toneMap(color);
 	}
 
-	// Split-tone grade: shadows a touch cool, highlights a touch warm, so
-	// torchlight reads hotter against the stone without changing the lighting
-	// itself. Weighted by luminance and kept gentle.
+	// Split-tone grade: shadows cool, highlights warm, so torchlight reads
+	// hotter without changing the actual lighting. Luminance-weighted, gentle.
 	{
 		float gradeLuma = dot(color, vec3(0.2126, 0.7152, 0.0722));
 		const vec3  GRADE_SHADOW = vec3(0.96, 1.00, 1.06);
@@ -87,51 +75,41 @@ void main() {
 		color *= mix(vec3(1.0), grade, GRADE_AMOUNT);
 	}
 
-	// Vignette: darkens the corners, screen-space, resolution-independent.
-	// Pairs with the distance fog -- fog hides the draw distance ahead, the
-	// vignette hides the screen edges, where the cull cone is narrowest and
-	// most likely caught mid-fade by a glance to the corner. Reads as moody
-	// too. Post-tonemap (a display-referred vignette, like a real lens), and
-	// before the whiteout so escapeFlash washes evenly with no dark ring left.
+	// Vignette: darkens corners, screen-space. Pairs with distance fog (fog
+	// hides draw distance ahead, vignette hides screen edges where cull cone
+	// is narrowest). Post-tonemap, before whiteout.
 	{
-		// uv-space distance from centre: 0 middle, ~0.707 corner. Not
-		// aspect-corrected on purpose -- the resulting ellipse hugs the
-		// frame's proportions, which is what a vignette should do.
+		// uv-space distance from centre; not aspect-corrected on purpose so
+		// the ellipse hugs the frame's proportions.
 		float vignetteDist = length(uv - vec2(0.5));
 		const float VIGNETTE_INNER = 0.35;
 		const float VIGNETTE_OUTER = 0.75;
 		float vignette = smoothstep(VIGNETTE_INNER, VIGNETTE_OUTER, vignetteDist);
-		// 1.0 would crush the corners to black, reading as a hole in the screen.
+		// 1.0 would crush corners to black (reads as a hole in the screen).
 		const float VIGNETTE_STRENGTH = 0.6;
 		color *= (1.0 - vignette * VIGNETTE_STRENGTH);
 	}
 
-	// The escape whiteout, AFTER the tone map: before it, the curve
-	// (c / (Y + 1), which never quite reaches white) would eat it. It rides on
-	// top of main.cpp's exposure/bloom ramp, so the scene blows out and blooms
-	// first and only then washes away -- being blinded, not a fade to white.
+	// Escape whiteout, after tone map (else the curve never quite reaches
+	// white). Rides on main.cpp's exposure/bloom ramp: blow out and bloom
+	// first, then wash away.
 
-	// THE SPECTRAL VEIL: what standing inside a ghost looks like once
-	// spectralFade() has taken the mesh away. Ramped over the same range the
-	// mesh dissolves on, so the presence moves onto the frame. After the tone
-	// map: the room seen through something, not more light in it.
+	// Spectral veil: what standing inside a ghost looks like once
+	// spectralFade() dissolves the mesh. Ramped over the same dissolve range.
+	// After tone map: the room seen through something, not more light in it.
 	if(post.spectralVeil > 0.0) {
-		// Desaturate first, then tint. Blue straight over the torchlight
-		// leaves the flames orange and reads as a bad filter; taking the
-		// colour out first is what makes the room go cold.
+		// Desaturate first, then tint -- blue straight over torchlight would
+		// leave flames orange and read as a bad filter.
 		const vec3  VEIL_TINT = vec3(0.62, 0.86, 1.10);
-		// A floor under the blacks -- nothing is fully dark seen through
-		// something translucent. Small: the darkness is the atmosphere.
+		// Floor under the blacks: nothing fully dark seen through translucency.
 		const vec3  VEIL_LIFT = vec3(0.014, 0.030, 0.050);
-		// Strength centre vs edge. Weighted outwards it reads as something
-		// wrapped around the player; the middle stays walkable. Lower
-		// VEIL_CENTRE if players lose their bearings.
+		// Strength centre vs edge; weighted outwards so the middle stays
+		// walkable. Lower VEIL_CENTRE if players lose their bearings.
 		const float VEIL_CENTRE = 0.42;
 		const float VEIL_EDGE   = 0.92;
 
 		float veil = clamp(post.spectralVeil, 0.0, 1.0);
-		// Squared radius, normalised so an edge midpoint is 1 (the falloff
-		// wanted is quadratic anyway).
+		// Squared radius, normalised so an edge midpoint is 1.
 		vec2  veilOffset = uv - 0.5;
 		float veilRadiusSq = clamp(dot(veilOffset, veilOffset) * 4.0, 0.0, 1.0);
 		float veilWeight = veil * mix(VEIL_CENTRE, VEIL_EDGE, veilRadiusSq);
@@ -142,8 +120,7 @@ void main() {
 
 	color = mix(color, vec3(1.0), clamp(post.escapeFlash, 0.0, 1.0));
 
-	// Linear, not gamma-encoded: the swapchain is B8G8R8A8_SRGB, so the
-	// hardware does the linear-to-sRGB encode on write. A manual curve here
-	// would double-encode and wash the image out.
+	// Linear, not gamma-encoded: swapchain is B8G8R8A8_SRGB, hardware does
+	// the encode on write. A manual curve here would double-encode.
 	outColor = vec4(color, 1.0);
 }

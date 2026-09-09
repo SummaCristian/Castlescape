@@ -1,12 +1,8 @@
 // ***** CUSTOM *****
 
-// A modal pause menu: a full-screen dim overlay plus three centered buttons,
-// Resume / Settings / Quit. Same TextMaker + UiQuad approach as CheatHud, but
-// the open/close transition is owned by main.cpp -- opening the menu also has
-// to freeze GameLogic(), so main.cpp drives it either way (setOpen()).
-//
-// Header-only, implementation gated behind PAUSEMENU_IMPLEMENTATION (Libs.cpp).
-// Assumes Starter.hpp, TextMaker.hpp and UiQuad.hpp were included first.
+// Modal pause menu: dim overlay + Resume/Settings/Quit buttons.
+// main.cpp owns open/close via setOpen() (it also freezes GameLogic()).
+// Header-only, gated behind PAUSEMENU_IMPLEMENTATION (Libs.cpp).
 
 #include <algorithm>
 #include <string>
@@ -16,26 +12,23 @@ struct PauseMenu {
 	void init(TextMaker *txt, UiQuad *quads);
 	bool isOpen() const { return open; }
 
-	// Opens/closes the menu and re-renders. Called from main.cpp -- from the
-	// ESC handling (toggle) and from GameLogic() on a Resume click (close).
-	// One place writes "open", called from both.
+	// Opens/closes the menu and re-renders. Called from ESC handling (toggle)
+	// and from GameLogic() on Resume click (close).
 	void setOpen(bool isOpen, int screenW, int screenH);
 
-	// Reads input, moves hover/selection, re-renders if changed. Once per
-	// frame from GameLogic(), BEFORE getSixAxis so a click isn't also a
-	// drag-look.
+	// Reads input, moves hover/selection, re-renders if changed.
+	// Once per frame from GameLogic(), BEFORE getSixAxis (click isn't also a drag-look).
 	void update(GLFWwindow *window, int screenW, int screenH);
 
-	// True for the frame a button was clicked or Enter-confirmed. The actual
-	// effects (Resume closes, Settings opens SettingsMenu) live in main.cpp,
-	// so one place flips "open". Cleared by clearRequests(), not automatically.
+	// True for the frame a button was clicked/Enter-confirmed. Effects live in
+	// main.cpp. Cleared by clearRequests(), not automatically.
 	bool resumeClicked() const { return wantsResume; }
 	bool settingsClicked() const { return wantsSettings; }
 	bool quitClicked() const { return wantsQuit; }
 	void clearRequests() { wantsResume = false; wantsSettings = false; wantsQuit = false; }
 
 	private:
-	// Not owned: the game's shared TextMaker/UiQuad instances.
+	// Not owned.
 	TextMaker *txt = nullptr;
 	UiQuad *quads = nullptr;
 
@@ -47,8 +40,7 @@ struct PauseMenu {
 	static constexpr int NUM_BUTTONS = 3;
 	int selectedIndex = 0; // 0 = Resume, 1 = Settings, 2 = Quit
 
-	// Last screen size render() ran at -- a resize needs a forced re-render
-	// with fresh anchors, not just resizeScreen(). See CheatHud.
+	// Last screen size render() ran at; resize forces re-render. See CheatHud.
 	int lastScreenW = -1;
 	int lastScreenH = -1;
 
@@ -59,9 +51,8 @@ struct PauseMenu {
 
 	bool dirty = true;
 
-	// Layout in pixels, centered. Fixed-WIDTH buttons, but not fixed-height
-	// (buttonHeight() below): a guessed constant let buttons overlap where
-	// the rendered text ran taller.
+	// Layout in pixels, centered. Fixed-WIDTH, measured-HEIGHT (buttonHeight()
+	// below): a guessed height constant let buttons overlap taller text.
 	static constexpr float BUTTON_WIDTH = 240.0f;
 	static constexpr float BUTTON_GAP = 20.0f;
 	static constexpr float TITLE_GAP = 50.0f; // title baseline to first button
@@ -79,12 +70,11 @@ struct PauseMenu {
 	}
 
 	float measureTextHeight(int fontId, float scale) const;
-	// A button's real height, measured. fontId 10 is "SS" Bold, the variant a
-	// SELECTED button prints with -- a bitmap bold face can run taller, so
-	// sizing every button off it stops the selected one overflowing its row.
+	// fontId 10 = "SS" Bold, the SELECTED-button variant: sizing off it keeps
+	// the selected row from overflowing.
 	float buttonHeight() const { return measureTextHeight(10, BUTTON_TEXT_SCALE) + BUTTON_LINE_GAP; }
 
-	// Top of the centered block (title + gap + buttons), one anchor for both.
+	// Top of the centered block (title + gap + buttons).
 	float contentTop(int screenH) const;
 	float buttonTop(int i, int screenH) const {
 		return contentTop(screenH) + measureTextHeight(2, TITLE_SCALE) + TITLE_GAP
@@ -94,7 +84,7 @@ struct PauseMenu {
 
 	void render(int screenW, int screenH);
 	void hide();
-	// Top-left pixel coord -> TextMaker::print's NDC-ish anchor.
+	// Top-left pixel coord -> NDC-ish anchor.
 	static void pixelToAnchor(float px, float py, int screenW, int screenH, float &ax, float &ay);
 };
 
@@ -114,7 +104,6 @@ float PauseMenu::measureTextHeight(int fontId, float scale) const {
 	int w, h, nlines, totChars;
 	std::vector<int> linew;
 	std::vector<std::string> lines;
-	// Content doesn't matter, only fontId/nlines do.
 	txt->measureText("Ag", fontId, w, h, nlines, totChars, linew, lines);
 	return (float)h * scale;
 }
@@ -149,14 +138,14 @@ void PauseMenu::update(GLFWwindow *window, int screenW, int screenH) {
 		return;
 	}
 
-	// A resize leaves TextMaker showing text baked for the old size.
+	// Resize: text baked for old size, force re-render.
 	if(screenW != lastScreenW || screenH != lastScreenH) {
 		lastScreenW = screenW;
 		lastScreenH = screenH;
 		dirty = true;
 	}
 
-	// Up/Down move the selection, Enter confirms.
+	// Up/Down move selection, Enter confirms.
 	bool upPressed = glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS;
 	if(upPressed && !upKeyWasPressed) {
 		selectedIndex = (selectedIndex - 1 + NUM_BUTTONS) % NUM_BUTTONS;
@@ -221,8 +210,7 @@ void PauseMenu::update(GLFWwindow *window, int screenW, int screenH) {
 void PauseMenu::render(int screenW, int screenH) {
 	float ax, ay;
 
-	// Full-screen dim overlay, then one quad per button, the selected one
-	// lighter -- in that order so the buttons composite on top of the dim.
+	// Dim overlay, then button quads (order: buttons composite on top).
 	std::vector<UiRect> rects;
 	rects.push_back({0.0f, 0.0f, (float)screenW, (float)screenH, {0.0f, 0.0f, 0.0f, 0.55f}});
 	for(int i = 0; i < NUM_BUTTONS; i++) {
@@ -242,8 +230,7 @@ void PauseMenu::render(int screenW, int screenH) {
 	for(int i = 0; i < NUM_BUTTONS; i++) {
 		bool selected = (i == selectedIndex);
 		float top = buttonTop(i, screenH);
-		// TRV_TOP, not TRV_MIDDLE: anchor at the button's top edge rather than
-		// trusting TextMaker to center around a computed midpoint.
+		// TRV_TOP: anchor at the button's top edge, not a computed midpoint.
 		pixelToAnchor((float)screenW / 2.0f, top, screenW, screenH, ax, ay);
 		glm::vec4 labelColor = selected ? glm::vec4(1.0f, 1.0f, 0.3f, 1.0f)
 										 : glm::vec4(0.9f, 0.9f, 0.9f, 1.0f);

@@ -1,26 +1,20 @@
-// How much of a ghost is drawn, given the camera position. Shared by
-// Spectral.frag and its depth prepass so the two agree exactly. Two terms,
-// min()'d:
-//   INSIDE  the whole instance, faded by how close the EYE is to the ghost's
-//           vertical axis. The one that matters: standing inside a ghost, the
-//           arms and hem points are a metre away and no per-fragment distance
-//           reaches them.
-//   NEAR    per fragment, by distance to the eye. Covers brushing the robe
-//           off-axis, where the 0.1 near clip would slice the sheet open.
-//
-// main.cpp ramps the full-screen veil over the same range INSIDE uses, so what
-// leaves the mesh arrives on the frame. Retune together.
+// Ghost fade factor from camera position. Shared by Spectral.frag and its
+// depth prepass. min() of two terms:
+//   INSIDE  whole instance, faded by eye distance to ghost's vertical axis
+//           (catches standing inside, where per-fragment distance can't reach
+//           the arms/hem)
+//   NEAR    per-fragment, by distance to eye (catches brushing the robe off-axis)
+// main.cpp ramps the full-screen veil over the same range INSIDE uses; retune together.
 
 #ifndef SPECTRAL_FADE_GLSL
 #define SPECTRAL_FADE_GLSL
 
-// Set well OUTSIDE the body, not at its axis: the robe is ~0.5 wide, so the
-// ghost is gone a step before the player crosses into it -- arms and hem
-// points included, which a per-fragment fade never reaches.
+// Set outside the body (robe is ~0.5 wide) so arms/hem points fade too,
+// not just the axis.
 const float SPECTRAL_INSIDE_FAR  = 2.00;
 const float SPECTRAL_INSIDE_NEAR = 1.05;
-// Ghost.gltf's Y bounds plus a margin (ghostBodyBottom/Top in main.cpp):
-// crossing them must fade, or the bob switches the ghost on and off from below.
+// Ghost.gltf Y bounds + margin (ghostBodyBottom/Top in main.cpp); must fade
+// on crossing or the bob flickers the ghost from below.
 const float SPECTRAL_INSIDE_Y_MIN = -1.80;
 const float SPECTRAL_INSIDE_Y_MAX =  0.83;
 const float SPECTRAL_INSIDE_Y_FADE = 0.60;
@@ -28,7 +22,7 @@ const float SPECTRAL_INSIDE_Y_FADE = 0.60;
 const float SPECTRAL_NEAR_FAR  = 1.30;
 const float SPECTRAL_NEAR_NEAR = 0.38;
 
-// ghostOrigin is column 3 of the instance's world matrix.
+// ghostOrigin = column 3 of instance world matrix.
 float spectralFade(vec3 fragPos, vec3 eyePos, vec3 ghostOrigin) {
     vec3 eyeRel = eyePos - ghostOrigin;
 

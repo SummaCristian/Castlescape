@@ -1,25 +1,17 @@
 // ***** CUSTOM *****
-//
-// Procedural noise used by the flame shaders: Flame.vert displaces the mesh
-// with it, Flame.frag colors it. It replaces the Blender Clouds texture the
-// flame was modelled with, since glTF can export animated nodes but not a
-// modifier stack.
-//
-// Lives here and not in shaders/ because include/ is the directory CMake passes
-// to glslc with -I (same as for the C++ compiler).
+// Procedural noise for the flame shaders: Flame.vert displaces mesh,
+// Flame.frag colors it. Replaces a Blender Clouds texture (glTF can't
+// export a modifier stack).
 
 #ifndef NOISE_GLSL
 #define NOISE_GLSL
 
-// Deterministic pseudo-random value in [0,1) from a 2D point. The constants are
-// arbitrary; they only have to scramble neighbouring integers apart.
+// Pseudo-random [0,1) from 2D point; constants just scramble neighbours apart.
 float hash21(vec2 p) {
 	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
 }
 
-// Value noise: random values on the integer grid, interpolated in between. The
-// smoothstep curve on the fractional part hides the grid, which plain linear
-// interpolation would leave visible.
+// Value noise: grid corners interpolated; smoothstep on the fraction hides the grid.
 float valueNoise(vec2 p) {
 	vec2 cell = floor(p);
 	vec2 cellFrac = fract(p);
@@ -33,9 +25,7 @@ float valueNoise(vec2 p) {
 	return mix(mix(cornerBL, cornerBR, smoothFrac.x), mix(cornerTL, cornerTR, smoothFrac.x), smoothFrac.y);
 }
 
-// Fractal Brownian motion: 4 octaves of valueNoise, each double the frequency
-// and half the amplitude. One octave is too smooth to read as fire; the higher
-// ones add the fine wisps. Returns ~[0,1].
+// fBm: 4 octaves, doubling frequency / halving amplitude each step. Returns ~[0,1].
 float fbm(vec2 p) {
 	float sum = 0.0;
 	float amp = 0.5;

@@ -1,15 +1,9 @@
 // ***** CUSTOM *****
 
-// A full-screen settings menu: opaque backdrop, centered "SETTINGS" title, one
-// Left/Right row per adjustable value, and a "Back" row. Reachable from both
-// StartScreen and PauseMenu; main.cpp remembers which to reopen on Back.
-//
-// Its OWN struct, not a reused CheatHud: CheatHud is a small corner panel over
-// live gameplay, laid out around whatever height is left; this is a centered
-// full screen in the PauseMenu/StartScreen family, with nothing behind it.
-//
-// Header-only, implementation gated behind SETTINGSMENU_IMPLEMENTATION
-// (Libs.cpp). Assumes Starter.hpp, TextMaker.hpp and UiQuad.hpp came first.
+// Full-screen settings menu: opaque backdrop, "SETTINGS" title, one Left/Right
+// row per value, and a "Back" row. Reachable from StartScreen and PauseMenu;
+// main.cpp remembers which to reopen on Back.
+// Header-only, gated behind SETTINGSMENU_IMPLEMENTATION (Libs.cpp).
 
 #include <algorithm>
 #include <cmath>
@@ -19,9 +13,7 @@
 #include <vector>
 
 // One adjustable row. Left/Right change *value by step, clamped to [min, max];
-// onChange fires once per press that moved it (edge-triggered, so a held key
-// can't spam a rebuild). format turns the value into the right-hand text;
-// default is "< NN% >" of value*100, for a 0..1 range. Same as CheatHud.
+// onChange edge-triggered. format: value -> right-hand text, default "< NN% >". Same as CheatHud.
 struct SettingsRow {
 	std::string label;
 	float *value = nullptr;
@@ -42,12 +34,11 @@ struct SettingsMenu {
 	// Opens/closes the screen and re-renders. Like PauseMenu::setOpen.
 	void setOpen(bool isOpen, int screenW, int screenH);
 
-	// Reads input, moves selection, adjusts the selected row on Left/Right,
-	// re-renders if changed. Once per frame from GameLogic(), BEFORE getSixAxis.
+	// Reads input, moves selection, adjusts row on Left/Right, re-renders if changed.
+	// Once per frame from GameLogic(), BEFORE getSixAxis.
 	void update(GLFWwindow *window, int screenW, int screenH);
 
-	// True for the frame "Back" was clicked or Enter-confirmed. Its effect
-	// (close, reopen whichever menu sent the player here) lives in main.cpp.
+	// True for the frame "Back" was clicked/Enter-confirmed. Effect lives in main.cpp.
 	bool backClicked() const { return wantsBack; }
 	void clearRequests() { wantsBack = false; }
 
@@ -75,16 +66,10 @@ struct SettingsMenu {
 
 	bool dirty = true;
 
-	// Layout in pixels, centered. Like PauseMenu, except panelWidth is measured
-	// from content, not a fixed guess: a fixed 460px fit "MSAA" + "< 4x >" but
-	// not "Render Scale" + its value text (which also shows the live
-	// resolution), and label and value are independently anchored, so they
-	// collided in the middle regardless of screen size. CheatHud measures its
-	// panel for the same reason.
-	//
-	// TITLE_SCALE/ROW_TEXT_SCALE are ASKED-for; titleScale/rowScale are what's
-	// used, shrunk by computeLayout()'s fit factor when the content wouldn't
-	// fit the screen height -- CheatHud's technique.
+	// Layout in pixels, centered. panelWidth measured from content, not a fixed
+	// guess (label/value are independently anchored and could collide otherwise).
+	// TITLE_SCALE/ROW_TEXT_SCALE are ASKED-for; titleScale/rowScale are shrunk by
+	// computeLayout()'s fit factor when content wouldn't fit -- CheatHud's technique.
 	static constexpr float TITLE_GAP = 50.0f;
 	static constexpr float TITLE_SCALE = 1.6f;
 	static constexpr float ROW_TEXT_SCALE = 1.0f;
@@ -97,13 +82,12 @@ struct SettingsMenu {
 
 	static constexpr int TITLE_TEXT_ID = 400;
 	static constexpr int FIRST_LABEL_TEXT_ID = 401;
-	// Fixed spacing between the two text-id ranges, wide enough for any row count.
+	// Fixed spacing between id ranges, wide enough for any row count.
 	static constexpr int MAX_ROWS = 32;
 	static constexpr int FIRST_VALUE_TEXT_ID = FIRST_LABEL_TEXT_ID + MAX_ROWS;
 	static constexpr int BACK_TEXT_ID = FIRST_VALUE_TEXT_ID + MAX_ROWS;
 
-	// Populated by computeLayout(), invalidated on a resize. Cached so
-	// contentTop()/rowTop() and computeLayout() can't disagree about the fit.
+	// Cached by computeLayout(), invalidated on resize.
 	bool layoutComputed = false;
 	float titleScale = TITLE_SCALE;
 	float rowScale = ROW_TEXT_SCALE;
@@ -113,12 +97,11 @@ struct SettingsMenu {
 
 	float measureTextHeight(int fontId, float scale) const;
 	float measureTextWidth(const std::string &s, int fontId, float scale) const;
-	// Shrinks titleScale/rowScale to fit screenH, and measures panelWidth.
-	// CheatHud::computeLayout()'s technique.
+	// Shrinks titleScale/rowScale to fit screenH, measures panelWidth. CheatHud's technique.
 	void computeLayout(int screenH);
 
 	float contentTop(int screenH) const;
-	// Top of row i (a slider row if i < rows.size(), else "Back").
+	// Top of row i (slider row if i < rows.size(), else "Back").
 	float rowTop(int i, int screenH) const;
 	float rowLeft(int screenW) const { return (float)screenW / 2.0f - panelWidth / 2.0f; }
 
@@ -174,19 +157,18 @@ void SettingsMenu::computeLayout(int screenH) {
 		return;
 	}
 
-	// fontId 2 is "CO" Bold (the title); fontId 10 is "SS" Bold (a selected
-	// row -- measure Bold so the layout isn't too narrow once selected).
+	// fontId 2 = "CO" Bold (title); fontId 10 = "SS" Bold (selected row, so layout isn't too narrow).
 	const int titleFontId = 2;
 	const int rowFontId = 10;
 
-	// Heights at the ASKED-for scales first: whether they fit is the question.
+	// Heights at ASKED-for scales first.
 	float titleH = measureTextHeight(titleFontId, TITLE_SCALE) + TITLE_GAP;
 	float rowH = measureTextHeight(rowFontId, ROW_TEXT_SCALE) + ROW_LINE_GAP;
 	int numRows = (int)rows.size() + 1; // +1 for Back
 	float contentH = titleH + rowH * (float)numRows + BACK_GAP;
 	float availableH = (float)screenH - SCREEN_MARGIN * 2.0f;
 
-	// One factor for title and row alike, so the screen keeps its proportions.
+	// One factor for title and row alike, keeps proportions.
 	float fit = 1.0f;
 	if(contentH > availableH && contentH > 0.0f) {
 		fit = std::max(availableH / contentH, MIN_FIT_SCALE);
@@ -196,9 +178,8 @@ void SettingsMenu::computeLayout(int screenH) {
 	titleRowHeight = titleH * fit;
 	computedRowHeight = rowH * fit;
 
-	// Width at the settled scales: the widest of the title and every row's
-	// label+gap+value. Rows measure their CURRENT value text, not a
-	// placeholder, so a value wider than "< 100% >" is still accounted for.
+	// Width at settled scales: widest of title and each row's label+gap+value.
+	// Rows measure their CURRENT value text, so a wider-than-usual value is still accounted for.
 	float widest = measureTextWidth("SETTINGS", titleFontId, titleScale);
 	for(const SettingsRow &row : rows) {
 		std::string valueText = row.format ? row.format(*row.value)
@@ -257,7 +238,7 @@ void SettingsMenu::update(GLFWwindow *window, int screenW, int screenH) {
 	if(screenW != lastScreenW || screenH != lastScreenH) {
 		lastScreenW = screenW;
 		lastScreenH = screenH;
-		// The cached layout is only valid for the height it was fitted to.
+		// Cached layout only valid for the height it was fitted to.
 		layoutComputed = false;
 		dirty = true;
 	}
@@ -278,15 +259,14 @@ void SettingsMenu::update(GLFWwindow *window, int screenW, int screenH) {
 	}
 	downKeyWasPressed = downPressed;
 
-	// Enter confirms "Back"; nothing on a slider row (Left/Right own those).
+	// Enter confirms "Back" only; Left/Right own slider rows.
 	bool enterPressed = glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS;
 	if(enterPressed && !enterKeyWasPressed && selectedIndex == backIndex()) {
 		wantsBack = true;
 	}
 	enterKeyWasPressed = enterPressed;
 
-	// Left/Right: adjust the selected row's value, if it's a slider row
-	// (no-op on "Back").
+	// Left/Right: adjust selected row's value; no-op on "Back".
 	auto adjustSelected = [&](float sign) {
 		if(selectedIndex >= (int)rows.size()) {
 			return;
@@ -315,8 +295,7 @@ void SettingsMenu::update(GLFWwindow *window, int screenW, int screenH) {
 	}
 	rightArrowKeyWasPressed = rightArrowPressed;
 
-	// Mouse: hover selects; a click on "Back" confirms it. A slider is
-	// adjusted by keyboard only -- no click-and-drag.
+	// Mouse: hover selects; click on "Back" confirms. Sliders: keyboard only.
 	double mx, my;
 	glfwGetCursorPos(window, &mx, &my);
 	int hoveredIndex = -1;
@@ -350,8 +329,7 @@ void SettingsMenu::render(int screenW, int screenH) {
 
 	float ax, ay;
 
-	// Fully opaque backdrop: reachable from StartScreen or mid-game from
-	// PauseMenu, and it should read the same either way.
+	// Fully opaque backdrop: reads the same from StartScreen or PauseMenu.
 	std::vector<UiRect> rects;
 	rects.push_back({0.0f, 0.0f, (float)screenW, (float)screenH, {0.03f, 0.03f, 0.05f, 1.0f}});
 	for(int i = 0; i <= backIndex(); i++) {
@@ -376,9 +354,7 @@ void SettingsMenu::render(int screenW, int screenH) {
 		glm::vec4 labelColor = selected ? glm::vec4(1.0f, 1.0f, 0.3f, 1.0f)
 										 : glm::vec4(0.9f, 0.9f, 0.9f, 1.0f);
 
-		// TRV_TOP, not TRV_MIDDLE: anchor each row at its own top edge (like
-		// CheatHud) rather than trusting TextMaker to center around a midpoint
-		// -- rows were seen overlapping otherwise.
+		// TRV_TOP: anchor each row at its own top edge, not a centered midpoint (like CheatHud).
 		pixelToAnchor(left + PANEL_PADDING, top, screenW, screenH, ax, ay);
 		txt->print(ax, ay, row.label, FIRST_LABEL_TEXT_ID + i, "SS", false, selected, false,
 				   TAL_LEFT, TRH_LEFT, TRV_TOP, labelColor,

@@ -1,11 +1,8 @@
 // Recoloring shared by Flame.frag and Spark.frag.
-//
-// Both shaders have a hand-tuned orange gradient baked in. To draw a flame of a
-// different color they don't replace that gradient, they hue-rotate it, so the
-// authored shape of the gradient (hot pale core -> saturated tip) survives. The
-// per-instance target color comes from FlameUniformBufferObject (Flame.hpp).
+// Hue-rotates the baked orange gradient instead of replacing it, so the
+// authored shape (pale core -> saturated tip) survives.
 
-// Standard RGB<->HSV pair (Sam Hocevar's branchless form).
+// RGB<->HSV, branchless form (Sam Hocevar).
 vec3 rgb2hsv(vec3 c) {
 	vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
 	vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
@@ -21,16 +18,9 @@ vec3 hsv2rgb(vec3 c) {
 	return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
 }
 
-// Recolors one gradient stop: rotates its hue by `hueDelta` and pulls its
-// saturation toward `targetSat` by at most `satBlendMax`.
-//
-// `hueDist` is how far the target hue is from the default orange, and gates the
-// saturation pull: at 0 (default color) the stop comes back unchanged, so the
-// orange flame stays exactly as authored.
-//
-// The saturation pull exists for the near-white stops (the hot core): they are
-// almost grey, so hue rotation alone does nothing to them and a blue flame
-// would still have a white center. Pulling saturation up tints them too.
+// Rotates stop hue by hueDelta, pulls saturation toward targetSat (max satBlendMax).
+// hueDist = distance from default orange; gates the pull so default color is untouched.
+// Saturation pull needed for near-white stops: hue rotation alone can't tint grey.
 vec3 recolorStop(vec3 stop, float hueDelta, float hueDist, float targetSat, float satBlendMax) {
 	vec3 hsv = rgb2hsv(stop);
 	hsv.x = fract(hsv.x + hueDelta);

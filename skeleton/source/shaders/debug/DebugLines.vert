@@ -1,11 +1,6 @@
-// VERTEX SHADER for the debug line overlays (light gizmos, shadow frustums,
-// collider wireframes -- cheat-menu gated, see DebugLines.hpp).
-//
-// VERTEX PULLING, not a vertex buffer: a custom class can't reach
-// BaseProject::createBuffer() without editing Starter.hpp (off-limits), so
-// every line's endpoints live in a uniform-buffer array and this shader looks
-// its own vertex up by gl_VertexIndex. The arrays are re-mapped every frame;
-// the draw's vertex count never changes.
+// Debug line overlays (gizmos, frustums, colliders; cheat-menu gated, DebugLines.hpp).
+// Vertex pulling, not a vertex buffer: endpoints live in UBO arrays,
+// looked up by gl_VertexIndex. Arrays remap per frame; vertex count is fixed.
 
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
@@ -14,8 +9,7 @@ layout(binding = 0, set = 0) uniform DebugLinesVP {
 	mat4 vpMat;
 } viewProj;
 
-// vec4, not vec3: std140 gives an array of vec3 a 16-byte stride anyway, so
-// declaring vec4 matches the C++ side. w is unused padding.
+// vec4 not vec3: std140 pads vec3 arrays to 16 bytes anyway; w is unused.
 layout(binding = 1, set = 0) uniform DebugLinesPos {
 	vec4 pos[2048];
 } linePositions;

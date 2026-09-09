@@ -1,16 +1,9 @@
 // ***** CUSTOM *****
 
-// The launch screen: an opaque full-screen backdrop plus three centered
-// buttons, Play / Settings / Quit. Open from the first frame, so the app boots
-// into this instead of straight into the castle; Play hands control to
-// GameLogic() like closing PauseMenu does.
-//
-// Near-identical to PauseMenu.hpp, kept separate because this backdrop is
-// fully opaque (nothing behind it should read through) and its Quit really
-// quits (nothing to return to).
-//
-// Header-only, implementation gated behind STARTSCREEN_IMPLEMENTATION
-// (Libs.cpp). Assumes Starter.hpp, TextMaker.hpp and UiQuad.hpp came first.
+// Launch screen: opaque backdrop, Play/Settings/Quit buttons. Open from the
+// first frame; Play hands control to GameLogic(). Near-identical to
+// PauseMenu.hpp but fully opaque and Quit really exits.
+// Header-only, gated behind STARTSCREEN_IMPLEMENTATION (Libs.cpp).
 
 #include <algorithm>
 #include <string>
@@ -21,18 +14,15 @@ struct StartScreen {
 	void init(TextMaker *txt, UiQuad *quads, const std::string &title);
 	bool isOpen() const { return open; }
 
-	// Opens/closes the screen and re-renders. Called from main.cpp at startup,
-	// on a Play click, and again if a run is abandoned back here. Like
-	// PauseMenu::setOpen.
+	// Opens/closes the screen and re-renders. Like PauseMenu::setOpen.
 	void setOpen(bool isOpen, int screenW, int screenH);
 
 	// Reads input, moves selection, re-renders if changed. Once per frame from
 	// GameLogic(), BEFORE getSixAxis.
 	void update(GLFWwindow *window, int screenW, int screenH);
 
-	// True for the frame a button was clicked or Enter-confirmed. The effects
-	// live in main.cpp: Play closes this, Settings opens SettingsMenu, Quit
-	// closes the window.
+	// True for the frame a button was clicked/Enter-confirmed. Effects live in
+	// main.cpp: Play closes this, Settings opens SettingsMenu, Quit closes the window.
 	bool playClicked() const { return wantsPlay; }
 	bool settingsClicked() const { return wantsSettings; }
 	bool quitClicked() const { return wantsQuit; }
@@ -61,7 +51,7 @@ struct StartScreen {
 
 	bool dirty = true;
 
-	// Layout in pixels, centered -- same as PauseMenu, buttonHeight() measured.
+	// Layout in pixels, centered -- same as PauseMenu.
 	static constexpr float BUTTON_WIDTH = 240.0f;
 	static constexpr float BUTTON_GAP = 20.0f;
 	static constexpr float TITLE_GAP = 60.0f;
@@ -79,7 +69,7 @@ struct StartScreen {
 	}
 
 	float measureTextHeight(int fontId, float scale) const;
-	// Measured, not guessed -- see PauseMenu::buttonHeight()'s comment.
+	// Measured, not guessed -- see PauseMenu::buttonHeight().
 	float buttonHeight() const { return measureTextHeight(10, BUTTON_TEXT_SCALE) + BUTTON_LINE_GAP; }
 	float contentTop(int screenH) const;
 	float buttonTop(int i, int screenH) const {
@@ -213,8 +203,7 @@ void StartScreen::update(GLFWwindow *window, int screenW, int screenH) {
 void StartScreen::render(int screenW, int screenH) {
 	float ax, ay;
 
-	// Fully opaque backdrop: nothing behind this should read through, unlike
-	// PauseMenu's deliberate dim.
+	// Fully opaque, unlike PauseMenu's deliberate dim.
 	std::vector<UiRect> rects;
 	rects.push_back({0.0f, 0.0f, (float)screenW, (float)screenH, {0.03f, 0.03f, 0.05f, 1.0f}});
 	for(int i = 0; i < NUM_BUTTONS; i++) {
@@ -234,8 +223,7 @@ void StartScreen::render(int screenW, int screenH) {
 	for(int i = 0; i < NUM_BUTTONS; i++) {
 		bool selected = (i == selectedIndex);
 		float top = buttonTop(i, screenH);
-		// TRV_TOP, not TRV_MIDDLE: anchor at the button's top edge rather than
-		// trusting TextMaker to center around a computed midpoint.
+		// TRV_TOP: anchor at the button's top edge, not a computed midpoint.
 		pixelToAnchor((float)screenW / 2.0f, top, screenW, screenH, ax, ay);
 		glm::vec4 labelColor = selected ? glm::vec4(1.0f, 1.0f, 0.3f, 1.0f)
 										 : glm::vec4(0.9f, 0.9f, 0.9f, 1.0f);
