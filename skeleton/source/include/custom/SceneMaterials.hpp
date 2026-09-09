@@ -31,10 +31,8 @@ struct Material {
 	// Stand-in for occlusion until an AO map exists.
 	float ambientWeight = -1.0f;
 
-	// Shades as metal in CookTorrance.frag: no diffuse lobe, indirect term becomes
-	// a reflection (metalAmbient()) instead of hemisphere*albedo.
-	// specularColor becomes the reflectance color: specularColor * F0 should equal
-	// the metal's measured reflectance (iron ~0.56/0.57/0.58, brass ~0.95/0.64/0.37).
+	// Shades as metal in CookTorrance.frag: no diffuse lobe, indirect term become a reflection (metalAmbient()) instead of hemisphere*albedo.
+	// specularColor becomes the reflectance color: specularColor * F0 should equal the metal's measured reflectance.
 	int metallic = 0;
 };
 

@@ -106,40 +106,40 @@ layout(binding = 31, set = 2) uniform samplerCube shadowCube31;	// held torch, f
 
 // Returns 4 taps (for PCF) per call. The if-chain resolves the binding once;
 // paying the walk cost a single time instead of per-tap. NUM_SHADOW_CUBES=32.
-#define CUBE_TAP4(s) vec4(texture(s, d0).r, texture(s, d1).r, \
-                          texture(s, d2).r, texture(s, d3).r)
-vec4 sampleShadowCube4(int idx, vec3 d0, vec3 d1, vec3 d2, vec3 d3) {
-    if(idx == 0) return CUBE_TAP4(shadowCube0);
-    if(idx == 1) return CUBE_TAP4(shadowCube1);
-    if(idx == 2) return CUBE_TAP4(shadowCube2);
-    if(idx == 3) return CUBE_TAP4(shadowCube3);
-    if(idx == 4) return CUBE_TAP4(shadowCube4);
-    if(idx == 5) return CUBE_TAP4(shadowCube5);
-    if(idx == 6) return CUBE_TAP4(shadowCube6);
-    if(idx == 7) return CUBE_TAP4(shadowCube7);
-    if(idx == 8) return CUBE_TAP4(shadowCube8);
-    if(idx == 9) return CUBE_TAP4(shadowCube9);
-    if(idx == 10) return CUBE_TAP4(shadowCube10);
-    if(idx == 11) return CUBE_TAP4(shadowCube11);
-    if(idx == 12) return CUBE_TAP4(shadowCube12);
-    if(idx == 13) return CUBE_TAP4(shadowCube13);
-    if(idx == 14) return CUBE_TAP4(shadowCube14);
-    if(idx == 15) return CUBE_TAP4(shadowCube15);
-    if(idx == 16) return CUBE_TAP4(shadowCube16);
-    if(idx == 17) return CUBE_TAP4(shadowCube17);
-    if(idx == 18) return CUBE_TAP4(shadowCube18);
-    if(idx == 19) return CUBE_TAP4(shadowCube19);
-    if(idx == 20) return CUBE_TAP4(shadowCube20);
-    if(idx == 21) return CUBE_TAP4(shadowCube21);
-    if(idx == 22) return CUBE_TAP4(shadowCube22);
-    if(idx == 23) return CUBE_TAP4(shadowCube23);
-    if(idx == 24) return CUBE_TAP4(shadowCube24);
-    if(idx == 25) return CUBE_TAP4(shadowCube25);
-    if(idx == 26) return CUBE_TAP4(shadowCube26);
-    if(idx == 27) return CUBE_TAP4(shadowCube27);
-    if(idx == 28) return CUBE_TAP4(shadowCube28);
-    if(idx == 29) return CUBE_TAP4(shadowCube29);
-    if(idx == 30) return CUBE_TAP4(shadowCube30);
+#define CUBE_TAP4(cube) vec4(texture(cube, d0).r, texture(cube, d1).r, \
+                          texture(cube, d2).r, texture(cube, d3).r)
+vec4 sampleShadowCube4(int cubeIndex, vec3 d0, vec3 d1, vec3 d2, vec3 d3) {
+    if(cubeIndex == 0) return CUBE_TAP4(shadowCube0);
+    if(cubeIndex == 1) return CUBE_TAP4(shadowCube1);
+    if(cubeIndex == 2) return CUBE_TAP4(shadowCube2);
+    if(cubeIndex == 3) return CUBE_TAP4(shadowCube3);
+    if(cubeIndex == 4) return CUBE_TAP4(shadowCube4);
+    if(cubeIndex == 5) return CUBE_TAP4(shadowCube5);
+    if(cubeIndex == 6) return CUBE_TAP4(shadowCube6);
+    if(cubeIndex == 7) return CUBE_TAP4(shadowCube7);
+    if(cubeIndex == 8) return CUBE_TAP4(shadowCube8);
+    if(cubeIndex == 9) return CUBE_TAP4(shadowCube9);
+    if(cubeIndex == 10) return CUBE_TAP4(shadowCube10);
+    if(cubeIndex == 11) return CUBE_TAP4(shadowCube11);
+    if(cubeIndex == 12) return CUBE_TAP4(shadowCube12);
+    if(cubeIndex == 13) return CUBE_TAP4(shadowCube13);
+    if(cubeIndex == 14) return CUBE_TAP4(shadowCube14);
+    if(cubeIndex == 15) return CUBE_TAP4(shadowCube15);
+    if(cubeIndex == 16) return CUBE_TAP4(shadowCube16);
+    if(cubeIndex == 17) return CUBE_TAP4(shadowCube17);
+    if(cubeIndex == 18) return CUBE_TAP4(shadowCube18);
+    if(cubeIndex == 19) return CUBE_TAP4(shadowCube19);
+    if(cubeIndex == 20) return CUBE_TAP4(shadowCube20);
+    if(cubeIndex == 21) return CUBE_TAP4(shadowCube21);
+    if(cubeIndex == 22) return CUBE_TAP4(shadowCube22);
+    if(cubeIndex == 23) return CUBE_TAP4(shadowCube23);
+    if(cubeIndex == 24) return CUBE_TAP4(shadowCube24);
+    if(cubeIndex == 25) return CUBE_TAP4(shadowCube25);
+    if(cubeIndex == 26) return CUBE_TAP4(shadowCube26);
+    if(cubeIndex == 27) return CUBE_TAP4(shadowCube27);
+    if(cubeIndex == 28) return CUBE_TAP4(shadowCube28);
+    if(cubeIndex == 29) return CUBE_TAP4(shadowCube29);
+    if(cubeIndex == 30) return CUBE_TAP4(shadowCube30);
     return CUBE_TAP4(shadowCube31);
 }
 
@@ -153,7 +153,7 @@ vec4 sampleShadowCube4(int idx, vec3 d0, vec3 d1, vec3 d2, vec3 d3) {
 // Bias computed here (needs `dist` to size honestly): covers only
 // floating-point noise, since front-face culling keeps a surface out of its
 // own shadow map (no acne to fight).
-float shadowFromCube(int idx, vec3 pos, vec3 normal, vec3 lightPos, float NdotL) {
+float shadowFromCube(int cubeIndex, vec3 pos, vec3 normal, vec3 lightPos, float normalDotLight) {
     // Depth slack: floating-point noise only (see header).
     const float CUBE_BIAS_MIN = 0.0015;
     const float CUBE_BIAS_MAX = 0.004;
@@ -167,13 +167,13 @@ float shadowFromCube(int idx, vec3 pos, vec3 normal, vec3 lightPos, float NdotL)
     float rawDist = length(pos - lightPos);
     float texelWorld = 2.0 * rawDist / float(SHADOW_CUBE_RES);
 
-    // sin of incidence angle; cosI floored since an edge-on fragment gets
-    // almost nothing from this light anyway (BRDF's NdotL).
-    float cosI = max(NdotL, 0.15);
-    float sinI = sqrt(1.0 - cosI * cosI);
+    // sin of incidence angle; cosIncidence floored since an edge-on fragment gets
+    // almost nothing from this light anyway (BRDF's normalDotLight).
+    float cosIncidence = max(normalDotLight, 0.15);
+    float sinIncidence = sqrt(1.0 - cosIncidence * cosIncidence);
 
-    float offset = min(texelWorld * NORMAL_OFFSET_TEXELS * sinI, NORMAL_OFFSET_MAX);
-    vec3 samplePos = pos + normal * offset;
+    float normalOffsetAmount = min(texelWorld * NORMAL_OFFSET_TEXELS * sinIncidence, NORMAL_OFFSET_MAX);
+    vec3 samplePos = pos + normal * normalOffsetAmount;
 
     vec3 toFrag = samplePos - lightPos;
     float dist = length(toFrag);
@@ -185,19 +185,19 @@ float shadowFromCube(int idx, vec3 pos, vec3 normal, vec3 lightPos, float NdotL)
     // Four tap directions: lookup pushed sideways in the perpendicular plane.
     // Offset measured in texelWorld units = face texels, independent of light distance.
     vec3 axis = abs(toFrag.y) < 0.99 * dist ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
-    vec3 T = normalize(cross(toFrag, axis));
-    vec3 B = normalize(cross(toFrag, T));
-    float r = PCF_KERNEL_TEXELS * texelWorld;
+    vec3 tangent = normalize(cross(toFrag, axis));
+    vec3 bitangent = normalize(cross(toFrag, tangent));
+    float tapRadius = PCF_KERNEL_TEXELS * texelWorld;
 
     // Rotated grid, not a 2x2 box: box taps share x/y pairs so a straight
     // edge steps in thirds; rotated, all four cross it apart.
-    vec3 d0 = toFrag + r * ( 0.33 * T + 1.00 * B);
-    vec3 d1 = toFrag + r * ( 1.00 * T - 0.33 * B);
-    vec3 d2 = toFrag + r * (-0.33 * T - 1.00 * B);
-    vec3 d3 = toFrag + r * (-1.00 * T + 0.33 * B);
+    vec3 d0 = toFrag + tapRadius * ( 0.33 * tangent + 1.00 * bitangent);
+    vec3 d1 = toFrag + tapRadius * ( 1.00 * tangent - 0.33 * bitangent);
+    vec3 d2 = toFrag + tapRadius * (-0.33 * tangent - 1.00 * bitangent);
+    vec3 d3 = toFrag + tapRadius * (-1.00 * tangent + 0.33 * bitangent);
 
     // One `dist` shared by all four taps: error is negligible vs. the bias.
-    vec4 gaps = vec4(dist) - sampleShadowCube4(idx, d0, d1, d2, d3);
+    vec4 gaps = vec4(dist) - sampleShadowCube4(cubeIndex, d0, d1, d2, d3);
     vec4 lit = vec4(1.0) - clamp((gaps - vec4(bias)) / softEdge, 0.0, 1.0);
 
     return dot(lit, vec4(0.25));
@@ -205,14 +205,14 @@ float shadowFromCube(int idx, vec3 pos, vec3 normal, vec3 lightPos, float NdotL)
 
 // 1.0 fully lit, 0.0 in shadow. shadowIndex < 0 skips the lookup (lights
 // unconditionally) -- only LIGHT_POINT ever has a real shadowIndex.
-float shadowFactor(int shadowIndex, int type, vec3 pos, vec3 normal, vec3 lightPos, float NdotL) {
+float shadowFactor(int shadowIndex, int type, vec3 pos, vec3 normal, vec3 lightPos, float normalDotLight) {
     // Shadows off (cheat menu).
     if(shadowIndex < 0 || (gubo.debugFlags & LIGHT_DEBUG_NO_SHADOWS) != 0) {
         return 1.0;
     }
 
     // type is always LIGHT_POINT here (see SceneLights::init).
-    return shadowFromCube(shadowIndex, pos, normal, lightPos, NdotL);
+    return shadowFromCube(shadowIndex, pos, normal, lightPos, normalDotLight);
 }
 
 // Uniform branch (cheap on GPU): off in a normal frame.
@@ -244,8 +244,8 @@ const float PI = 3.14159265359;
 vec3 metalAmbient(vec3 normal, vec3 viewDir, vec3 specularColor, float roughness, float F0, vec3 indirect) {
     // Schlick on N.V; ceiling max(1-roughness, F0) so a rough metal doesn't
     // turn mirror-bright at the horizon.
-    float NdotV = clamp(dot(normal, viewDir), 0.0, 1.0);
-    float fresnelTerm = F0 + (max(1.0 - roughness, F0) - F0) * pow(1.0 - NdotV, 5.0);
+    float normalDotView = clamp(dot(normal, viewDir), 0.0, 1.0);
+    float fresnelTerm = F0 + (max(1.0 - roughness, F0) - F0) * pow(1.0 - normalDotView, 5.0);
 
     // specularColor, not diffuseColor: for a metal, specular color IS the material color.
     return indirect * specularColor * fresnelTerm;
@@ -262,31 +262,31 @@ float ambientShare() {
 
 // Direction towards the light: constant for direct, per-fragment otherwise
 // (why point lights wrap around objects).
-vec3 lightDirection(Light lt, vec3 pos) {
-    if(lt.type == LIGHT_DIRECT) {
-        return -lt.dir;
+vec3 lightDirection(Light light, vec3 pos) {
+    if(light.type == LIGHT_DIRECT) {
+        return -light.dir;
     }
-    return normalize(lt.pos - pos);
+    return normalize(light.pos - pos);
 }
 
 // Radiance arriving after decay and spot cone. L09 s.23, s.33.
-vec3 lightRadiance(Light lt, vec3 pos) {
-    if(lt.type == LIGHT_DIRECT) {
-        return lt.color;
+vec3 lightRadiance(Light light, vec3 pos) {
+    if(light.type == LIGHT_DIRECT) {
+        return light.color;
     }
 
-    float dist = length(lt.pos - pos);
+    float dist = length(light.pos - pos);
 
     // NEAR_RADIUS: smooth floor on effective distance (~flame size), so
     // radiance doesn't spike to white right next to the source.
     const float NEAR_RADIUS = 0.4;
     float distSoft = sqrt(dist * dist + NEAR_RADIUS * NEAR_RADIUS);
-    vec3 radiance = lt.color * pow(lt.g / distSoft, lt.beta);
+    vec3 radiance = light.color * pow(light.g / distSoft, light.beta);
 
-    if(lt.type == LIGHT_SPOT) {
-        // lt.dir points where the lamp aims; negated to compare against lx.
-        float cosAngle = dot(-lightDirection(lt, pos), lt.dir);
-        radiance *= clamp((cosAngle - lt.cosOut) / (lt.cosIn - lt.cosOut), 0.0, 1.0);
+    if(light.type == LIGHT_SPOT) {
+        // light.dir points where the lamp aims; negated to compare against lx.
+        float cosAngle = dot(-lightDirection(light, pos), light.dir);
+        radiance *= clamp((cosAngle - light.cosOut) / (light.cosIn - light.cosOut), 0.0, 1.0);
     }
 
     return radiance;
@@ -294,46 +294,46 @@ vec3 lightRadiance(Light lt, vec3 pos) {
 
 // GGX normal distribution: fraction of microfacets aligned with halfVector. E06 s.45.
 float distributionGGX(vec3 normal, vec3 halfVector, float roughness) {
-    float a2 = roughness * roughness;
-    float NdotH = clamp(dot(normal, halfVector), 0.0, 1.0);
-    float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
-    return a2 / (PI * denom * denom);
+    float roughnessSquared = roughness * roughness;
+    float normalDotHalf = clamp(dot(normal, halfVector), 0.0, 1.0);
+    float denom = normalDotHalf * normalDotHalf * (roughnessSquared - 1.0) + 1.0;
+    return roughnessSquared / (PI * denom * denom);
 }
 
 // Geometry term: microfacet self-shadowing, parameter-free form. E06 s.47.
 // Prevents rough surfaces blowing out at grazing angles.
 float geometricTerm(vec3 normal, vec3 halfVector, vec3 lightDir, vec3 viewDir) {
-    float NdotH = clamp(dot(normal, halfVector), 0.0, 1.0);
-    float NdotV = clamp(dot(normal, viewDir), 0.0, 1.0);
-    float NdotL = clamp(dot(normal, lightDir), 0.0, 1.0);
-    float VdotH = max(dot(viewDir, halfVector), 0.0001);
+    float normalDotHalf = clamp(dot(normal, halfVector), 0.0, 1.0);
+    float normalDotView = clamp(dot(normal, viewDir), 0.0, 1.0);
+    float normalDotLight = clamp(dot(normal, lightDir), 0.0, 1.0);
+    float viewDotHalf = max(dot(viewDir, halfVector), 0.0001);
 
-    return min(1.0, min(2.0 * NdotH * NdotV / VdotH,
-                        2.0 * NdotH * NdotL / VdotH));
+    return min(1.0, min(2.0 * normalDotHalf * normalDotView / viewDotHalf,
+                        2.0 * normalDotHalf * normalDotLight / viewDotHalf));
 }
 
 // Fresnel-Schlick approximation. E06 s.46 (5 is an empirical fit).
 float fresnelSchlick(vec3 viewDir, vec3 halfVector, float F0) {
-    float VdotH = clamp(dot(viewDir, halfVector), 0.0, 1.0);
-    return F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
+    float viewDotHalf = clamp(dot(viewDir, halfVector), 0.0, 1.0);
+    return F0 + (1.0 - F0) * pow(1.0 - viewDotHalf, 5.0);
 }
 
 // Cook-Torrance BRDF, E06 s.38-39. Diffuse/specular interpolated by
 // diffuseShare (not summed, else energy exceeds input).
 vec3 BRDF(vec3 normal, vec3 lightDir, vec3 viewDir, vec3 diffuseColor, vec3 specularColor, float roughness, float F0, float diffuseShare) {
-    float NdotL = clamp(dot(normal, lightDir), 0.0, 1.0);
-    float NdotV = clamp(dot(normal, viewDir), 0.0, 1.0);
+    float normalDotLight = clamp(dot(normal, lightDir), 0.0, 1.0);
+    float normalDotView = clamp(dot(normal, viewDir), 0.0, 1.0);
     vec3 halfVector = normalize(lightDir + viewDir);
 
     float distributionTerm = distributionGGX(normal, halfVector, roughness);
     float geometryTerm = geometricTerm(normal, halfVector, lightDir, viewDir);
     float fresnelTerm = fresnelSchlick(viewDir, halfVector, F0);
 
-    // Guard avoids inf*0=NaN; NdotL already zeroes the result at the silhouette.
-    vec3 specular = specularColor * (distributionTerm * fresnelTerm * geometryTerm) / max(4.0 * NdotL * NdotV, 0.0001);
+    // Guard avoids inf*0=NaN; normalDotLight already zeroes the result at the silhouette.
+    vec3 specular = specularColor * (distributionTerm * fresnelTerm * geometryTerm) / max(4.0 * normalDotLight * normalDotView, 0.0001);
 
-    // Lambert diffuse (E06 s.38), clamped NdotL.
-    return NdotL * (diffuseShare * diffuseColor + (1.0 - diffuseShare) * specular);
+    // Lambert diffuse (E06 s.38), clamped normalDotLight.
+    return normalDotLight * (diffuseShare * diffuseColor + (1.0 - diffuseShare) * specular);
 }
 
 // Tone map moved to Composite.frag: bloom needs unclamped values >1 here.
@@ -364,10 +364,10 @@ float grimeNoise(vec3 p) {
 // 0 clean .. 1 filthy. Multi-scale (6/18/50 per unit) for blotches + grain;
 // smoothstep keeps clean metal clean instead of a grey veil everywhere.
 float grime(vec3 worldPos) {
-    float g = grimeNoise(worldPos *  6.0) * 0.6
+    float rawGrime = grimeNoise(worldPos *  6.0) * 0.6
             + grimeNoise(worldPos * 18.0) * 0.3
             + grimeNoise(worldPos * 50.0) * 0.1;
-    return smoothstep(0.35, 0.80, g);
+    return smoothstep(0.35, 0.80, rawGrime);
 }
 // ---------------------------------------------------------------------------
 
@@ -400,8 +400,8 @@ void main() {
 
     vec3 viewDir = normalize(gubo.eyePos - fragPos);
 
-    // Debug view: incoming light intensity, ignoring albedo. Reuses the Lo
-    // loop unchanged; only result handling differs.
+    // Debug view: incoming light intensity, ignoring albedo. Reuses the
+    // directLighting loop unchanged; only result handling differs.
     bool heatmap = debugOn(LIGHT_DEBUG_HEATMAP);
     if(heatmap) {
         diffuseColor = vec3(1.0);
@@ -421,11 +421,11 @@ void main() {
     // grimeScale lowers overall bite; pow>1 for brass crushes mid-grey so
     // only hotspots survive.
     float grimeScale = mix(1.0, 0.30, brassness);
-    float g = grime(fragPos);
-    g = pow(g, mix(1.0, 2.5, brassness)) * grimeScale;
-    g = (metal && ubo.interiorAmbient == 1) ? g : 0.0;
-    float roughG = mix(ubo.roughness, min(ubo.roughness * 2.0 + 0.20, 0.95), g);
-    vec3  mSG    = ubo.specularColor * mix(1.0, 0.40, g);
+    float grimeAmount = grime(fragPos);
+    grimeAmount = pow(grimeAmount, mix(1.0, 2.5, brassness)) * grimeScale;
+    grimeAmount = (metal && ubo.interiorAmbient == 1) ? grimeAmount : 0.0;
+    float roughnessWithGrime = mix(ubo.roughness, min(ubo.roughness * 2.0 + 0.20, 0.95), grimeAmount);
+    vec3  specularColorWithGrime = ubo.specularColor * mix(1.0, 0.40, grimeAmount);
 
     // Rendering equation: sum of radiance*BRDF over sources, each zeroed by
     // shadowFactor(). Hemispheric ambient below is exempt on purpose (shadow
@@ -436,7 +436,7 @@ void main() {
     // near-zero at this fragment.
     const float LIGHT_ATTEN_EPS = 1e-3;
 
-    vec3 Lo = vec3(0.0);
+    vec3 directLighting = vec3(0.0);
     // Point/spot indirect contribution, spent below via ambient share. Kept
     // inline (not a function) to reuse `radiance`/`lightDir`/visibility from
     // this loop. Skips the BRDF, which bounced light has no lobe for.
@@ -450,10 +450,10 @@ void main() {
         }
 
         vec3 lightDir = lightDirection(gubo.lights[i], fragPos);
-        float NdotL = clamp(dot(normal, lightDir), 0.0, 1.0);
-        float vis = shadowFactor(gubo.lights[i].shadowIndex, gubo.lights[i].type, fragPos, normal, gubo.lights[i].pos, NdotL);
-        Lo += radiance
-            * BRDF(normal, lightDir, viewDir, diffuseColor, mSG, roughG, ubo.F0, diffuseShare)
+        float normalDotLight = clamp(dot(normal, lightDir), 0.0, 1.0);
+        float vis = shadowFactor(gubo.lights[i].shadowIndex, gubo.lights[i].type, fragPos, normal, gubo.lights[i].pos, normalDotLight);
+        directLighting += radiance
+            * BRDF(normal, lightDir, viewDir, diffuseColor, specularColorWithGrime, roughnessWithGrime, ubo.F0, diffuseShare)
             * vis;
 
         // Wrap-around diffuse (dot+1)/2, not BRDF's clamped cosine: bounced
@@ -474,11 +474,11 @@ void main() {
     // Only indirect light in this scene is torch/candle bounce, reusing the
     // loop's radiance+visibility, so an unlit corridor collects nothing.
     // Diffuse takes it * albedo; metals take it through metalAmbient()'s Fresnel.
-    float aw = ambientShare();
+    float ambientShareAmount = ambientShare();
     vec3 indirect = debugOn(LIGHT_DEBUG_NO_BOUNCE) ? vec3(0.0) : bounce * gubo.ambientBounce;
-    vec3 ambient = metal ? metalAmbient(normal, viewDir, mSG, roughG, ubo.F0, indirect)
+    vec3 ambient = metal ? metalAmbient(normal, viewDir, specularColorWithGrime, roughnessWithGrime, ubo.F0, indirect)
                          : indirect * diffuseColor;
-    vec3 color = Lo * (1.0 - aw) + ambient * aw;
+    vec3 color = directLighting * (1.0 - ambientShareAmount) + ambient * ambientShareAmount;
 
     if(heatmap) {
         float intensity = dot(color, vec3(0.2126, 0.7152, 0.0722));
@@ -510,8 +510,8 @@ void main() {
             GLOW_COLOR = GLOW_COLOR_DOOR;
         }
         float glowStrength = (ubo.glow != 0.0) ? 1.0 : 0.0;
-        float ndotv = clamp(dot(normal, viewDir), 0.0, 1.0);
-        float edgeTerm = 1.0 - ndotv;
+        float normalDotView = clamp(dot(normal, viewDir), 0.0, 1.0);
+        float edgeTerm = 1.0 - normalDotView;
 
         // Wider than pow(edgeTerm,3): more contrast on small shiny props.
         float rim = pow(edgeTerm, 2.2);
