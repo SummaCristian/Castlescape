@@ -422,31 +422,31 @@ void main() {
     float warmth = ubo.specularColor.b / max(ubo.specularColor.r, 1e-4);
     float brassness = 1.0 - smoothstep(0.6, 0.95, warmth);       // 1 brass, 0 steel
     // Brass resists grime more, and only shows it in the dirtiest spots.
-    float grimeScale = mix(1.0, 0.30, brassness);
-    float grimeAmount = grime(fragPos);
-    grimeAmount = pow(grimeAmount, mix(1.0, 2.5, brassness)) * grimeScale;
-    grimeAmount = (metal && ubo.interiorAmbient == 1) ? grimeAmount : 0.0;
+    float grimeScale = mix(1.0, 0.30, brassness);                              // max grime cap: 1.0 steel, 0.30 brass
+    float grimeAmount = grime(fragPos);                                        // raw procedural dirt, 0..1
+    grimeAmount = pow(grimeAmount, mix(1.0, 2.5, brassness)) * grimeScale;     // brass: crush mid-tones, keep only hotspots
+    grimeAmount = (metal && ubo.interiorAmbient == 1) ? grimeAmount : 0.0;     // only interior metals get grime
     // Grime roughens the surface and darkens/desaturates its reflectance.
-    float roughnessWithGrime = mix(ubo.roughness, min(ubo.roughness * 2.0 + 0.20, 0.95), grimeAmount);
-    vec3  specularColorWithGrime = ubo.specularColor * mix(1.0, 0.40, grimeAmount);
+    float roughnessWithGrime = mix(ubo.roughness, min(ubo.roughness * 2.0 + 0.20, 0.95), grimeAmount);  // more grime -> rougher, capped
+    vec3  specularColorWithGrime = ubo.specularColor * mix(1.0, 0.40, grimeAmount);                      // more grime -> darker reflection
 
     // Rendering equation: sum radiance*BRDF over every light, each gated by
     // its own shadow visibility. Below LIGHT_ATTEN_EPS a light contributes
     // nothing visible, so skip its BRDF/shadow-lookup cost entirely.
-    const float LIGHT_ATTEN_EPS = 1e-3;
+    const float LIGHT_ATTEN_EPS = 1e-3; // Less = no contribute
 
     vec3 directLighting = vec3(0.0);
     vec3 bounce = vec3(0.0); // indirect light collected here, spent below via ambient share
     for(int i = 0; i < gubo.lightCount; i++) {
         vec3 radiance = lightRadiance(gubo.lights[i], fragPos);
 
-        if(max(radiance.r, max(radiance.g, radiance.b)) < LIGHT_ATTEN_EPS) {
+        if(max(radiance.r, max(radiance.g, radiance.b)) < LIGHT_ATTEN_EPS) { // Max channel color < min -> skip
             continue;
         }
 
         vec3 lightDir = lightDirection(gubo.lights[i], fragPos);
-        float normalDotLight = clamp(dot(normal, lightDir), 0.0, 1.0);
-        float vis = shadowFactor(gubo.lights[i].shadowIndex, gubo.lights[i].type, fragPos, normal, gubo.lights[i].pos, normalDotLight);
+        float normalDotLight = clamp(dot(normal, lightDir), 0.0, 1.0); // Cosine light
+        float vis = shadowFactor(gubo.lights[i].shadowIndex, gubo.lights[i].type, fragPos, normal, gubo.lights[i].pos, normalDotLight); // Light visibility from this point (clamp)
         directLighting += radiance
             * BRDF(normal, lightDir, viewDir, diffuseColor, specularColorWithGrime, roughnessWithGrime, ubo.F0, diffuseShare)
             * vis;
@@ -455,7 +455,7 @@ void main() {
         // since indirect light doesn't arrive from one clean direction. Direct
         // (sun-like) lights are excluded: they have no position to bounce from.
         if(gubo.lights[i].type != LIGHT_DIRECT) {
-            bounce += radiance * (dot(normal, lightDir) * 0.5 + 0.5) * vis;
+            bounce += radiance * (dot(normal, lightDir) * 0.5 + 0.5) * vis; // radiance * soft cosine * visibility
         }
     }
 
@@ -466,7 +466,7 @@ void main() {
     vec3 indirect = debugOn(LIGHT_DEBUG_NO_BOUNCE) ? vec3(0.0) : bounce * gubo.ambientBounce;
     vec3 ambient = metal ? metalAmbient(normal, viewDir, specularColorWithGrime, roughnessWithGrime, ubo.F0, indirect)
                          : indirect * diffuseColor;
-    vec3 color = directLighting * (1.0 - ambientShareAmount) + ambient * ambientShareAmount;
+    vec3 color = directLighting * (1.0 - ambientShareAmount) + ambient * ambientShareAmount; // blend direct/ambient, weighted by their share
 
     if(heatmap) {
         float intensity = dot(color, vec3(0.2126, 0.7152, 0.0722));
