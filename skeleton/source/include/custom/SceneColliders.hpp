@@ -95,8 +95,8 @@ void SceneColliders::addBox(const glm::mat4 &Wm, glm::vec3 lo, glm::vec3 hi) {
 				std::max(lo.x, hi.x), std::max(lo.y, hi.y), std::max(lo.z, hi.z));
 	c->setWorldMatrix(Wm);
 
-	owned.push_back(c);
-	colliders.push_back(c);
+	owned.push_back(c); // Add collider for cleanup
+	colliders.push_back(c); // Add collider
 }
 
 void SceneColliders::init(Scene *SC, const std::string &file) {
