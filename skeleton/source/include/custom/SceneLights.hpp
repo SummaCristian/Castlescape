@@ -23,32 +23,23 @@ struct LightData {
 	float cosIn;					// spot: cosine of the half inner angle
 	float cosOut;					// spot: cosine of the half outer angle
 	int type;						// LIGHT_DIRECT / LIGHT_POINT / LIGHT_SPOT
-	// -1: no shadow. Else index into the cube shadow maps (NUM_SHADOW_CUBES),
-	// assigned in declaration order from lights.json's "castsShadow". Only
-	// LIGHT_POINT can take one (real cube map, see shadowFactor() in CookTorrance.frag).
+	// -1: no shadow. Else index into the cube shadow maps. Point lights only.
 	int shadowIndex;
 };
 
-// Hemispheric ambient (E07 s.47-54): scene's indirect light, two colors blended by
-// surface normal. Also stands in for the environment metalAmbient() reflects.
-// Both default BLACK: every level must author its own, there's no right default
-// for both a sealed dungeon and an open courtyard.
+// Hemispheric ambient: scene's indirect light, two colors blended by surface
+// normal. Both default BLACK: no right default for both a dungeon and a courtyard.
 struct AmbientLight {
 	glm::vec3 upper = glm::vec3(0.0f);				// sky color
 	glm::vec3 lower = glm::vec3(0.0f);				// ground color
 	glm::vec3 dir = glm::vec3(0.0f, 1.0f, 0.0f);	// which way "up" blends
 
-	// Share of indirect light, 0..1: CookTorrance.frag blends ambient*weight with
-	// direct*(1-weight). Default is the INDOOR value (game is played in the dungeon).
-	// Overridable per model via Material::ambientWeight.
+	// Share of indirect vs direct light, 0..1. Overridable per model (Material::ambientWeight).
 	float weight = 0.05f;
 
-	// Share of each POINT/SPOT light's radiance fed back as indirect light, 0..1.
-	// Same decay/color as the light's direct term (incl. flicker), but no shadow
-	// test and a soft wrap instead of a clamped cosine (one bounce off rough stone
-	// reaches round corners, has no terminator). Not physically derived -- stands
-	// in for an average wall's albedo * solid angle. Shares the `weight` bucket,
-	// not additive on top. Toggled independently by the Torch Bounce cheat.
+	// Share of point/spot radiance fed back as indirect light. Not physical --
+	// stands in for an average wall bouncing light around. Part of `weight`,
+	// not additive. Torch Bounce cheat toggle.
 	float bounce = 0.35f;
 };
 
@@ -60,57 +51,47 @@ class SceneLights {
 	// Advances animated lights, returns the list to upload (only enabled types).
 	const std::vector<LightData> &update(float deltaT);
 
-	// Lights handed over by the last update(), after the type switches filtered them.
+	// Lights from the last update(), after cheat-switch filtering.
 	int count() const { return (int)activeLights.size(); }
 
-	// Full authored list, unfiltered, without waiting for update(). Used once at
-	// startup to find shadow-casting lights (shadowIndex >= 0) and build their
-	// light-space matrices (static, so no need for the per-frame path).
+	// Full unfiltered list. Used once at startup to find shadow casters
+	// (shadowIndex >= 0) and build their light-space matrices.
 	const std::vector<LightData> &all() const { return lights; }
 
 	// Not animated. bounceEnabled below is applied in the shader, not here.
 	AmbientLight ambient() const;
 
-	// Debug switches wired to the cheat menu (flips these bools in place).
-	// One per light TYPE, not per light: scene has one sun, two matched lanterns.
+	// Cheat menu switches, one per light TYPE (not per light).
 	bool directEnabled = true;	// the sun
-	bool pointEnabled = true;	// the torches and candles
-	// Torch/candle radiance bounced off nearby surfaces (LIGHT_DEBUG_NO_BOUNCE in shader).
-	bool bounceEnabled = true;
+	bool pointEnabled = true;	// torches and candles
+	bool bounceEnabled = true;	// torch/candle bounce (LIGHT_DEBUG_NO_BOUNCE in shader)
 
-	// Forces an orbit onto directional lights authored static (orbitSpeed 0).
-	// Lights WITH an authored orbitSpeed ignore this, keep their own speed.
+	// Forces an orbit onto static directional lights. Authored orbitSpeed wins over this.
 	bool orbitOverride = false;
 
 	private:
 	std::vector<LightData> lights;
-	// Filtered copy handed to the caller, rebuilt every update(); member so update() can return a reference.
-	std::vector<LightData> activeLights;
+	std::vector<LightData> activeLights;	// filtered copy, rebuilt every update()
 	AmbientLight ambientLight;
 
 	// Animation state, index-matched with `lights`. Zero for anything static.
 	std::vector<float> orbitSpeed;	// degrees per second around world Y
 	std::vector<glm::vec3> baseDir;	// direction before any rotation
 
-	// Flame flicker (lights.json "flicker"), index-matched with `lights` too.
+	// Flicker state, index-matched with `lights`.
 	std::vector<glm::vec3> baseColor;	// color before flicker scales it
 	std::vector<bool> flickerEnabled;
-	std::vector<float> flickerStrength;	// how far the scale swings from 1.0
-	// Per-light stagger (golden-angle-ish step, index * 2.399963 rad) so
-	// identical torches don't flicker in sync; needs no RNG.
-	std::vector<float> flickerPhase;
+	std::vector<float> flickerStrength;	// swing from 1.0
+	std::vector<float> flickerPhase;		// per-light stagger so torches don't sync
 	float orbitAngle = 0.0f;
 
-	// Degrees/sec for orbitOverride: fast (full turn ~24s) for scanning sun angles quickly.
+	// orbitOverride speed/angle: fast sweep for scanning sun angles, resets on toggle-off.
 	static constexpr float DEBUG_ORBIT_SPEED = -15.0f;
-	// Override's own angle: starts the sweep from the authored direction, and
-	// resets the sun to it when switched off.
 	float debugOrbitAngle = 0.0f;
 
 	static glm::vec3 readVec3(const nlohmann::json &js, const glm::vec3 &fallback);
 
-	// Next shadowIndex to hand out, incremented per "castsShadow": true point light
-	// in declaration order. Not reset after init() -- only one pass over lights.json.
+	// Next shadowIndex to hand out, one per shadow-casting point light in declaration order.
 	int nextShadowIndexCube = 0;
 };
 
@@ -193,8 +174,7 @@ void SceneLights::init(Scene *SC, const std::string &file) {
 						  << "', light skipped\n";
 				continue;
 			}
-			// Offset is in WORLD units, not model-local (models are Z-up and
-			// rotated by the scene; world units match the Show Coordinates overlay).
+			// Offset in world units, not model-local.
 			glm::vec3 origin = glm::vec3(SC->I[it->second]->Wm[3]);
 			glm::vec3 offset = l.contains("offset") ? readVec3(l["offset"], glm::vec3(0.0f))
 													: glm::vec3(0.0f);
@@ -205,8 +185,7 @@ void SceneLights::init(Scene *SC, const std::string &file) {
 			continue;
 		}
 
-		// Authored as FULL angles in degrees; shader wants cosine of the half
-		// angle (L09 s.29), converted here once instead of per fragment.
+		// Authored as full angles in degrees; converted to half-angle cosine once here.
 		if(L.type == LIGHT_SPOT) {
 			float innerDeg = l.value("innerAngle", 30.0f);
 			float outerDeg = l.value("outerAngle", 45.0f);
@@ -263,8 +242,7 @@ const std::vector<LightData> &SceneLights::update(float deltaT) {
 		float speed = orbitSpeed[i];
 		float angle = orbitAngle;
 		if(speed == 0.0f) {
-			// Static unless the override claims it; restricted to directional
-			// lights (a point light ignores dir, a spot's aim is a different effect).
+			// Static unless override claims it, and only for directional lights.
 			if(!orbitOverride || lights[i].type != LIGHT_DIRECT) {
 				lights[i].dir = baseDir[i]; // restores authored direction once override drops
 				continue;
@@ -279,9 +257,7 @@ const std::vector<LightData> &SceneLights::update(float deltaT) {
 		lights[i].dir = glm::vec3(R * glm::vec4(baseDir[i], 0.0f));
 	}
 
-	// Sum of three sine waves at incommensurate frequencies so flicker doesn't
-	// visibly repeat. orbitAngle is elapsed seconds, runs regardless of orbitOverride.
-	// flickerPhase staggers each light's copy so identical torches don't sync.
+	// Three sine waves at unrelated frequencies so the flicker doesn't visibly repeat.
 	for(size_t i = 0; i < lights.size(); i++) {
 		if(!flickerEnabled[i]) continue;
 		float t = orbitAngle + flickerPhase[i];
