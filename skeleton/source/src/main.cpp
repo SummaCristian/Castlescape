@@ -3631,12 +3631,12 @@ class Castlescape : public BaseProject {
 
 		// Ghost depth prepass, by hand: nearest ghost-surface depth only
 		// (LESS, no colour), so the colour pass keeps just that layer.
-		PspectralDepth.bind(commandBuffer);
+		PspectralDepth.bind(commandBuffer); // From now on, every draw call will use this pipeline
 		for(int i = 0; i < MainScene.TI[1].InstanceCount; i++) {
-			Instance &inst = MainScene.TI[1].I[i];
-			MainScene.M[inst.Mid]->bind(commandBuffer);
-			for(int j = 0; j < inst.NDs[0]; j++) {
-				inst.DS[0][j]->bind(commandBuffer, PspectralDepth, j, currentImage);
+			Instance &inst = MainScene.TI[1].I[i]; // TI[1] -> Spectral (PRs[1]). .I[i] -> Single ghost.
+			MainScene.M[inst.Mid]->bind(commandBuffer); // Next draw calls will read geometry of this mesh
+			for(int j = 0; j < inst.NDs[0]; j++) { // inst.NDs[0] -> How manu DS needed for this ghost: here 2->DSLglobal, DSLlocal
+				inst.DS[0][j]->bind(commandBuffer, PspectralDepth, j, currentImage); // ite1: commont light/camera. ite2: matrix + texture ghost A (or B, etc)
 			}
 			vkCmdDrawIndexed(commandBuffer,
 							 static_cast<uint32_t>(MainScene.M[inst.Mid]->indices.size()), 1, 0, 0, 0);
