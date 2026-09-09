@@ -26,16 +26,19 @@ layout(location = 2) in vec2 fragUV;
 
 layout(location = 0) out vec4 outColor;
 
-// Light-model quantities keep the slides' names (mD, mS, N, L, V, h, D, G, F).
+// Light-model quantities from the slides (roughly rho, F0, N, L, V, h, D, G, F
+// there) are named descriptively here instead: diffuseColor, specularColor,
+// normal, lightDir, viewDir, halfVector, distributionTerm, geometryTerm,
+// fresnelTerm. The BRDF math itself is unchanged, see notes.md for the theory.
 // Must match the block in PosNormUV.vert field for field.
 layout(binding = 0, set = 1) uniform UniformBufferObject {
     mat4 mvpMat;
     mat4 mMat;
     mat4 nMat;
-    vec3 mS;          // specular color
-    float roughness;  // rho on the slides. 0 = mirror, 1 = matte
-    float F0;         // reflectance head-on
-    float k;          // diffuse share, specular gets (1 - k)
+    vec3 specularColor;
+    float roughness;    // rho on the slides. 0 = mirror, 1 = matte
+    float F0;           // reflectance head-on
+    float diffuseShare; // specular gets (1 - diffuseShare)
     int flatNormals;      // 1: ignore the vertex normal, use the face's own
     int interiorAmbient;  // 1: ambient as if the surface were vertical
     float time;           // unused here; declared to match the Flame block (shared DSLlocal)
@@ -45,7 +48,7 @@ layout(binding = 0, set = 1) uniform UniformBufferObject {
     // 0..1 focus-glow strength, set per-instance in main.cpp when this is the
     // object the crosshair is aimed at. Used near the end of main().
     float glow;
-    // 1: shade as a METAL. In main(): the diffuse term goes (k forced to 0),
+    // 1: shade as a METAL. In main(): the diffuse term goes (diffuseShare forced to 0),
     // and the indirect term becomes metalAmbient() -- a reflection of the room
     // -- instead of the hemisphere times albedo. See Material::metallic.
     int metallic;
@@ -216,7 +219,7 @@ float dbgBias = 0.0;
 float dbgSoft = 0.0;
 float dbgBestLum = -1.0;
 
-float shadowFromCube(int idx, vec3 pos, vec3 N, vec3 lightPos, float NdotL) {
+float shadowFromCube(int idx, vec3 pos, vec3 normal, vec3 lightPos, float NdotL) {
     // Depth slack: floating-point noise only. Front-face culling in the
     // capture keeps this surface out of its own map, so there is no acne left
     // to cover -- just a few ULPs between the distance computed here and the
@@ -243,7 +246,7 @@ float shadowFromCube(int idx, vec3 pos, vec3 N, vec3 lightPos, float NdotL) {
     float sinI = sqrt(1.0 - cosI * cosI);
 
     float offset = min(texelWorld * NORMAL_OFFSET_TEXELS * sinI, NORMAL_OFFSET_MAX);
-    vec3 samplePos = pos + N * offset;
+    vec3 samplePos = pos + normal * offset;
 
     vec3 toFrag = samplePos - lightPos;
     float dist = length(toFrag);
@@ -292,9 +295,9 @@ float shadowFromCube(int idx, vec3 pos, vec3 N, vec3 lightPos, float NdotL) {
 // shadowIndex (see LightData::shadowIndex in SceneLights.hpp) -- a direct or
 // spot light always lights unconditionally through this same early-out.
 //
-// NdotL scales the cube path's normal offset, which is why N has to come
+// NdotL scales the cube path's normal offset, which is why normal has to come
 // along too.
-float shadowFactor(int shadowIndex, int type, vec3 pos, vec3 N, vec3 lightPos, float NdotL) {
+float shadowFactor(int shadowIndex, int type, vec3 pos, vec3 normal, vec3 lightPos, float NdotL) {
     // Shadows off (cheat menu). Reads gubo.debugFlags directly, since
     // debugOn() is declared further down.
     if(shadowIndex < 0 || (gubo.debugFlags & LIGHT_DEBUG_NO_SHADOWS) != 0) {
@@ -306,8 +309,8 @@ float shadowFactor(int shadowIndex, int type, vec3 pos, vec3 N, vec3 lightPos, f
     // caught it. Bias, softening band and normal offset all live inside
     // shadowFromCube() now: they are derived from the distance to the
     // light, which is the one thing this function doesn't have and that
-    // one computes anyway. N and NdotL are what scale them, see there.
-    return shadowFromCube(shadowIndex, pos, N, lightPos, NdotL);
+    // one computes anyway. normal and NdotL are what scale them, see there.
+    return shadowFromCube(shadowIndex, pos, normal, lightPos, NdotL);
 }
 
 // Whether a LightConstants.glsl debug view is on. Off in a normal frame, so
@@ -343,15 +346,15 @@ const float PI = 3.14159265359;
 // shared bounce value -- already summed over every point/spot light and
 // shadow-tested in main() -- not an independently authored color, so a metal
 // can never show ambient light the actual torches/candles didn't put there.
-vec3 metalAmbient(vec3 N, vec3 V, vec3 mS, float roughness, float F0, vec3 indirect) {
-    // Schlick on N.V. Ceiling is max(1 - roughness, F0), not 1.0: a rough
+vec3 metalAmbient(vec3 normal, vec3 viewDir, vec3 specularColor, float roughness, float F0, vec3 indirect) {
+    // Schlick on normal.viewDir. Ceiling is max(1 - roughness, F0), not 1.0: a rough
     // metal shouldn't turn mirror at the horizon and put a hard bright rim
     // around a tube.
-    float NdotV = clamp(dot(N, V), 0.0, 1.0);
-    float F = F0 + (max(1.0 - roughness, F0) - F0) * pow(1.0 - NdotV, 5.0);
+    float NdotV = clamp(dot(normal, viewDir), 0.0, 1.0);
+    float fresnelTerm = F0 + (max(1.0 - roughness, F0) - F0) * pow(1.0 - NdotV, 5.0);
 
-    // mS, not mD: for a metal the specular color IS the material's color.
-    return indirect * mS * F;
+    // specularColor, not diffuseColor: for a metal the specular color IS the material's color.
+    return indirect * specularColor * fresnelTerm;
 }
 
 // How much of this fragment's light is indirect, 0..1. Per-model if the
@@ -404,54 +407,54 @@ vec3 lightRadiance(Light lt, vec3 pos) {
     return radiance;
 }
 
-// D: fraction of microfacets oriented along h. GGX, E06 s.45.
-float distributionGGX(vec3 N, vec3 h, float roughness) {
+// distributionTerm: fraction of microfacets oriented along halfVector. GGX, E06 s.45.
+float distributionGGX(vec3 normal, vec3 halfVector, float roughness) {
     float a2 = roughness * roughness;
-    float NdotH = clamp(dot(N, h), 0.0, 1.0);
+    float NdotH = clamp(dot(normal, halfVector), 0.0, 1.0);
     float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
     return a2 / (PI * denom * denom);
 }
 
-// G: microfacets shadowing each other. Parameter-free form, E06 s.47.
+// geometryTerm: microfacets shadowing each other. Parameter-free form, E06 s.47.
 // Without it rough surfaces blow out at grazing angles.
-float geometricTerm(vec3 N, vec3 h, vec3 L, vec3 V) {
-    float NdotH = clamp(dot(N, h), 0.0, 1.0);
-    float NdotV = clamp(dot(N, V), 0.0, 1.0);
-    float NdotL = clamp(dot(N, L), 0.0, 1.0);
-    float VdotH = max(dot(V, h), 0.0001);
+float geometricTerm(vec3 normal, vec3 halfVector, vec3 lightDir, vec3 viewDir) {
+    float NdotH = clamp(dot(normal, halfVector), 0.0, 1.0);
+    float NdotV = clamp(dot(normal, viewDir), 0.0, 1.0);
+    float NdotL = clamp(dot(normal, lightDir), 0.0, 1.0);
+    float VdotH = max(dot(viewDir, halfVector), 0.0001);
 
     return min(1.0, min(2.0 * NdotH * NdotV / VdotH,
                         2.0 * NdotH * NdotL / VdotH));
 }
 
-// F: fraction reflected instead of transmitted, F0 head-on rising to 1 at the
+// fresnelTerm: fraction reflected instead of transmitted, F0 head-on rising to 1 at the
 // horizon. Schlick, E06 s.46. The 5 is his fit, not a derivation.
-float fresnelSchlick(vec3 V, vec3 h, float F0) {
-    float VdotH = clamp(dot(V, h), 0.0, 1.0);
+float fresnelSchlick(vec3 viewDir, vec3 halfVector, float F0) {
+    float VdotH = clamp(dot(viewDir, halfVector), 0.0, 1.0);
     return F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
 }
 
 // Cook-Torrance, E06 s.38-39:
-//   fr = clamp(N.L) * (k * mD + (1-k) * mS * D*F*G / (4 * clamp(N.L) * clamp(N.V)))
-// Diffuse and specular are interpolated by k, not added -- adding both at full
-// strength returns more light than came in. The 4*(N.L)*(N.V) is the
+//   fr = clamp(normal.lightDir) * (diffuseShare * diffuseColor + (1-diffuseShare) * specularColor * distributionTerm*fresnelTerm*geometryTerm / (4 * clamp(normal.lightDir) * clamp(normal.viewDir)))
+// Diffuse and specular are interpolated by diffuseShare, not added -- adding both at full
+// strength returns more light than came in. The 4*(normal.lightDir)*(normal.viewDir) is the
 // microfacet-to-surface-area normalization.
-vec3 BRDF(vec3 N, vec3 L, vec3 V, vec3 mD, vec3 mS, float roughness, float F0, float k) {
-    float NdotL = clamp(dot(N, L), 0.0, 1.0);
-    float NdotV = clamp(dot(N, V), 0.0, 1.0);
-    vec3 h = normalize(L + V);
+vec3 BRDF(vec3 normal, vec3 lightDir, vec3 viewDir, vec3 diffuseColor, vec3 specularColor, float roughness, float F0, float diffuseShare) {
+    float NdotL = clamp(dot(normal, lightDir), 0.0, 1.0);
+    float NdotV = clamp(dot(normal, viewDir), 0.0, 1.0);
+    vec3 halfVector = normalize(lightDir + viewDir);
 
-    float D = distributionGGX(N, h, roughness);
-    float G = geometricTerm(N, h, L, V);
-    float F = fresnelSchlick(V, h, F0);
+    float distributionTerm = distributionGGX(normal, halfVector, roughness);
+    float geometryTerm = geometricTerm(normal, halfVector, lightDir, viewDir);
+    float fresnelTerm = fresnelSchlick(viewDir, halfVector, F0);
 
     // Denominator hits 0 at the silhouette; NdotL zeroes the result there
     // anyway, the guard just avoids an inf (inf * 0 is NaN).
-    vec3 specular = mS * (D * F * G) / max(4.0 * NdotL * NdotV, 0.0001);
+    vec3 specular = specularColor * (distributionTerm * fresnelTerm * geometryTerm) / max(4.0 * NdotL * NdotV, 0.0001);
 
     // Lambert diffuse (E06 s.38). Clamped NdotL, so a face turned away
     // contributes 0 rather than eating into what another light put there.
-    return NdotL * (k * mD + (1.0 - k) * specular);
+    return NdotL * (diffuseShare * diffuseColor + (1.0 - diffuseShare) * specular);
 }
 
 // The tone map (L09 s.45) MOVED to Composite.frag, the last pass of the HDR
@@ -503,7 +506,7 @@ float grime(vec3 worldPos) {
 
 void main() {
     // Interpolation shortens the normal wherever the corner normals diverge.
-    vec3 N = normalize(fragNorm);
+    vec3 normal = normalize(fragNorm);
 
     // The MGCG models average vertex normals across hard edges, so a flat face
     // gets a gradient instead of one value. For those, derive the face normal
@@ -513,35 +516,35 @@ void main() {
     // magnitude, fine for which side is out).
     if(ubo.flatNormals == 1) {
         vec3 faceN = normalize(cross(dFdx(fragPos), dFdy(fragPos)));
-        N = dot(faceN, N) < 0.0 ? -faceN : faceN;
+        normal = dot(faceN, normal) < 0.0 ? -faceN : faceN;
     }
 
     // No sRGB conversion: the image view is R8G8B8A8_SRGB, so the sampler
     // already returns linear values.
-    vec3 mD = texture(albedoMap, fragUV).rgb;
+    vec3 diffuseColor = texture(albedoMap, fragUV).rgb;
 
     // Debug view: the shading normal remapped to [0,1] (+X red, +Y green,
     // +Z blue). After the flatNormals block, so it shows the normal the
     // lighting actually used.
     if(debugOn(LIGHT_DEBUG_NORMALS)) {
-        outColor = vec4(N * 0.5 + 0.5, 1.0);
+        outColor = vec4(normal * 0.5 + 0.5, 1.0);
         return;
     }
 
     // Debug view: the texture alone, no lighting. Tells "no light reached"
     // apart from "the texture is black here".
     if(debugOn(LIGHT_DEBUG_UNLIT)) {
-        outColor = vec4(mD, 1.0);
+        outColor = vec4(diffuseColor, 1.0);
         return;
     }
 
-    vec3 V = normalize(gubo.eyePos - fragPos);
+    vec3 viewDir = normalize(gubo.eyePos - fragPos);
 
-    // Debug view: incoming light intensity, ignoring albedo. Forcing mD/mS/k
+    // Debug view: incoming light intensity, ignoring albedo. Forcing diffuseColor/specularColor/diffuseShare
     // reuses the Lo loop below unchanged; only the result handling differs.
     bool heatmap = debugOn(LIGHT_DEBUG_HEATMAP);
     if(heatmap) {
-        mD = vec3(1.0);
+        diffuseColor = vec3(1.0);
     }
 
     // Both views want the specular gone. Named once because the metal path
@@ -550,11 +553,11 @@ void main() {
     bool specularOff = debugOn(LIGHT_DEBUG_NO_SPECULAR) || heatmap;
     bool metal = ubo.metallic == 1 && !specularOff;
 
-    // k is the diffuse share: forcing it to 1 zeroes the specular term (the
+    // Forcing diffuseShare to 1 zeroes the specular term (the
     // highlights go, nothing else changes). A metal goes to 0 -- its free
     // electrons absorb the subsurface scatter a diffuse lobe comes from.
     // Forced here so the flag alone defines "this is a metal".
-    float k = specularOff ? 1.0 : (metal ? 0.0 : ubo.k);
+    float diffuseShare = specularOff ? 1.0 : (metal ? 0.0 : ubo.diffuseShare);
 
     // Grime, interior metals only. Everyone else has g == 0, so both mixes
     // are the identity. Where it applies, a dirty patch roughens the surface
@@ -562,8 +565,8 @@ void main() {
     //
     // The wrought-iron chains wear it fully, the brass padlock and key much
     // less. No per-model flag: the specular color is the tell -- brass is warm
-    // (mS.b well under mS.r), steel is near neutral.
-    float warmth = ubo.mS.b / max(ubo.mS.r, 1e-4);          // ~0.46 brass, ~1.04 steel
+    // (specularColor.b well under specularColor.r), steel is near neutral.
+    float warmth = ubo.specularColor.b / max(ubo.specularColor.r, 1e-4);          // ~0.46 brass, ~1.04 steel
     float brassness = 1.0 - smoothstep(0.6, 0.95, warmth);  // 1 brass, 0 steel
     // Two knobs: grimeScale drops the overall bite; the pow() above 1 for
     // brass crushes the mid-grey coverage so only the hotspots survive, which
@@ -573,7 +576,7 @@ void main() {
     g = pow(g, mix(1.0, 2.5, brassness)) * grimeScale;
     g = (metal && ubo.interiorAmbient == 1) ? g : 0.0;
     float roughG = mix(ubo.roughness, min(ubo.roughness * 2.0 + 0.20, 0.95), g);
-    vec3  mSG    = ubo.mS * mix(1.0, 0.40, g);
+    vec3  mSG    = ubo.specularColor * mix(1.0, 0.40, g);
 
     // Rendering equation: sum of radiance times BRDF over the sources, each
     // term zeroed by shadowFactor() where that light doesn't reach. The
@@ -591,7 +594,7 @@ void main() {
     vec3 Lo = vec3(0.0);
     // The point/spot lights' INDIRECT contribution, spent below out of the
     // ambient share. In this loop, not a function of its own, so it can reuse
-    // `radiance`, `L` and the visibility -- recomputing those would double the
+    // `radiance`, `lightDir` and the visibility -- recomputing those would double the
     // length()/pow() and shadow fetch in the hottest loop. It skips the BRDF,
     // which bounced light has no lobe for.
     vec3 bounce = vec3(0.0);
@@ -605,11 +608,11 @@ void main() {
             continue;
         }
 
-        vec3 L = lightDirection(gubo.lights[i], fragPos);
+        vec3 lightDir = lightDirection(gubo.lights[i], fragPos);
         // Same clamped dot the BRDF uses; shadowFactor scales its bias by it.
-        float NdotL = clamp(dot(N, L), 0.0, 1.0);
+        float NdotL = clamp(dot(normal, lightDir), 0.0, 1.0);
         dbgLastValid = false;
-        float vis = shadowFactor(gubo.lights[i].shadowIndex, gubo.lights[i].type, fragPos, N, gubo.lights[i].pos, NdotL);
+        float vis = shadowFactor(gubo.lights[i].shadowIndex, gubo.lights[i].type, fragPos, normal, gubo.lights[i].pos, NdotL);
         // dbg* globals: keep the cube-shadowed light contributing most radiance
         // here -- the one whose shadow is worth looking at.
         float dbgLum = dot(radiance, vec3(0.2126, 0.7152, 0.0722));
@@ -621,7 +624,7 @@ void main() {
             dbgSoft = dbgLastSoft;
         }
         Lo += radiance
-            * BRDF(N, L, V, mD, mSG, roughG, ubo.F0, k)
+            * BRDF(normal, lightDir, viewDir, diffuseColor, mSG, roughG, ubo.F0, diffuseShare)
             * vis;
 
         // Wrap-around diffuse, NOT the BRDF's clamped cosine: (dot + 1) / 2.
@@ -640,7 +643,7 @@ void main() {
         // back on (CookTorrance.frag's ambient blend), which is the honest
         // look for a dungeon corridor with no torch in it.
         if(gubo.lights[i].type != LIGHT_DIRECT) {
-            bounce += radiance * (dot(N, L) * 0.5 + 0.5) * vis;
+            bounce += radiance * (dot(normal, lightDir) * 0.5 + 0.5) * vis;
         }
     }
 
@@ -659,13 +662,13 @@ void main() {
     // `indirect` reuses each point/spot light's own radiance and shadow
     // visibility from the loop above, so a corridor with no torch in it
     // collects nothing, the way an unlit dungeon corridor actually looks.
-    // Diffuse surfaces take it times albedo (mD); metals take the same value
+    // Diffuse surfaces take it times albedo (diffuseColor); metals take the same value
     // through metalAmbient()'s Fresnel instead, so a metal can never show a
     // reflection color the actual torches/candles didn't put there.
     float aw = ambientShare();
     vec3 indirect = debugOn(LIGHT_DEBUG_NO_BOUNCE) ? vec3(0.0) : bounce * gubo.ambientBounce;
-    vec3 ambient = metal ? metalAmbient(N, V, mSG, roughG, ubo.F0, indirect)
-                         : indirect * mD;
+    vec3 ambient = metal ? metalAmbient(normal, viewDir, mSG, roughG, ubo.F0, indirect)
+                         : indirect * diffuseColor;
     vec3 color = Lo * (1.0 - aw) + ambient * aw;
 
     if(heatmap) {
@@ -721,7 +724,7 @@ void main() {
             GLOW_COLOR = GLOW_COLOR_DOOR;
         }
         float glowStrength = (ubo.glow != 0.0) ? 1.0 : 0.0;
-        float ndotv = clamp(dot(N, V), 0.0, 1.0);
+        float ndotv = clamp(dot(normal, viewDir), 0.0, 1.0);
         float edgeTerm = 1.0 - ndotv;
 
         // Wider than a plain pow(edgeTerm, 3.0): still not enough contrast on

@@ -47,20 +47,20 @@ layout(location = 0) out vec4 outColor;
 
 // Must match PosNormUV.vert field for field; the ghosts ride the same
 // per-instance struct as every other prop. Three fields are read:
-//   mMat  the instance's world matrix, transposed below for object space. Col 3 is the origin.
-//   mS    the spectral tint (materials.json "ghost"). Named specularColor for
-//         CookTorrance.frag; here it's the emitted colour.
-//   F0    0..1, how far this ghost is into a CHASE. Reflectance is meaningless
-//         without a BRDF, so main.cpp reuses the field for Ghost::chaseBlend --
-//         same piggybacking `glow` does on the other technique.
+//   mMat           the instance's world matrix, transposed below for object space. Col 3 is the origin.
+//   specularColor  the spectral tint (materials.json "ghost"). Named for
+//                  CookTorrance.frag; here it's the emitted colour.
+//   F0             0..1, how far this ghost is into a CHASE. Reflectance is meaningless
+//                  without a BRDF, so main.cpp reuses the field for Ghost::chaseBlend --
+//                  same piggybacking `glow` does on the other technique.
 layout(binding = 0, set = 1) uniform UniformBufferObject {
     mat4 mvpMat;
     mat4 mMat;
     mat4 nMat;
-    vec3 mS;
+    vec3 specularColor;
     float roughness;
     float F0;
-    float k;
+    float diffuseShare;
     int flatNormals;
     int interiorAmbient;
     float time;
@@ -117,14 +117,14 @@ float hash21(vec2 p) {
 }
 
 float noise2(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    float a = hash21(i);
-    float b = hash21(i + vec2(1.0, 0.0));
-    float c = hash21(i + vec2(0.0, 1.0));
-    float d = hash21(i + vec2(1.0, 1.0));
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+    vec2 cell = floor(p);
+    vec2 cellFrac = fract(p);
+    float cornerBL = hash21(cell);
+    float cornerBR = hash21(cell + vec2(1.0, 0.0));
+    float cornerTL = hash21(cell + vec2(0.0, 1.0));
+    float cornerTR = hash21(cell + vec2(1.0, 1.0));
+    vec2 smoothFrac = cellFrac * cellFrac * (3.0 - 2.0 * cellFrac);
+    return mix(mix(cornerBL, cornerBR, smoothFrac.x), mix(cornerTL, cornerTR, smoothFrac.x), smoothFrac.y);
 }
 
 // 3 octaves, not Flame.frag's 4: stretched over a whole body, the finest
@@ -141,12 +141,12 @@ float fbm(vec2 p) {
 }
 
 void main() {
-    vec3 N = normalize(fragNorm);
-    vec3 V = normalize(gubo.eyePos - fragPos);
+    vec3 normal = normalize(fragNorm);
+    vec3 viewDir = normalize(gubo.eyePos - fragPos);
     // abs(), not max(..., 0): a sheet has no inside, so a fold facing away
     // should thicken as much as one facing towards. Without abs those folds
     // punch holes in the silhouette.
-    float facing = abs(dot(N, V));
+    float facing = abs(dot(normal, viewDir));
 
     // 1. Fresnel rim. The outline of the ghost, and nothing else decides it.
     float rim = pow(1.0 - facing, RIM_POWER);
@@ -188,7 +188,7 @@ void main() {
 
     // 3. Emission. Unlit: the tint, brightened at the rim, then pushed towards
     // the hunt colour by however far into a chase this ghost is.
-    vec3 tint = mix(ubo.mS, HUNT_TINT, chase);
+    vec3 tint = mix(ubo.specularColor, HUNT_TINT, chase);
     float emission = mix(BODY_EMISSION, RIM_EMISSION, rim) * mix(1.0, HUNT_EMISSION, chase);
 
     // A cool core under the tint, strongest where the sheet is thinnest. Two

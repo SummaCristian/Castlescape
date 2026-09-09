@@ -15,8 +15,8 @@
 //                  none. The one that actually gets tuned.
 //   F0             reflectance when looking straight at the surface. ~0.04 for
 //                  every dielectric; metals are much higher.
-//   k              balance between plain color and highlight. Ignored by
-//                  metals, which have no diffuse term.
+//   diffuseShare   balance between plain color and highlight (JSON key "k").
+//                  Ignored by metals, which have no diffuse term.
 //
 // The base color is not here: it comes per pixel from the texture.
 //
@@ -36,10 +36,10 @@
 // Defaults are a neutral dielectric, so a model missing from the data file
 // still renders sensibly instead of turning black.
 struct Material {
-	glm::vec3 specularColor = glm::vec3(1.0f);	// mS
+	glm::vec3 specularColor = glm::vec3(1.0f);
 	float roughness = 0.6f;						// rho, width of the GGX lobe
 	float F0 = 0.04f;							// reflectance head-on
-	float k = 0.9f;								// diffuse share
+	float diffuseShare = 0.9f;						// balance between plain color and highlight, JSON key "k"
 	// The MGCG meshes average their normals across hard edges, which smears the
 	// shading of anything that should be crisp. With this on the shader derives
 	// the face normal itself instead. Leave it off for genuinely curved
@@ -85,7 +85,7 @@ struct Material {
 	// cannot express a conductor by tuning alone; this switches two things in
 	// CookTorrance.frag:
 	//
-	//   no diffuse lobe (k forced to 0). The diffuse term is light that entered
+	//   no diffuse lobe (diffuseShare forced to 0). The diffuse term is light that entered
 	//   the surface and scattered back out, which the free electrons of a metal
 	//   absorb instead. Any leftover diffuse paints the object with its albedo
 	//   texture, which is what made the brass padlock read as orange plastic.
@@ -97,7 +97,7 @@ struct Material {
 	//   the diffuse ambient away and the chains went black.
 	//
 	// With this on, specularColor becomes the material's reflectance color
-	// rather than the highlight color, and is no longer optional: mS * F0
+	// rather than the highlight color, and is no longer optional: specularColor * F0
 	// should equal the metal's measured reflectance (iron ~0.56/0.57/0.58,
 	// brass ~0.95/0.64/0.37). Left white, a metal reflects like chrome.
 	int metallic = 0;
@@ -152,7 +152,7 @@ void SceneMaterials::readInto(const nlohmann::json &js, Material &m) {
 	}
 	if(js.contains("roughness")) m.roughness = js["roughness"].get<float>();
 	if(js.contains("F0"))        m.F0 = js["F0"].get<float>();
-	if(js.contains("k"))         m.k = js["k"].get<float>();
+	if(js.contains("k"))         m.diffuseShare = js["k"].get<float>();
 	if(js.contains("flatNormals")) m.flatNormals = js["flatNormals"].get<bool>() ? 1 : 0;
 	if(js.contains("castsShadow")) m.castsShadow = js["castsShadow"].get<bool>();
 	if(js.contains("interior"))    m.interiorAmbient = js["interior"].get<bool>() ? 1 : 0;

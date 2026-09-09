@@ -79,11 +79,11 @@ void main() {
 	// torchlight reads hotter against the stone without changing the lighting
 	// itself. Weighted by luminance and kept gentle.
 	{
-		float Yc = dot(color, vec3(0.2126, 0.7152, 0.0722));
+		float gradeLuma = dot(color, vec3(0.2126, 0.7152, 0.0722));
 		const vec3  GRADE_SHADOW = vec3(0.96, 1.00, 1.06);
 		const vec3  GRADE_HIGH   = vec3(1.06, 1.01, 0.92);
 		const float GRADE_AMOUNT = 0.5;
-		vec3 grade = mix(GRADE_SHADOW, GRADE_HIGH, smoothstep(0.0, 0.6, Yc));
+		vec3 grade = mix(GRADE_SHADOW, GRADE_HIGH, smoothstep(0.0, 0.6, gradeLuma));
 		color *= mix(vec3(1.0), grade, GRADE_AMOUNT);
 	}
 
@@ -132,12 +132,12 @@ void main() {
 		float veil = clamp(post.spectralVeil, 0.0, 1.0);
 		// Squared radius, normalised so an edge midpoint is 1 (the falloff
 		// wanted is quadratic anyway).
-		vec2  d = uv - 0.5;
-		float r = clamp(dot(d, d) * 4.0, 0.0, 1.0);
-		float w = veil * mix(VEIL_CENTRE, VEIL_EDGE, r);
+		vec2  veilOffset = uv - 0.5;
+		float veilRadiusSq = clamp(dot(veilOffset, veilOffset) * 4.0, 0.0, 1.0);
+		float veilWeight = veil * mix(VEIL_CENTRE, VEIL_EDGE, veilRadiusSq);
 
-		float Y = dot(color, vec3(0.2126, 0.7152, 0.0722));
-		color = mix(color, vec3(Y) * VEIL_TINT + VEIL_LIFT * veil, w);
+		float sceneLuma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+		color = mix(color, vec3(sceneLuma) * VEIL_TINT + VEIL_LIFT * veil, veilWeight);
 	}
 
 	color = mix(color, vec3(1.0), clamp(post.escapeFlash, 0.0, 1.0));

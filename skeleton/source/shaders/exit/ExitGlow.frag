@@ -37,7 +37,7 @@ void main() {
 	// angle through the arch projects the opening onto a CORNER of the quad --
 	// the farthest point under length() -- so a radial fade reached it while
 	// the middle went spare. Per-axis puts the whole rectangle to work.
-	float m = max(abs(fragCorner.x), abs(fragCorner.y));
+	float axisDist = max(abs(fragCorner.x), abs(fragCorner.y));
 
 	// A PLATEAU, not a falloff: flat and blown out across the whole quad,
 	// letting go only in the last `softness`. Rolling off from the centre read
@@ -45,7 +45,7 @@ void main() {
 	// surface out there, the one thing this must never do. The border fade
 	// stays because the quads overhang the opening on every side; it never
 	// appears in the doorway itself.
-	float field = 1.0 - smoothstep(1.0 - ubo.softness, 1.0, m);
+	float field = 1.0 - smoothstep(1.0 - ubo.softness, 1.0, axisDist);
 
 	// Very slow breathing from two non-dividing periods, so the sum never
 	// visibly repeats. Small: outdoor daylight doesn't gutter, and at this
@@ -55,7 +55,7 @@ void main() {
 	// Warmer at the very edge, white elsewhere. The bloom smears this band
 	// over the stonework, giving the glare a colour instead of a grey-white
 	// hole; inside the arch it's out of frame.
-	vec3 tint = mix(ubo.color, ubo.color * vec3(1.0, 0.88, 0.70), smoothstep(0.72, 1.0, m));
+	vec3 tint = mix(ubo.color, ubo.color * vec3(1.0, 0.88, 0.70), smoothstep(0.72, 1.0, axisDist));
 
 	float brightness = field * breathe;
 

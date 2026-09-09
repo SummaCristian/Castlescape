@@ -18,13 +18,13 @@ layout(location = 5) flat in float mote;  // 1 dust mote: lit dust, not burning 
 layout(location = 0) out vec4 outColor;
 
 void main() {
-	float d = length(quv);
-	if(d > 1.0) {
+	float dist = length(quv);
+	if(dist > 1.0) {
 		discard;
 	}
 
 	// Squared falloff: a soft streak with no hard edge.
-	float falloff = (1.0 - d) * (1.0 - d);
+	float falloff = (1.0 - dist) * (1.0 - dist);
 
 	// Fade in after spawn and out before the loop resets, so `life` reaching
 	// 0 or 1 is never visible.

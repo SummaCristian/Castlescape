@@ -36,13 +36,13 @@ struct UniformBufferObject {
 	// inverse-transpose of mMat: a non-uniform scale would tilt normals off the
 	// surface. A mat4 and not a mat3, to dodge std140's column padding.
 	alignas(16) glm::mat4 nMat;
-	// Cook-Torrance material; mD isn't here, it's the albedo texture. Must match
+	// Cook-Torrance material; diffuseColor isn't here, it's the albedo texture. Must match
 	// field for field the block the four shaders that see it declare. No explicit
 	// padding: the scalars below fill std140's vec4 slots exactly, 240 bytes.
-	alignas(16) glm::vec3 mS;	// specular color
+	alignas(16) glm::vec3 specularColor;
 	float roughness;			// rho: width of the microfacet distribution
 	float F0;					// reflectance seen head-on
-	float k;					// diffuse share of the BRDF
+	float diffuseShare;		// diffuse share of the BRDF
 	int flatNormals;			// 1: derive the face normal in the shader
 	int interiorAmbient;		// 1: use hemispheric ambient for a vertical (interior) surface
 
@@ -4478,10 +4478,10 @@ class Castlescape : public BaseProject {
 				// three door keys, one "key" model shaded as three metals).
 				const Material &m = materials.forInstance(MainScene.TI[techniqueId].I[instanceId].Iid,
 														 MainScene.TI[techniqueId].I[instanceId].Mid);
-				ubo.mS = m.specularColor;
+				ubo.specularColor = m.specularColor;
 				ubo.roughness = m.roughness;
 				ubo.F0 = m.F0;
-				ubo.k = m.k;
+				ubo.diffuseShare = m.diffuseShare;
 				ubo.flatNormals = m.flatNormals;
 				ubo.interiorAmbient = m.interiorAmbient;
 				ubo.ambientWeight = m.ambientWeight;

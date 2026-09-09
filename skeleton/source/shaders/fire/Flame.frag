@@ -38,14 +38,14 @@ float hash21(vec2 p) {
 }
 
 float noise2(vec2 p) {
-	vec2 i = floor(p);
-	vec2 f = fract(p);
-	float a = hash21(i);
-	float b = hash21(i + vec2(1.0, 0.0));
-	float c = hash21(i + vec2(0.0, 1.0));
-	float d = hash21(i + vec2(1.0, 1.0));
-	vec2 u = f * f * (3.0 - 2.0 * f);
-	return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+	vec2 cell = floor(p);
+	vec2 cellFrac = fract(p);
+	float cornerBL = hash21(cell);
+	float cornerBR = hash21(cell + vec2(1.0, 0.0));
+	float cornerTL = hash21(cell + vec2(0.0, 1.0));
+	float cornerTR = hash21(cell + vec2(1.0, 1.0));
+	vec2 smoothFrac = cellFrac * cellFrac * (3.0 - 2.0 * cellFrac);
+	return mix(mix(cornerBL, cornerBR, smoothFrac.x), mix(cornerTL, cornerTR, smoothFrac.x), smoothFrac.y);
 }
 
 // 4 octaves, each double frequency and half amplitude: detail at many scales

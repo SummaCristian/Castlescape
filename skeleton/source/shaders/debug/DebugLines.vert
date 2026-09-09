@@ -12,21 +12,21 @@
 
 layout(binding = 0, set = 0) uniform DebugLinesVP {
 	mat4 vpMat;
-} vp;
+} viewProj;
 
 // vec4, not vec3: std140 gives an array of vec3 a 16-byte stride anyway, so
 // declaring vec4 matches the C++ side. w is unused padding.
 layout(binding = 1, set = 0) uniform DebugLinesPos {
 	vec4 pos[2048];
-} P;
+} linePositions;
 
 layout(binding = 2, set = 0) uniform DebugLinesColor {
 	vec4 color[2048];
-} C;
+} lineColors;
 
 layout(location = 0) out vec3 fragColor;
 
 void main() {
-	gl_Position = vp.vpMat * vec4(P.pos[gl_VertexIndex].xyz, 1.0);
-	fragColor = C.color[gl_VertexIndex].rgb;
+	gl_Position = viewProj.vpMat * vec4(linePositions.pos[gl_VertexIndex].xyz, 1.0);
+	fragColor = lineColors.color[gl_VertexIndex].rgb;
 }

@@ -58,10 +58,10 @@ float hash11(float x) {
 // 1D value noise on hash11: a smooth random walk for the wobble. The
 // 0.517/0.13 constants just decorrelate the lattice from hash11's other uses.
 float noise11(float x) {
-	float i = floor(x);
-	float f = fract(x);
-	float u = f * f * (3.0 - 2.0 * f);
-	return mix(hash11(i * 0.517 + 0.13), hash11((i + 1.0) * 0.517 + 0.13), u);
+	float cell = floor(x);
+	float cellFrac = fract(x);
+	float smoothFrac = cellFrac * cellFrac * (3.0 - 2.0 * cellFrac);
+	return mix(hash11(cell * 0.517 + 0.13), hash11((cell + 1.0) * 0.517 + 0.13), smoothFrac);
 }
 
 void main() {

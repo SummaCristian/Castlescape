@@ -55,22 +55,23 @@ void main() {
 	// mapping onto this quarter-res texel -- a box downsample for 4 fetches
 	// instead of 16. Clamped half a texel in, like BloomBlur.frag: these
 	// attachments carry a REPEAT sampler, so an off-edge tap wraps.
-	vec2 o = post.texelSize;
-	vec2 lo = o * 0.5;
+	vec2 texelOffset = post.texelSize;
+	vec2 lo = texelOffset * 0.5;
 	vec2 hi = vec2(1.0) - lo;
-	vec3 c0 = texture(srcTex, clamp(uv + vec2(-o.x, -o.y), lo, hi)).rgb;
-	vec3 c1 = texture(srcTex, clamp(uv + vec2( o.x, -o.y), lo, hi)).rgb;
-	vec3 c2 = texture(srcTex, clamp(uv + vec2(-o.x,  o.y), lo, hi)).rgb;
-	vec3 c3 = texture(srcTex, clamp(uv + vec2( o.x,  o.y), lo, hi)).rgb;
+	vec3 tapTL = texture(srcTex, clamp(uv + vec2(-texelOffset.x, -texelOffset.y), lo, hi)).rgb;
+	vec3 tapTR = texture(srcTex, clamp(uv + vec2( texelOffset.x, -texelOffset.y), lo, hi)).rgb;
+	vec3 tapBL = texture(srcTex, clamp(uv + vec2(-texelOffset.x,  texelOffset.y), lo, hi)).rgb;
+	vec3 tapBR = texture(srcTex, clamp(uv + vec2( texelOffset.x,  texelOffset.y), lo, hi)).rgb;
 
 	// Karis average: weight each tap by 1/(1+luma). Otherwise a stray firefly
 	// pixel (sparks are many times brighter than their neighbours) dominates
 	// the mean and the downsampled quad flickers per spark.
-	float w0 = 1.0 / (1.0 + luma(c0));
-	float w1 = 1.0 / (1.0 + luma(c1));
-	float w2 = 1.0 / (1.0 + luma(c2));
-	float w3 = 1.0 / (1.0 + luma(c3));
-	vec3 avg = (c0 * w0 + c1 * w1 + c2 * w2 + c3 * w3) / max(w0 + w1 + w2 + w3, 1e-4);
+	float weightTL = 1.0 / (1.0 + luma(tapTL));
+	float weightTR = 1.0 / (1.0 + luma(tapTR));
+	float weightBL = 1.0 / (1.0 + luma(tapBL));
+	float weightBR = 1.0 / (1.0 + luma(tapBR));
+	vec3 avg = (tapTL * weightTL + tapTR * weightTR + tapBL * weightBL + tapBR * weightBR)
+	         / max(weightTL + weightTR + weightBL + weightBR, 1e-4);
 
 	// Never clamp: HDR (RGBA16F) target, and the blur passes need the true
 	// overbright values to sum correctly.

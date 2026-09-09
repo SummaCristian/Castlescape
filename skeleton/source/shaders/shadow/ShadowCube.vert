@@ -20,10 +20,10 @@ layout(binding = 0, set = 0) uniform UniformBufferObject {
 	mat4 mvpMat;
 	mat4 mMat;
 	mat4 nMat;
-	vec3 mS;
+	vec3 specularColor;
 	float roughness;
 	float F0;
-	float k;
+	float diffuseShare;
 	int flatNormals;
 	int interiorAmbient;
 	float time;
