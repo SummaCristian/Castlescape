@@ -627,10 +627,6 @@ class Castlescape : public BaseProject {
 		bool toneMapEnabled = true;  // off clips overexposure to white
 		bool shadowsEnabled = true;  // off forces shadowFactor() to 1 (shading vs geometry diagnostic)
 
-		// Off by default: the held torch has no arm/body to anchor a shadow of
-		// its own mesh, so it would look like the torch floating mid-air.
-		bool handTorchModelCastsShadowWhenHeld = false;
-
 		// Geometry overlays (DebugLines.hpp).
 		bool showLightGizmos = false;
 		bool showShadowFrustums = false;
@@ -2767,7 +2763,6 @@ class Castlescape : public BaseProject {
 		hud.addToggle("Holding Torch", &cheats.handTorchEnabled);
 		hud.addToggle("Torch Bounce", &sceneLights.bounceEnabled);
 		hud.addToggle("Shadows", &cheats.shadowsEnabled);
-		hud.addToggle("Held Torch Casts Shadow", &cheats.handTorchModelCastsShadowWhenHeld);
 		hud.addToggle("Specular", &cheats.specularEnabled);
 		hud.addToggle("Tone Mapping", &cheats.toneMapEnabled);
 		hud.addToggle("Fullbright", &cheats.unlit);
@@ -3063,9 +3058,9 @@ class Castlescape : public BaseProject {
 					continue;
 				}
 				// The held torch's mesh: an occluder on the floor, not once in
-				// hand (cheats.handTorchModelCastsShadowWhenHeld).
-				if(&inst == handTorchInst && handTorchCollected && cheats.handTorchEnabled
-				   && !cheats.handTorchModelCastsShadowWhenHeld) {
+				// hand (no arm/body to anchor a shadow of its own mesh, it
+				// would look like the torch floating mid-air).
+				if(&inst == handTorchInst && handTorchCollected && cheats.handTorchEnabled) {
 					continue;
 				}
 				ShadowCaster sc;
@@ -3177,7 +3172,7 @@ class Castlescape : public BaseProject {
 			// Held torch in hand jumps every frame but isn't drawn as an
 			// occluder; skip it here, the pickup-frame jump is handled by "held a mover, now doesn't".
 			if(movingOccluders[m] == handTorchInst && handTorchCollected
-			   && cheats.handTorchEnabled && !cheats.handTorchModelCastsShadowWhenHeld) {
+			   && cheats.handTorchEnabled) {
 				movingOccluderWm[m] = wm;
 				movingOccluderWasMoving[m] = false;
 				continue;

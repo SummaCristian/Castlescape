@@ -33,10 +33,12 @@ struct DebugLinesVPUBO {
 
 class DebugLines {
 	public:
-	// 2048: the collider overlay draws every collider at once (~54 boxes * 24
-	// verts, and growing). Each array below is MAX_VERTS vec4s = 32KB, inside
-	// the guaranteed 64KB maxUniformBufferRange.
-	static constexpr int MAX_VERTS = 2048;
+	// 4096: the collider overlay draws every collider at once (grew past the
+	// original 2048 budget as the level grew, silently truncating the
+	// overlay). Each array below is MAX_VERTS vec4s = 64KB, exactly the
+	// guaranteed minimum maxUniformBufferRange -- the most headroom available
+	// without checking the device limit at runtime.
+	static constexpr int MAX_VERTS = 4096;
 
 	void init(BaseProject *_BP);
 	void pipelinesAndDescriptorSetsInit(RenderPass *_RP);

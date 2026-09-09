@@ -2171,13 +2171,15 @@ in `SceneLights`, che semplicemente non le carica.
 
 Altri toggle: collisioni (no-clip), salto, hunt forzato, se i fantasmi possono
 acchiappare, torce di stanza, torcia in mano, torch bounce, ombre globali,
-se la torcia in mano proietta ombra da tenuta, speculare, tone mapping,
-fullbright, normali, focus glow, overlay delle posizioni delle luci
-(`LightDebug.hpp`), frustum delle ombre, collider, camera di debug, heatmap
-di luce, shadow gap. I due toggle "Torch Shadows" / "Candle Shadows" che
-esistevano prima sono stati rimossi: erano ridondanti col toggle "Shadows"
-globale e con "Held Torch Casts Shadow", e disattivarli non cambiava nulla di
-osservabile.
+speculare, tone mapping, fullbright, normali, focus glow, overlay delle
+posizioni delle luci (`LightDebug.hpp`), frustum delle ombre, collider,
+camera di debug, heatmap di luce, shadow gap. I due toggle "Torch Shadows" /
+"Candle Shadows" che esistevano prima sono stati rimossi: erano ridondanti
+col toggle "Shadows" globale, e disattivarli non cambiava nulla di
+osservabile. Il toggle "Held Torch Casts Shadow" è stato rimosso allo
+stesso modo: la mesh della torcia in mano non proietta mai ombra propria
+(non ha un braccio/corpo ad ancorarla, sembrerebbe fluttuare), quindi era
+sempre disattivato di fatto.
 
 ---
 
