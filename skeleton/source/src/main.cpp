@@ -515,9 +515,6 @@ class Castlescape : public BaseProject {
 	float dbgOrbitDist = DEBUG_CAM_DIST0;
 	bool dbgCamWasOn = false;
 
-	// Top of the "floor" instance; last-resort clamp so no-clip can't fall through the map.
-	float worldFloorY = 0.0f;
-
 	// =====================================================================
 	// Colliders, materials and lights
 	// =====================================================================
@@ -609,7 +606,6 @@ class Castlescape : public BaseProject {
 	// Debug/cheat toggles, isolated in a utility struct.
 	// Not persisted across runs, reset to default values on launch.
 	struct CheatFlags {
-		bool collisionEnabled = true;   // false = no-clip
 		bool showCoordinates = false;   // live camera position/yaw readout, for placing scene.json objects
 		bool ghostsCanCatch = true;     // off: hunt still plays out but can't end the run
 		bool jumpEnabled = false;       // off by default: player can't jump
@@ -2181,12 +2177,6 @@ class Castlescape : public BaseProject {
 		MainScene.TI[1].T->PT[0].P = nullptr;
 
 		// ---- 4. World: floor, colliders, doors, pickups ----
-		// Cache the floor's top Y for the no-clip under-the-map clamp.
-		auto floorIt = MainScene.InstanceIds.find("floor");
-		if(floorIt != MainScene.InstanceIds.end() && MainScene.I[floorIt->second]->C != nullptr) {
-			worldFloorY = MainScene.I[floorIt->second]->C->getExtents().yMax;
-		}
-
 		// Gameplay collision list: scene.json's auto-fit boxes, plus
 		// hand-authored geometry for models an auto-fit box gets wrong.
 		colliderSet.init(&MainScene, "assets/scenes/colliders.json");
@@ -2717,7 +2707,6 @@ class Castlescape : public BaseProject {
 		settingsMenu.addSlider("MSAA", &msaaLevel, 0.0f, maxMsaaLevel, 1.0f,
 							   [this]() { applyMsaaChange(); },
 							   [this](float v) { return formatMsaaLevel(v); });
-		hud.addToggle("Collision", &cheats.collisionEnabled);
 		hud.addToggle("Show Coordinates", &cheats.showCoordinates);
 		hud.addToggle("Jump", &cheats.jumpEnabled);
 
@@ -5039,7 +5028,7 @@ class Castlescape : public BaseProject {
 			// Wall collision: push out of any collider too tall to step onto
 			// and low enough for the body to reach. The ground pass handles
 			// the rest, which is what makes steps and crates walkable.
-			if(cheats.collisionEnabled) {
+			{
 				const float EYE_HEIGHT = 1.8f;
 				const float PLAYER_HEIGHT = 1.8f;
 				const float PLAYER_RADIUS = 0.3f;
@@ -5082,7 +5071,6 @@ class Castlescape : public BaseProject {
 						}
 					}
 				}
-
 			}
 
 			// Jump: spacebar (Starter's "fire"), only while grounded.
@@ -5506,7 +5494,7 @@ class Castlescape : public BaseProject {
 			// -- Ground collision --
 			// Floor collision: the tallest surface under the player's XZ
 			// within MAX_STEP_HEIGHT of the feet is the standing height (lets hole-shaped models be walked through).
-			if(cheats.collisionEnabled) {
+			{
 				const float EYE_HEIGHT = 1.8f;
 				float feetY = camPos.y - EYE_HEIGHT;
 				float groundY = -std::numeric_limits<float>::infinity();
@@ -5547,16 +5535,6 @@ class Castlescape : public BaseProject {
 				if(lifted > 0.0f) {
 					eyeStepOffset = std::min(eyeStepOffset + lifted, MAX_EYE_STEP_OFFSET);
 				}
-			} else {
-				// No-clip: walls ignored, but the world floor still holds so you can't fall out the bottom.
-				const float EYE_HEIGHT = 1.8f;
-				if(camPos.y - EYE_HEIGHT < worldFloorY) {
-					camPos.y = worldFloorY + EYE_HEIGHT;
-					if(camVerticalVelocity < 0.0f) {
-						camVerticalVelocity = 0.0f;
-					}
-				}
-				grounded = camPos.y - EYE_HEIGHT <= worldFloorY + 0.05f;
 			}
 		}
 
@@ -5635,12 +5613,10 @@ class Castlescape : public BaseProject {
 			glm::vec4(eyePos, 1.0f)
 		);
 
-		// Wall tuck for both hands, computed once here for both. Off with no collision enabled.
+		// Wall tuck for both hands, computed once here for both.
 		{
-			bool tuckActive = cheats.collisionEnabled;
-
 			float torchTarget = 1.0f;
-			if(tuckActive && handTorchInst != nullptr && handTorchCollected) {
+			if(handTorchInst != nullptr && handTorchCollected) {
 				torchTarget = handFreeReach(camWm, HAND_TORCH_OFFSET, HAND_TUCK_TORCH_PAD);
 			}
 			advanceReach(handTorchReach, torchTarget, deltaT);
@@ -5648,7 +5624,7 @@ class Castlescape : public BaseProject {
 			// Whichever key is drawn in the left hand: held, or sinking after a lock took it (never both in frame).
 			int tuckKeyIdx = heldKeyIdx() >= 0 ? heldKeyIdx() : keyLowerIdx;
 			float keyTarget = 1.0f;
-			if(tuckActive && tuckKeyIdx >= 0) {
+			if(tuckKeyIdx >= 0) {
 				keyTarget = handFreeReach(camWm, pickups[tuckKeyIdx].handOffset, HAND_TUCK_KEY_PAD);
 			}
 			advanceReach(handKeyReach, keyTarget, deltaT);
