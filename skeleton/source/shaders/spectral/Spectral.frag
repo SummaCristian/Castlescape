@@ -89,12 +89,13 @@ float noise2(vec2 p) {
     float cornerBR = hash21(cell + vec2(1.0, 0.0));
     float cornerTL = hash21(cell + vec2(0.0, 1.0));
     float cornerTR = hash21(cell + vec2(1.0, 1.0));
-    vec2 smoothFrac = cellFrac * cellFrac * (3.0 - 2.0 * cellFrac);
+    vec2 smoothFrac = cellFrac * cellFrac * (3.0 - 2.0 * cellFrac); // Curve that starts low flat and ends high flat.
     return mix(mix(cornerBL, cornerBR, smoothFrac.x), mix(cornerTL, cornerTR, smoothFrac.x), smoothFrac.y);
 }
 
 // 3 octaves (not Flame.frag's 4): finest octave lands below a pixel at the
 // distance a ghost is typically viewed.
+// OTHERWISE, seems BUBBLE: ite 1 -> big shape, soft; ite 3 -> fine grain
 float fbm(vec2 p) {
     float sum = 0.0;
     float amp = 0.5;
@@ -121,8 +122,9 @@ void main() {
 
     // Object space via transpose (not inverse): mMat is translate*rotateY, no
     // scale, so mat3 is orthonormal and transpose == inverse. Keeps mottling
-    // glued to the ghost as it walks/turns.
+    // GLUED TO THE GHOST AS IT WALKS/TURNS.
     vec3 rel = fragPos - ubo.mMat[3].xyz;
+    // Project rel onto each local axis (mMat columns 0-2): world -> object space.
     vec3 objPos = vec3(dot(rel, ubo.mMat[0].xyz),
                        dot(rel, ubo.mMat[1].xyz),
                        dot(rel, ubo.mMat[2].xyz));
@@ -148,13 +150,13 @@ void main() {
 
     // 3. Emission: tint brightened at rim, pushed toward hunt color by chase.
     vec3 tint = mix(ubo.specularColor, HUNT_TINT, chase);
-    float emission = mix(BODY_EMISSION, RIM_EMISSION, rim) * mix(1.0, HUNT_EMISSION, chase);
+    float emission = mix(BODY_EMISSION, RIM_EMISSION, rim) * mix(1.0, HUNT_EMISSION, chase); // Gradient luminosity
 
     // Cool core under the tint (two colors, not one) so the ghost doesn't read flat.
     vec3 core = tint * 0.35 + vec3(0.05, 0.09, 0.14);
-    vec3 color = mix(core, tint, rim) * emission;
-    // Painted features cut out of the light.
-    color *= 1.0 - 0.93 * faceMask;
+    vec3 color = mix(core, tint, rim) * emission; // Gradient color
+    // Painted face cut out of the light.
+    color *= 1.0 - 0.93 * faceMask; // Paint face out of light
 
     // Not premultiplied: blend is srcAlpha*src + (1-srcAlpha)*dst, so alpha
     // already scales color once; multiplying here would square it.
