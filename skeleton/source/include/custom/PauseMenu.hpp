@@ -40,7 +40,7 @@ struct PauseMenu {
 	static constexpr int NUM_BUTTONS = 3;
 	int selectedIndex = 0; // 0 = Resume, 1 = Settings, 2 = Quit
 
-	// Last screen size render() ran at; resize forces re-render. See CheatHud.
+	// Last screen size render() ran at; resize forces re-render. See DebugHud.
 	int lastScreenW = -1;
 	int lastScreenH = -1;
 
@@ -60,7 +60,7 @@ struct PauseMenu {
 	static constexpr float BUTTON_TEXT_SCALE = 1.0f;
 	static constexpr float BUTTON_LINE_GAP = 16.0f;
 
-	// Text-block ids. Past CheatHud's range, though only one is ever open.
+	// Text-block ids. Past DebugHud's range, though only one is ever open.
 	static constexpr int TITLE_TEXT_ID = 200;
 	static constexpr int FIRST_BUTTON_TEXT_ID = 201;
 

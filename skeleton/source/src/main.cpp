@@ -16,7 +16,7 @@
 
 // ---------- CUSTOM FILES ----------
 #include "custom/UiQuad.hpp"
-#include "custom/CheatHud.hpp"
+#include "custom/DebugHud.hpp"
 #include "custom/PauseMenu.hpp"
 #include "custom/StartScreen.hpp"
 #include "custom/SettingsMenu.hpp"
@@ -172,7 +172,7 @@ static float fireFbm(float x) {
 //     Scene, text and UI overlays
 //     Camera and view state
 //     Colliders, materials and lights
-//     Cheats and movement tuning
+//     Debug and movement tuning
 //     Doors
 //     Pickups, gaze targeting and the key ring
 //     Held items: grip, wall tuck and raise animations
@@ -418,7 +418,7 @@ class Castlescape : public BaseProject {
 	// to provide textual feedback
 	TextMaker txt;
 
-	// Flat-colored quads: background/highlight panel behind the cheat HUD's text.
+	// Flat-colored quads: background/highlight panel behind the debug HUD's text.
 	UiQuad uiQuad;
 
 	// Center-screen dot for aiming look-based interactions (GameLogic()'s gaze test).
@@ -436,8 +436,8 @@ class Castlescape : public BaseProject {
 		});
 	}
 
-	// Toggle-based menu for the cheats below, opened/closed with L.
-	CheatHud hud;
+	// Toggle-based menu for the debug toggles below, opened/closed with L.
+	DebugHud hud;
 	// Pause menu, opened/closed with ESC.
 	UiQuad pauseQuad;
 	// Dims the screen and freezes GameLogic() while open (overlayOpen() gating). ESC toggles it.
@@ -508,7 +508,7 @@ class Castlescape : public BaseProject {
 	float camPitch = -10.0f;		// degrees, -90 down to +90 up
 	float camVerticalVelocity = 0.0f;	// gravity speed, units/s, reset by ground clamp
 
-	// Debug spectator orbit (cheats.debugCam): snaps behind the player when
+	// Debug spectator orbit (debug.debugCam): snaps behind the player when
 	// enabled, then nudged by IJKL (orbit) and U/O (dolly).
 	float dbgOrbitYaw = 0.0f;
 	float dbgOrbitPitch = DEBUG_CAM_PITCH0;
@@ -601,11 +601,11 @@ class Castlescape : public BaseProject {
 	}
 
 	// =====================================================================
-	// Cheats and movement tuning
+	// Debug and movement tuning
 	// =====================================================================
-	// Debug/cheat toggles, isolated in a utility struct.
+	// Debug toggles, isolated in a utility struct.
 	// Not persisted across runs, reset to default values on launch.
-	struct CheatFlags {
+	struct DebugFlags {
 		bool showCoordinates = false;   // live camera position/yaw readout, for placing scene.json objects
 		bool ghostsCanCatch = true;     // off: hunt still plays out but can't end the run
 		bool jumpEnabled = false;       // off by default: player can't jump
@@ -628,9 +628,9 @@ class Castlescape : public BaseProject {
 		// first-person eye, so the cull boundary becomes visible from outside.
 		bool debugCam = false;
 		bool showLightHeatmap = false;  // recolor surfaces by incoming light intensity
-	} cheats;
+	} debug;
 
-	// Numeric tuning for the movement cheats
+	// Numeric tuning for the movement debug options
 	struct MovementParams {
 		// World units traveled per second
 		float moveSpeed = 3.0f;
@@ -1100,7 +1100,7 @@ class Castlescape : public BaseProject {
 	// glare done entirely by the bloom chain.
 	ExitGlow exitGlow;
 
-	// Line renderer for cheat-gated debug overlays; see DebugLines.hpp.
+	// Line renderer for debug-gated debug overlays; see DebugLines.hpp.
 	DebugLines debugLines;
 
 	// One entry per torch with a flame (localInit's addTorchFlame). `anchor` is
@@ -1243,7 +1243,7 @@ class Castlescape : public BaseProject {
 	bool flameBurning(const TorchFlame &tf) const {
 		if(tf.heldByCamera) return tf.burning;
 		if(tf.isCandle)     return tf.burning;
-		return cheats.roomTorchesEnabled;
+		return debug.roomTorchesEnabled;
 	}
 
 	// True if the player is holding a torch that is lit and can light other torches.
@@ -1281,7 +1281,7 @@ class Castlescape : public BaseProject {
 	// Fraction of peak below which lightReachesViewCone() treats a light as
 	// lighting nothing and drops it (and its shadow slot). Higher than
 	// SHADOW_REACH_CUTOFF: a lagging shadow reads worse than a faint light
-	// winking out. Raise to cull harder; watch the boundary via cheats.debugCam.
+	// winking out. Raise to cull harder; watch the boundary via debug.debugCam.
 	static constexpr float LIGHT_CULL_REACH_CUTOFF = 0.04f;
 
 	// How far a torch light is still uploaded, and how many may be live at
@@ -1310,7 +1310,7 @@ class Castlescape : public BaseProject {
 	static constexpr float GEOM_CULL_FALLBACK_RADIUS = 4.0f;
 
 	// ---- Third-person debug camera ----
-	// Third-person debug camera (cheats.debugCam) starting spherical coords
+	// Third-person debug camera (debug.debugCam) starting spherical coords
 	// (I/K pitch, J/; yaw, U/O dolly at runtime). Only ViewPrj changes; every
 	// cull still runs from the real first-person eye, so culled instances
 	// visibly wink out when watched from here.
@@ -1549,7 +1549,7 @@ class Castlescape : public BaseProject {
 	HuntCycle huntCycle;
 
 	// How the current run ended, or Running if it hasn't. Freezes GameLogic()
-	// the same way an open cheat HUD does, and R starts a fresh one.
+	// the same way an open debug HUD does, and R starts a fresh one.
 	enum class RunState {
 		Running,
 		Caught,
@@ -2673,10 +2673,10 @@ class Castlescape : public BaseProject {
 			activeCubeShadows = std::max(activeCubeShadows, HAND_TORCH_SHADOW_INDEX + 1);
 		}
 
-		// ---- 8. Text, overlays and the cheat menu ----
+		// ---- 8. Text, overlays and the debug menu ----
 		// initializes the textual output
 		txt.init(this, windowWidth, windowHeight);
-		// initializes the flat-quad background/highlight layer for the cheat HUD
+		// initializes the flat-quad background/highlight layer for the debug HUD
 		uiQuad.init(this, windowWidth, windowHeight);
 		// Distinct submitOrder/buffer name from uiQuad so they don't collide; same for the three below.
 		crosshair.init(this, windowWidth, windowHeight, 9002, "crosshair");
@@ -2700,33 +2700,33 @@ class Castlescape : public BaseProject {
 		startScreen.init(&txt, &startScreenQuad, windowTitle);	// reuses windowTitle, one source for the launch screen's title
 		startScreen.setOpen(true, windowWidth, windowHeight);
 		settingsMenu.init(&txt, &settingsQuad);
-		// Same named methods as the cheat HUD's copies below, so the two can't drift.
+		// Same named methods as the debug HUD's copies below, so the two can't drift.
 		settingsMenu.addSlider("Render Scale", &renderScale, 0.4f, 1.0f, 0.05f,
 							   [this]() { applyRenderScaleChange(); },
 							   [this](float) { return formatRenderScale(); });
 		settingsMenu.addSlider("MSAA", &msaaLevel, 0.0f, maxMsaaLevel, 1.0f,
 							   [this]() { applyMsaaChange(); },
 							   [this](float v) { return formatMsaaLevel(v); });
-		hud.addToggle("Show Coordinates", &cheats.showCoordinates);
-		hud.addToggle("Jump", &cheats.jumpEnabled);
+		hud.addToggle("Show Coordinates", &debug.showCoordinates);
+		hud.addToggle("Jump", &debug.jumpEnabled);
 
 		hud.addToggle("Hunt", &huntCycle.forceHunt);
-		hud.addToggle("Ghosts Can Catch", &cheats.ghostsCanCatch);
+		hud.addToggle("Ghosts Can Catch", &debug.ghostsCanCatch);
 
 		// Lighting rows: sources first, then shading. Ambient points into
-		// sceneLights (which owns it); Torches into cheats (flame lights
+		// sceneLights (which owns it); Torches into debug (flame lights
 		// never go through SceneLights).
-		hud.addToggle("Torches", &cheats.roomTorchesEnabled);
+		hud.addToggle("Torches", &debug.roomTorchesEnabled);
 		hud.addToggle("Torch Bounce", &sceneLights.bounceEnabled);
-		hud.addToggle("Shadows", &cheats.shadowsEnabled);
-		hud.addToggle("Specular", &cheats.specularEnabled);
-		hud.addToggle("Tone Mapping", &cheats.toneMapEnabled);
-		hud.addToggle("Fullbright", &cheats.unlit);
-		hud.addToggle("Show Normals", &cheats.showNormals);
-		hud.addToggle("Focus Glow", &cheats.focusGlowEnabled);
-		hud.addToggle("Show Colliders", &cheats.showColliders);
-		hud.addToggle("Debug Camera", &cheats.debugCam);
-		hud.addToggle("Light Heatmap", &cheats.showLightHeatmap);
+		hud.addToggle("Shadows", &debug.shadowsEnabled);
+		hud.addToggle("Specular", &debug.specularEnabled);
+		hud.addToggle("Tone Mapping", &debug.toneMapEnabled);
+		hud.addToggle("Fullbright", &debug.unlit);
+		hud.addToggle("Show Normals", &debug.showNormals);
+		hud.addToggle("Focus Glow", &debug.focusGlowEnabled);
+		hud.addToggle("Show Colliders", &debug.showColliders);
+		hud.addToggle("Debug Camera", &debug.debugCam);
+		hud.addToggle("Light Heatmap", &debug.showLightHeatmap);
 
 		hud.addSlider("Render Scale", &renderScale, 0.4f, 1.0f, 0.05f,
 					  [this]() { applyRenderScaleChange(); },
@@ -3705,7 +3705,7 @@ class Castlescape : public BaseProject {
 		float deltaT = GameLogic();
 
 		// Zeroing deltaT freezes every deltaT-driven animation (flicker,
-		// shadow reassignment, ...) while a modal is open. The cheat HUD does
+		// shadow reassignment, ...) while a modal is open. The debug HUD does
 		// not zero it -- torches flickering while flipping a debug flag is fine.
 		if(pauseMenu.isOpen() || startScreen.isOpen() || settingsMenu.isOpen()) {
 			deltaT = 0.0f;
@@ -3994,7 +3994,7 @@ class Castlescape : public BaseProject {
 			gubo.lights[gubo.lightCount++] = L;
 		}
 
-		// Always as authored -- the Torch Bounce cheat zeroes the term in the
+		// Always as authored -- the Torch Bounce debug toggle zeroes the term in the
 		// shader instead (LIGHT_DEBUG_NO_BOUNCE below). amb.upper/lower/dir
 		// are no longer uploaded: nothing in CookTorrance.frag reads them
 		// since metalAmbient() was rewired to reflect bounce instead of an
@@ -4014,16 +4014,16 @@ class Castlescape : public BaseProject {
 		gubo.fogDensity = std::sqrt(-std::log(FOG_RESIDUAL_AT_CULL_DIST))
 						/ (GEOM_CULL_CONE_DIST * FOG_REFERENCE_DIST_SCALE);
 
-		// The lighting debug cheats, packed into the one int the shader reads.
-		// Note the two inversions: the cheat says what the frame should still
+		// The lighting debug toggles, packed into the one int the shader reads.
+		// Note the two inversions: the toggle says what the frame should still
 		// have, the flag says what the shader should drop.
 		gubo.debugFlags = 0;
-		if(cheats.unlit)            gubo.debugFlags |= LIGHT_DEBUG_UNLIT;
-		if(cheats.showNormals)      gubo.debugFlags |= LIGHT_DEBUG_NORMALS;
-		if(!cheats.specularEnabled) gubo.debugFlags |= LIGHT_DEBUG_NO_SPECULAR;
-		if(!cheats.toneMapEnabled)  gubo.debugFlags |= LIGHT_DEBUG_NO_TONEMAP;
-		if(!cheats.shadowsEnabled)  gubo.debugFlags |= LIGHT_DEBUG_NO_SHADOWS;
-		if(cheats.showLightHeatmap) gubo.debugFlags |= LIGHT_DEBUG_HEATMAP;
+		if(debug.unlit)            gubo.debugFlags |= LIGHT_DEBUG_UNLIT;
+		if(debug.showNormals)      gubo.debugFlags |= LIGHT_DEBUG_NORMALS;
+		if(!debug.specularEnabled) gubo.debugFlags |= LIGHT_DEBUG_NO_SPECULAR;
+		if(!debug.toneMapEnabled)  gubo.debugFlags |= LIGHT_DEBUG_NO_TONEMAP;
+		if(!debug.shadowsEnabled)  gubo.debugFlags |= LIGHT_DEBUG_NO_SHADOWS;
+		if(debug.showLightHeatmap) gubo.debugFlags |= LIGHT_DEBUG_HEATMAP;
 		if(!sceneLights.bounceEnabled)  gubo.debugFlags |= LIGHT_DEBUG_NO_BOUNCE;
 
 		// Both computed further up, before the torch fire state that needs them.
@@ -4249,12 +4249,12 @@ class Castlescape : public BaseProject {
 			DSshadowCube[t].map(currentImage, &cubeUbo, 0);
 		}
 
-		// Debug overlay (DebugLines.hpp, cheat-gated), placed here so gubo.lights[]/torchLightPos[] are current.
+		// Debug overlay (DebugLines.hpp, debug-gated), placed here so gubo.lights[]/torchLightPos[] are current.
 		std::vector<glm::vec4> dbgPos, dbgColor;
 		// Collision geometry (showColliders). Read off the same list and
 		// accessors the collision loops use, so it can't drift from what
 		// blocks the player.
-		if(cheats.showColliders) {
+		if(debug.showColliders) {
 			// Grown outward before drawing: a box sits exactly ON its surface,
 			// and coincident depth z-fights, flickering the overlay. The
 			// pipeline depth-tests on purpose (an overlay through every wall is
@@ -4290,7 +4290,7 @@ class Castlescape : public BaseProject {
 		}
 		// Debug-camera companion overlay: draws the geometry cull's shape in
 		// world space, so the spectator view shows exactly where an instance winks out.
-		if(cheats.debugCam) {
+		if(debug.debugCam) {
 			const glm::vec4 nearCol(0.2f, 0.9f, 1.0f, 1.0f);   // always-drawn bubble
 			const glm::vec4 coneCol(1.0f, 0.8f, 0.15f, 1.0f);  // view cone
 			glm::vec3 f = forward;
@@ -4346,7 +4346,7 @@ class Castlescape : public BaseProject {
 		// The gazed door's chains/padlock glow along with the leaf. Empty with
 		// Focus Glow off (only the aura goes, gaze itself is untouched).
 		std::vector<Instance *> glowingInstances;
-		if(cheats.focusGlowEnabled && gazedInstance != nullptr) {
+		if(debug.focusGlowEnabled && gazedInstance != nullptr) {
 			glowingInstances.push_back(gazedInstance);
 			for(const Door &d : doors) {
 				if(d.inst == gazedInstance) {
@@ -4385,7 +4385,7 @@ class Castlescape : public BaseProject {
 					renderWm = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
 				}
 				// Open-top dollhouse for the spectator view (see DEBUG_CAM_ROOF_CUT).
-				if(cheats.debugCam && instPos.y > DEBUG_CAM_ROOF_CUT) {
+				if(debug.debugCam && instPos.y > DEBUG_CAM_ROOF_CUT) {
 					renderWm = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1000.0f, 0.0f));
 				}
 				ubo.mMat = renderWm;
@@ -4472,7 +4472,7 @@ class Castlescape : public BaseProject {
 			static float coordsElapsedT = 0.0f;
 			static bool coordsShown = false;
 			coordsElapsedT += deltaT;
-			if(cheats.showCoordinates) {
+			if(debug.showCoordinates) {
 				if(!coordsShown || coordsElapsedT > 0.1f) {
 					std::ostringstream coss;
 					coss << "X: " << camPos.x << "  Y: " << camPos.y << "  Z: " << camPos.z
@@ -5074,7 +5074,7 @@ class Castlescape : public BaseProject {
 			}
 
 			// Jump: spacebar (Starter's "fire"), only while grounded.
-			if(cheats.jumpEnabled && fire && !jumpKeyWasPressed && grounded) {
+			if(debug.jumpEnabled && fire && !jumpKeyWasPressed && grounded) {
 				camVerticalVelocity = movement.jumpSpeed;
 				eyeStepOffset = 0.0f;	// drop leftover step smoothing, or a jump after a step-up trails the view
 			}
@@ -5438,7 +5438,7 @@ class Castlescape : public BaseProject {
 							* glm::rotate(glm::mat4(1.0f), g.yaw, glm::vec3(0.0f, 1.0f, 0.0f));
 
 				// The catch. Only a hunting ghost ends the run.
-				if(ghostsHunting && cheats.ghostsCanCatch && runState == RunState::Running) {
+				if(ghostsHunting && debug.ghostsCanCatch && runState == RunState::Running) {
 					float dx = camPos.x - g.pos.x;
 					float dz = camPos.z - g.pos.z;
 					// From the chest, not the eyes: the eye height is the top of the body.
@@ -5559,7 +5559,7 @@ class Castlescape : public BaseProject {
 
 		// IMPORTANT: View must stay first-person (billboards, held items, culling all read it).
 		// Only ViewPrj, what's actually drawn, swaps to the debug camera.
-		if(cheats.debugCam) {
+		if(debug.debugCam) {
 			// Snap the debug orbit behind the player's current facing when it turns on.
 			if(!dbgCamWasOn) {
 				dbgOrbitYaw = camYaw + 180.0f;
@@ -5567,7 +5567,7 @@ class Castlescape : public BaseProject {
 				dbgOrbitDist = DEBUG_CAM_DIST0;
 			}
 			if(!overlayOpen()) {
-				// Yaw on J / ; -- not J / L, because L toggles the cheat HUD.
+				// Yaw on J / ; -- not J / L, because L toggles the debug HUD.
 				if(glfwGetKey(window, GLFW_KEY_J))
 					dbgOrbitYaw -= DEBUG_CAM_ORBIT_SPEED * deltaT;
 				if(glfwGetKey(window, GLFW_KEY_SEMICOLON))
@@ -5601,7 +5601,7 @@ class Castlescape : public BaseProject {
 		} else {
 			ViewPrj = Prj * View;
 		}
-		dbgCamWasOn = cheats.debugCam;
+		dbgCamWasOn = debug.debugCam;
 
 		// ---- Held items: wall tuck, torch and key placement ----
 		// Camera-space basis for anything rigidly attached to the view (held

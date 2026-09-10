@@ -1,5 +1,5 @@
 // ***** CUSTOM *****
-// Flat-colored-quad renderer: background/highlight layer under CheatHud's text.
+// Flat-colored-quad renderer: background/highlight layer under DebugHud's text.
 // No textures/descriptor sets, just a push-constant color per quad.
 // Header-only, implementation gated behind UIQUAD_IMPLEMENTATION (Libs.cpp).
 
@@ -11,7 +11,7 @@ struct UiQuadVertex {
 };
 
 // One flat-colored rectangle, in pixel space (top-left origin, matching
-// GLFW's cursor coordinates and CheatHud's own layout math).
+// GLFW's cursor coordinates and DebugHud's own layout math).
 struct UiRect {
 	float x, y, w, h;
 	glm::vec4 color;

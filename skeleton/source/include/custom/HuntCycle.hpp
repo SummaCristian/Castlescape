@@ -64,10 +64,10 @@ class HuntCycle {
 	// Warning-pulse brightness multiplier, 1.0 outside Warning. On top of the flame's own flicker.
 	float warningPulse() const;
 
-	// Skips into Warning. Wired to the cheat menu.
+	// Skips into Warning. Wired to the debug menu.
 	void triggerHunt();
 
-	// Holds the cycle in Hunt while set. Written in place by the cheat HUD.
+	// Holds the cycle in Hunt while set. Written in place by the debug HUD.
 	bool forceHunt = false;
 
 	const HuntConfig &config() const { return cfg; }
@@ -128,7 +128,7 @@ void HuntCycle::reset() {
 	blend = 0.0f;
 	elapsed = 0.0f;
 	justChanged = false;
-	// forceHunt itself is NOT cleared (cheat HUD holds a pointer to it); clearing
+	// forceHunt itself is NOT cleared (debug HUD holds a pointer to it); clearing
 	// only the latch makes an already-on toggle read as a fresh edge next update().
 	forceHuntWasSet = false;
 }
@@ -151,12 +151,12 @@ void HuntCycle::triggerHunt() {
 	}
 }
 
-// Per-frame tick: cheat toggle, timer, blend ramp.
+// Per-frame tick: debug toggle, timer, blend ramp.
 void HuntCycle::update(float deltaT) {
 	justChanged = false;
 	elapsed += deltaT;
 
-	// Cheat toggle, handled before the clock. ON: jumps straight to Hunt, no
+	// Debug toggle, handled before the clock. ON: jumps straight to Hunt, no
 	// Warning (debug switch). OFF: ends the hunt immediately, back to Calm.
 	if(forceHunt != forceHuntWasSet) {
 		enter(forceHunt ? HuntPhase::Hunt : HuntPhase::Calm);

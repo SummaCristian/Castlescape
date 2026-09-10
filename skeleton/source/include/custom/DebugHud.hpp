@@ -1,8 +1,8 @@
 // ***** CUSTOM *****
 
-// Keyboard/mouse-navigable HUD for flipping cheat flags at runtime.
+// Keyboard/mouse-navigable HUD for flipping debug flags at runtime.
 // Rows from TextMaker; panel/highlight from UiQuad.
-// Header-only, gated behind CHEATHUD_IMPLEMENTATION (Libs.cpp).
+// Header-only, gated behind DEBUGHUD_IMPLEMENTATION (Libs.cpp).
 
 #include <algorithm>
 #include <cmath>
@@ -13,7 +13,7 @@
 
 // One row: toggle bound to a bool, or Left/Right slider bound to a float.
 // Exactly one of toggleValue/sliderValue is set.
-struct CheatRow {
+struct DebugRow {
 	std::string label;
 	bool *toggleValue = nullptr;
 	float *sliderValue = nullptr;
@@ -26,10 +26,10 @@ struct CheatRow {
 	std::function<std::string(float)> format;
 };
 
-struct CheatHud {
+struct DebugHud {
 	void init(TextMaker *txt, UiQuad *quads);
 	void addToggle(const std::string &label, bool *value);
-	// step: per-press delta, clamped to [min, max]. onChange/format: see CheatRow.
+	// step: per-press delta, clamped to [min, max]. onChange/format: see DebugRow.
 	void addSlider(const std::string &label, float *value, float min, float max,
 				   float step, std::function<void()> onChange = nullptr,
 				   std::function<std::string(float)> format = nullptr);
@@ -44,7 +44,7 @@ struct CheatHud {
 	TextMaker *txt = nullptr;
 	UiQuad *quads = nullptr;
 
-	std::vector<CheatRow> options;
+	std::vector<DebugRow> options;
 	int selectedIndex = 0;
 	bool open = false;
 
@@ -105,24 +105,24 @@ struct CheatHud {
 	static void pixelToAnchor(float px, float py, int screenW, int screenH, float &ax, float &ay);
 };
 
-#ifdef CHEATHUD_IMPLEMENTATION
+#ifdef DEBUGHUD_IMPLEMENTATION
 
-void CheatHud::init(TextMaker *_txt, UiQuad *_quads) {
+void DebugHud::init(TextMaker *_txt, UiQuad *_quads) {
 	txt = _txt;
 	quads = _quads;
 }
 
-void CheatHud::addToggle(const std::string &label, bool *value) {
-	CheatRow row;
+void DebugHud::addToggle(const std::string &label, bool *value) {
+	DebugRow row;
 	row.label = label;
 	row.toggleValue = value;
 	options.push_back(row);
 }
 
-void CheatHud::addSlider(const std::string &label, float *value, float min, float max,
+void DebugHud::addSlider(const std::string &label, float *value, float min, float max,
 						 float step, std::function<void()> onChange,
 						 std::function<std::string(float)> format) {
-	CheatRow row;
+	DebugRow row;
 	row.label = label;
 	row.sliderValue = value;
 	row.sliderMin = min;
@@ -133,12 +133,12 @@ void CheatHud::addSlider(const std::string &label, float *value, float min, floa
 	options.push_back(row);
 }
 
-void CheatHud::pixelToAnchor(float px, float py, int screenW, int screenH, float &ax, float &ay) {
+void DebugHud::pixelToAnchor(float px, float py, int screenW, int screenH, float &ax, float &ay) {
 	ax = (px / (float)screenW) * 2.0f - 1.0f;
 	ay = (py / (float)screenH) * 2.0f - 1.0f;
 }
 
-void CheatHud::update(GLFWwindow *window, int screenW, int screenH) {
+void DebugHud::update(GLFWwindow *window, int screenW, int screenH) {
 	// Resize: drop cached layout, force re-render.
 	if(screenW != lastScreenW || screenH != lastScreenH) {
 		lastScreenW = screenW;
@@ -189,7 +189,7 @@ void CheatHud::update(GLFWwindow *window, int screenW, int screenH) {
 
 	// Left/Right: adjust selected row's slider; no-op on a toggle row.
 	auto adjustSelectedSlider = [&](float sign) {
-		CheatRow &row = options[selectedIndex];
+		DebugRow &row = options[selectedIndex];
 		if(row.sliderValue == nullptr) {
 			return;
 		}
@@ -247,7 +247,7 @@ void CheatHud::update(GLFWwindow *window, int screenW, int screenH) {
 	}
 }
 
-float CheatHud::measureTextWidth(const std::string &s, int fontId, float scale) const {
+float DebugHud::measureTextWidth(const std::string &s, int fontId, float scale) const {
 	int w, h, nlines, totChars;
 	std::vector<int> linew;
 	std::vector<std::string> lines;
@@ -255,7 +255,7 @@ float CheatHud::measureTextWidth(const std::string &s, int fontId, float scale) 
 	return (float)w * scale;
 }
 
-float CheatHud::measureTextHeight(int fontId, float scale) const {
+float DebugHud::measureTextHeight(int fontId, float scale) const {
 	int w, h, nlines, totChars;
 	std::vector<int> linew;
 	std::vector<std::string> lines;
@@ -264,7 +264,7 @@ float CheatHud::measureTextHeight(int fontId, float scale) const {
 	return (float)h * scale;
 }
 
-void CheatHud::computeLayout(int screenH) {
+void DebugHud::computeLayout(int screenH) {
 	if(layoutComputed) {
 		return;
 	}
@@ -292,7 +292,7 @@ void CheatHud::computeLayout(int screenH) {
 	rowHeight = rowH * fit;
 
 	// Width at fitted scales, so a shrunk panel is narrower too.
-	float maxContentWidth = measureTextWidth("CHEATS (L to close)", titleFontId, titleScale);
+	float maxContentWidth = measureTextWidth("DEBUG (L to close)", titleFontId, titleScale);
 	// Generous stand-in for a slider's value text, so panel width only changes on resize.
 	float stateWidth = std::max({measureTextWidth("[ON]", stateFontId, rowScale),
 								  measureTextWidth("[OFF]", stateFontId, rowScale),
@@ -306,7 +306,7 @@ void CheatHud::computeLayout(int screenH) {
 	layoutComputed = true;
 }
 
-void CheatHud::renderRows(int screenW, int screenH) {
+void DebugHud::renderRows(int screenW, int screenH) {
 	computeLayout(screenH);
 
 	float ax, ay;
@@ -321,13 +321,13 @@ void CheatHud::renderRows(int screenW, int screenH) {
 	quads->setQuads(panelQuads);
 
 	pixelToAnchor(PANEL_X + PADDING, PANEL_Y + PADDING, screenW, screenH, ax, ay);
-	txt->print(ax, ay, "CHEATS (L to close)", TITLE_TEXT_ID, "SS", false, true, false,
+	txt->print(ax, ay, "DEBUG (L to close)", TITLE_TEXT_ID, "SS", false, true, false,
 			   TAL_LEFT, TRH_LEFT, TRV_TOP,
 			   {1.0f, 1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 0.0f},
 			   titleScale, titleScale);
 
 	for(int i = 0; i < (int)options.size(); i++) {
-		const CheatRow &row = options[i];
+		const DebugRow &row = options[i];
 		bool selected = (i == selectedIndex);
 		float top = rowTop(i);
 
@@ -340,7 +340,7 @@ void CheatHud::renderRows(int screenW, int screenH) {
 				   {0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, rowScale, rowScale);
 
 		// State/value, right-aligned: [ON]/[OFF] for a toggle, the formatted
-		// value (or default "< NN% >") for a slider. See CheatRow::format.
+		// value (or default "< NN% >") for a slider. See DebugRow::format.
 		std::string stateText;
 		glm::vec4 stateColor;
 		if(row.toggleValue != nullptr) {
@@ -364,7 +364,7 @@ void CheatHud::renderRows(int screenW, int screenH) {
 	}
 }
 
-void CheatHud::hideRows() {
+void DebugHud::hideRows() {
 	txt->removeText(TITLE_TEXT_ID);
 	for(int i = 0; i < (int)options.size(); i++) {
 		txt->removeText(FIRST_ROW_TEXT_ID + i);

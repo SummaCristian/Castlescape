@@ -54,7 +54,7 @@ struct Light {
 layout(binding = 0, set = 0) uniform GlobalUniformBufferObject {
     vec3 eyePos;
     int lightCount;
-    int debugFlags;      // LIGHT_DEBUG_* bits, cheat menu
+    int debugFlags;      // LIGHT_DEBUG_* bits, debug menu
     float time;          // unused here
     float ambientWeight;  // scene default ambient share, 0..1
     float ambientBounce;  // share of point/spot radiance returned as indirect
@@ -206,7 +206,7 @@ float shadowFromCube(int cubeIndex, vec3 pos, vec3 normal, vec3 lightPos, float 
 // 1.0 fully lit, 0.0 in shadow. shadowIndex < 0 skips the lookup (lights
 // unconditionally) -- only LIGHT_POINT ever has a real shadowIndex.
 float shadowFactor(int shadowIndex, int type, vec3 pos, vec3 normal, vec3 lightPos, float normalDotLight) {
-    // Shadows off (cheat menu).
+    // Shadows off (debug menu).
     if(shadowIndex < 0 || (gubo.debugFlags & LIGHT_DEBUG_NO_SHADOWS) != 0) {
         return 1.0;
     }
@@ -252,7 +252,7 @@ vec3 metalAmbient(vec3 normal, vec3 viewDir, vec3 specularColor, float roughness
 }
 
 // Share of this fragment's light that's indirect, 0..1. Per-model override,
-// else scene default. Cheat gate sits here so an override still respects it.
+// else scene default. Debug gate sits here so an override still respects it.
 float ambientShare() {
     if(debugOn(LIGHT_DEBUG_NO_AMBIENT)) {
         return 0.0;

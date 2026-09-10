@@ -59,7 +59,7 @@ struct StartScreen {
 	static constexpr float BUTTON_TEXT_SCALE = 1.0f;
 	static constexpr float BUTTON_LINE_GAP = 16.0f;
 
-	// Text-block ids, past CheatHud's and PauseMenu's ranges.
+	// Text-block ids, past DebugHud's and PauseMenu's ranges.
 	static constexpr int TITLE_TEXT_ID = 300;
 	static constexpr int FIRST_BUTTON_TEXT_ID = 301;
 

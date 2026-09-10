@@ -13,7 +13,7 @@
 #include <vector>
 
 // One adjustable row. Left/Right change *value by step, clamped to [min, max];
-// onChange edge-triggered. format: value -> right-hand text, default "< NN% >". Same as CheatHud.
+// onChange edge-triggered. format: value -> right-hand text, default "< NN% >". Same as DebugHud.
 struct SettingsRow {
 	std::string label;
 	float *value = nullptr;
@@ -69,7 +69,7 @@ struct SettingsMenu {
 	// Layout in pixels, centered. panelWidth measured from content, not a fixed
 	// guess (label/value are independently anchored and could collide otherwise).
 	// TITLE_SCALE/ROW_TEXT_SCALE are ASKED-for; titleScale/rowScale are shrunk by
-	// computeLayout()'s fit factor when content wouldn't fit -- CheatHud's technique.
+	// computeLayout()'s fit factor when content wouldn't fit -- DebugHud's technique.
 	static constexpr float TITLE_GAP = 50.0f;
 	static constexpr float TITLE_SCALE = 1.6f;
 	static constexpr float ROW_TEXT_SCALE = 1.0f;
@@ -97,7 +97,7 @@ struct SettingsMenu {
 
 	float measureTextHeight(int fontId, float scale) const;
 	float measureTextWidth(const std::string &s, int fontId, float scale) const;
-	// Shrinks titleScale/rowScale to fit screenH, measures panelWidth. CheatHud's technique.
+	// Shrinks titleScale/rowScale to fit screenH, measures panelWidth. DebugHud's technique.
 	void computeLayout(int screenH);
 
 	float contentTop(int screenH) const;
@@ -354,7 +354,7 @@ void SettingsMenu::render(int screenW, int screenH) {
 		glm::vec4 labelColor = selected ? glm::vec4(1.0f, 1.0f, 0.3f, 1.0f)
 										 : glm::vec4(0.9f, 0.9f, 0.9f, 1.0f);
 
-		// TRV_TOP: anchor each row at its own top edge, not a centered midpoint (like CheatHud).
+		// TRV_TOP: anchor each row at its own top edge, not a centered midpoint (like DebugHud).
 		pixelToAnchor(left + PANEL_PADDING, top, screenW, screenH, ax, ay);
 		txt->print(ax, ay, row.label, FIRST_LABEL_TEXT_ID + i, "SS", false, selected, false,
 				   TAL_LEFT, TRH_LEFT, TRV_TOP, labelColor,

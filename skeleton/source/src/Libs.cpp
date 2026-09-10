@@ -18,8 +18,8 @@
 #define UIQUAD_IMPLEMENTATION
 #include "custom/UiQuad.hpp"
 
-#define CHEATHUD_IMPLEMENTATION
-#include "custom/CheatHud.hpp"
+#define DEBUGHUD_IMPLEMENTATION
+#include "custom/DebugHud.hpp"
 
 #define PAUSEMENU_IMPLEMENTATION
 #include "custom/PauseMenu.hpp"

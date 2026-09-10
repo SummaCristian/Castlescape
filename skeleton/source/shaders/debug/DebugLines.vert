@@ -1,4 +1,4 @@
-// Debug line overlays (gizmos, frustums, colliders; cheat-menu gated, DebugLines.hpp).
+// Debug line overlays (gizmos, frustums, colliders; debug-menu gated, DebugLines.hpp).
 // Vertex pulling, not a vertex buffer: endpoints live in UBO arrays,
 // looked up by gl_VertexIndex. Arrays remap per frame; vertex count is fixed.
 

@@ -39,7 +39,7 @@ struct AmbientLight {
 
 	// Share of point/spot radiance fed back as indirect light. Not physical --
 	// stands in for an average wall bouncing light around. Part of `weight`,
-	// not additive. Torch Bounce cheat toggle.
+	// not additive. Torch Bounce debug toggle.
 	float bounce = 0.35f;
 };
 
@@ -51,7 +51,7 @@ class SceneLights {
 	// Advances animated lights, returns the list to upload (only enabled types).
 	const std::vector<LightData> &update(float deltaT);
 
-	// Lights from the last update(), after cheat-switch filtering.
+	// Lights from the last update(), after debug-switch filtering.
 	int count() const { return (int)activeLights.size(); }
 
 	// Full unfiltered list. Used once at startup to find shadow casters
@@ -61,7 +61,7 @@ class SceneLights {
 	// Not animated. bounceEnabled below is applied in the shader, not here.
 	AmbientLight ambient() const;
 
-	// Cheat menu switches, one per light TYPE (not per light).
+	// Debug menu switches, one per light TYPE (not per light).
 	bool directEnabled = true;	// the sun
 	bool pointEnabled = true;	// torches and candles
 	bool bounceEnabled = true;	// torch/candle bounce (LIGHT_DEBUG_NO_BOUNCE in shader)
@@ -237,7 +237,7 @@ const std::vector<LightData> &SceneLights::update(float deltaT) {
 	for(const LightData &L : lights) {
 		bool enabled = (L.type == LIGHT_DIRECT) ? directEnabled
 					 : (L.type == LIGHT_POINT)  ? pointEnabled
-												: true;	// LIGHT_SPOT (exit spill): no cheat gate
+												: true;	// LIGHT_SPOT (exit spill): no debug gate
 		if(enabled) {
 			activeLights.push_back(L);
 		}

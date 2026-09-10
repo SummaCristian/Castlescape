@@ -27,7 +27,7 @@
 #define LIGHT_POINT  1
 #define LIGHT_SPOT   2
 
-// Debug view bitmask, packed into gubo.debugFlags (cheat menu, main.cpp).
+// Debug view bitmask, packed into gubo.debugFlags (debug menu, main.cpp).
 // Bitmask since flags are independent and combine.
 #define LIGHT_DEBUG_UNLIT       1	// albedo only, no lighting
 #define LIGHT_DEBUG_NORMALS     2	// shading normal as color

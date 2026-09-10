@@ -6,7 +6,7 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_GOOGLE_include_directive : require
 
-// LIGHT_DEBUG_NO_TONEMAP, shared so one cheat toggle covers this pass too.
+// LIGHT_DEBUG_NO_TONEMAP, shared so one debug toggle covers this pass too.
 #include "custom/LightConstants.glsl"
 
 layout(binding = 0, set = 0) uniform PostUniformBufferObject {
