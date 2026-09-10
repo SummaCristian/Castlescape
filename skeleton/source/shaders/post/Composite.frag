@@ -40,9 +40,8 @@ vec3 toneMap(vec3 c) {
 const float CA_STRENGTH = 0.008;
 
 void main() {
-	// bloomTex is quarter-res; bilinear upsample also softens blur blockiness.
-	// Clamped half a texel in: REPEAT sampler would else blend the opposite
-	// edge into the bilinear footprint at the border.
+	// bloomTex is quarter-res; also softens blur blockiness.
+	// Clamped half a texel in: REPEAT sampler would else blend the opposite edge.
 	vec2 bloomTexel = 1.0 / vec2(textureSize(bloomTex, 0));
 	vec2 bloomUV = clamp(uv, bloomTexel * 0.5, 1.0 - bloomTexel * 0.5);
 
@@ -65,7 +64,7 @@ void main() {
 	}
 
 	// Split-tone grade: shadows cool, highlights warm, so torchlight reads
-	// hotter without changing the actual lighting. Luminance-weighted, gentle.
+	// hotter without changing the actual lighting. Gentle.
 	{
 		float gradeLuma = dot(color, vec3(0.2126, 0.7152, 0.0722));
 		const vec3  GRADE_SHADOW = vec3(0.96, 1.00, 1.06);
@@ -75,12 +74,11 @@ void main() {
 		color *= mix(vec3(1.0), grade, GRADE_AMOUNT);
 	}
 
-	// Vignette: darkens corners, screen-space. Pairs with distance fog (fog
-	// hides draw distance ahead, vignette hides screen edges where cull cone
-	// is narrowest). Post-tonemap, before whiteout.
+	// Vignette: darkens corners, screen-space.
+	// Pairs with distance fog (fog hides draw distance ahead, vignette hides
+	// screen edges where cull cone is narrowest). Post-tonemap, before whiteout.
 	{
-		// uv-space distance from centre; not aspect-corrected on purpose so
-		// the ellipse hugs the frame's proportions.
+		// uv-space distance from centre.
 		float vignetteDist = length(uv - vec2(0.5));
 		const float VIGNETTE_INNER = 0.35;
 		const float VIGNETTE_OUTER = 0.75;
@@ -90,10 +88,6 @@ void main() {
 		color *= (1.0 - vignette * VIGNETTE_STRENGTH);
 	}
 
-	// Escape whiteout, after tone map (else the curve never quite reaches
-	// white). Rides on main.cpp's exposure/bloom ramp: blow out and bloom
-	// first, then wash away.
-
 	// Spectral veil: what standing inside a ghost looks like once
 	// spectralFade() dissolves the mesh. Ramped over the same dissolve range.
 	// After tone map: the room seen through something, not more light in it.
@@ -101,10 +95,10 @@ void main() {
 		// Desaturate first, then tint -- blue straight over torchlight would
 		// leave flames orange and read as a bad filter.
 		const vec3  VEIL_TINT = vec3(0.62, 0.86, 1.10);
-		// Floor under the blacks: nothing fully dark seen through translucency.
+		// Avoid seeing pitch black over veil (ADDED, not multiplied).
 		const vec3  VEIL_LIFT = vec3(0.014, 0.030, 0.050);
 		// Strength centre vs edge; weighted outwards so the middle stays
-		// walkable. Lower VEIL_CENTRE if players lose their bearings.
+		// walkable.
 		const float VEIL_CENTRE = 0.42;
 		const float VEIL_EDGE   = 0.92;
 
@@ -113,11 +107,15 @@ void main() {
 		vec2  veilOffset = uv - 0.5;
 		float veilRadiusSq = clamp(dot(veilOffset, veilOffset) * 4.0, 0.0, 1.0);
 		float veilWeight = veil * mix(VEIL_CENTRE, VEIL_EDGE, veilRadiusSq);
-
+		// Apply color (blue ghost)
 		float sceneLuma = dot(color, vec3(0.2126, 0.7152, 0.0722));
 		color = mix(color, vec3(sceneLuma) * VEIL_TINT + VEIL_LIFT * veil, veilWeight);
 	}
 
+
+	// Escape whiteout, after tone map (else the curve never quite reaches
+	// white). Rides on main.cpp's exposure/bloom ramp: blow out and bloom
+	// first, then wash away.
 	color = mix(color, vec3(1.0), clamp(post.escapeFlash, 0.0, 1.0));
 
 	// Linear, not gamma-encoded: swapchain is B8G8R8A8_SRGB, hardware does
