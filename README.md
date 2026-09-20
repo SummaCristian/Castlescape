@@ -13,11 +13,13 @@ Every now and then something changes, and the castle knows you are there. Surviv
 your way through, and walk out into the daylight.
 
 ## Gameplay video
-
-
+https://github.com/user-attachments/assets/af8062c1-6997-4cae-bcd3-43e39db33cd7
 
 ## Gallery
-
+<img width="796" height="593" alt="Screenshot 2026-09-20 215213" src="https://github.com/user-attachments/assets/7150d012-c92d-4d98-8e52-ceb9ef7ea4a7" />
+<img width="793" height="595" alt="Screenshot 2026-09-20 215346" src="https://github.com/user-attachments/assets/412cc39c-1072-4969-8f21-1d3f94ff7b75" />
+<img width="793" height="596" alt="Screenshot 2026-09-20 215319" src="https://github.com/user-attachments/assets/61cd6e45-a3a4-4ba9-bf58-277d4c292d9e" />
+<img width="797" height="593" alt="Screenshot 2026-09-20 215423" src="https://github.com/user-attachments/assets/61edbd91-7013-4496-973c-0a0e2adee8a4" />
 
 
 ## Under the hood
