@@ -609,6 +609,8 @@ class Castlescape : public BaseProject {
 		bool showCoordinates = false;   // live camera position/yaw readout, for placing scene.json objects
 		bool ghostsCanCatch = true;     // off: hunt still plays out but can't end the run
 		bool jumpEnabled = false;       // off by default: player can't jump
+		bool showFps = true;            // off hides the FPS counter text
+		bool showCrosshair = true;      // off hides the center-screen aim dot
 
 		// Flame switches, read by flameBurning(). Not in SceneLights: flame
 		// lights are appended into gubo directly, never via lights.json.
@@ -2709,6 +2711,8 @@ class Castlescape : public BaseProject {
 							   [this](float v) { return formatMsaaLevel(v); });
 		hud.addToggle("Show Coordinates", &debug.showCoordinates);
 		hud.addToggle("Jump", &debug.jumpEnabled);
+		hud.addToggle("Show FPS", &debug.showFps);
+		hud.addToggle("Show Crosshair", &debug.showCrosshair);
 
 		hud.addToggle("Hunt", &huntCycle.forceHunt);
 		hud.addToggle("Ghosts Can Catch", &debug.ghostsCanCatch);
@@ -4461,10 +4465,26 @@ class Castlescape : public BaseProject {
 			std::ostringstream oss;
 			oss << "FPS: " << Fps << "\n";
 
-			txt.print(1.0f, 1.0f, oss.str(), 1, "CO", false, false, true,TAL_RIGHT,TRH_RIGHT,TRV_BOTTOM,{1.0f,0.0f,0.0f,1.0f},{0.8f,0.8f,0.0f,1.0f});
+			// Kept non-empty and always printed even when hidden (see the
+			// text-id-1 crash note above); the "Show FPS" cheat just zeroes alpha.
+			glm::vec4 fpsFill = debug.showFps ? glm::vec4(1.0f,0.0f,0.0f,1.0f) : glm::vec4(0.0f);
+			glm::vec4 fpsBorder = debug.showFps ? glm::vec4(0.8f,0.8f,0.0f,1.0f) : glm::vec4(0.0f);
+			txt.print(1.0f, 1.0f, oss.str(), 1, "CO", false, false, true,TAL_RIGHT,TRH_RIGHT,TRV_BOTTOM,fpsFill,fpsBorder);
 
 			elapsedT = 0.0f;
 			countedFrames = 0;
+		}
+
+		// "Show Crosshair" cheat: only touch the quad when the toggle actually
+		// changes, since setQuads() always forces a command-buffer rebuild.
+		static bool lastShowCrosshair = debug.showCrosshair;
+		if(debug.showCrosshair != lastShowCrosshair) {
+			if(debug.showCrosshair) {
+				setCrosshairQuad();
+			} else {
+				crosshair.setQuads({});
+			}
+			lastShowCrosshair = debug.showCrosshair;
 		}
 
 		if(!startScreen.isOpen() && !settingsMenu.isOpen()) {
