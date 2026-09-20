@@ -33,28 +33,9 @@ _deps/
 # clangd index cache
 .cache/
 
-# Claude Code's per-machine settings and the scratch files its sessions leave behind
-# (comment-coverage CSVs and the like). Nothing in here is part of the project.
+# Per-machine editor/assistant settings and scratch files. Nothing in here is part
+# of the project.
 .claude/
-
-# graphify output (knowledge graph of this repo). Regenerable, and node ids embed the
-# absolute paths of whoever generated it, so the graph itself is not shareable.
-# The semantic extraction cache IS shared: it is content-addressed and machine-independent,
-# so a teammate's /graphify rebuild reuses it and costs no tokens.
-graphify-out/*
-!graphify-out/cache/
-graphify-out/cache/*
-!graphify-out/cache/*.json
-# ...except the incremental-scan index: it is keyed by absolute path and mtime of
-# this machine, so it is neither shareable nor reusable by a teammate.
-graphify-out/cache/stat-index.json
-
-# Live workspace behind graphify-lectures/lectures/: the text extracted from the
-# professor's slide PDFs, plus the graphify working directory that queries it.
-# The finished graph next to it (graph.html / graph.json / GRAPH_REPORT.md) IS committed;
-# this is only what is needed to re-query or --update it. The extracted slide text is the
-# professor's material to distribute, not ours, which is the other reason it stays out.
-graphify-lectures/lectures/workspace/
 
 # OS cruft
 .DS_Store
